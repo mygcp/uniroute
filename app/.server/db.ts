@@ -55,6 +55,15 @@ export function query(sql: string): StatementApi {
 
 export const exec = (sql: string): void => db.exec(sql);
 
+/** Tutup koneksi SQLite — dipanggil saat graceful shutdown. */
+export function closeDb(): void {
+  try {
+    db.close();
+  } catch {
+    /* already closed */
+  }
+}
+
 db.exec(`CREATE TABLE IF NOT EXISTS providers (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,

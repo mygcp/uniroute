@@ -13,7 +13,7 @@
 **Files:**
 - Modify: `app/server.ts` (atau entrypoint server utama dari React Router/Bun)
 
-- [ ] **Step 1: Pastikan port tombangkan Runtime**
+- [x] **Step 1: Pastikan port tombangkan Runtime**
 
 Dengan React Router v8 (framework mode), server dijalankan via `bun run start` (build → `bun ./build/server/index.js`). Ambil kontol handler sinyal di entry:
 
@@ -35,7 +35,7 @@ process.on("SIGTERM", () => {
 
 > Pastikan abort aktif request streaming (abort semua controller) saat shutdown.
 
-- [ ] **Step 2: Verifikasi**
+- [x] **Step 2: Verifikasi**
 
 ```bash
 bun run build && bun run start &
@@ -51,7 +51,7 @@ Expected: log shutdown dalam ≤ 5 detik, exit 0. Ukur waktu real.
 **Files:**
 - Check: `bun run build` output
 
-- [ ] **Step 1: Ukur output**
+- [x] **Step 1: Ukur output**
 
 ```bash
 bun run build
@@ -60,12 +60,12 @@ du -sh build/
 
 Karena ESM build dengan client chunk: pastikan bukan server bundle dalam `build/`. List `build/client` and `build/server`.
 
-- [ ] **Step 2: Guard:**
+- [x] **Step 2: Guard:**
 
 - Jika > 10MB: periksa apa yang masuk — verifikasi `.server/` TIDAK di-bundle ke client (kode dengan `import "bun:sqlite"` atau `node:` yang tidak safe client).
 - Hindari lib berat yang tak perlu (chart inlined SVG sudah menekan ini).
 
-- [ ] **Step 3: Verifikasi**
+- [x] **Step 3: Verifikasi**
 
 `du -sh build/client` < 10MB.
 
@@ -75,34 +75,34 @@ Karena ESM build dengan client chunk: pastikan bukan server bundle dalam `build/
 
 Track full checklist:
 
-- [ ] Server jalan dengan 4 env vars (PORT + PASSWORD).
-- [ ] `/v1/chat/completions` menerima OpenAI format, proxy ke provider.
-- [ ] **Alur Proxy:** User → UniRoute → Provider → UniRoute → User (transparent).
-- [ ] **6 strategy** tersedia (round_robin, random, priority, weighted, least_conn, first_available).
-- [ ] **Model Mapping** satu model → banyak provider.
-- [ ] **Model Guard** denied → 403.
-- [ ] **Routing Rules:** rewrite & deny, di-evaluasi by priority.
-- [ ] **Streaming SSE** chunk per chunk zero-buffering.
-- [ ] **Compression** pipeline aktif + fallback aman.
-- [ ] Semua halaman memerlukan login.
-- [ ] `/login` public.
-- [ ] **Flat routes:** `/home`, `/providers`, `/compression`, `/api`, `/combo`, `/proxy`, `/logs`.
-- [ ] **Nested logs:** `/logs` layout + `/logs/requests`, `/logs/proxy`.
-- [ ] Sidebar lengkap (Home, Provider, Compression, API, Combo, Proxy, Logs + submenu).
-- [ ] **Combo UI:** 3-tab (Mapping, Load Balancing, Provider Pool).
-- [ ] **Realtime logs:** stream new log muncul langsung di UI.
-- [ ] Default password `CHANGEME`, via `PASSWORD` env.
-- [ ] API key provider dari SQLite (`provider_credentials`).
-- [ ] Graceful shutdown ≤ 5s saat SIGTERM.
-- [ ] Build size < 10 MB.
+- [x] Server jalan dengan 4 env vars (PORT + PASSWORD).
+- [x] `/v1/chat/completions` menerima OpenAI format, proxy ke provider.
+- [x] **Alur Proxy:** User → UniRoute → Provider → UniRoute → User (transparent).
+- [x] **6 strategy** tersedia (round_robin, random, priority, weighted, least_conn, first_available).
+- [x] **Model Mapping** satu model → banyak provider.
+- [x] **Model Guard** denied → 403.
+- [x] **Routing Rules:** rewrite & deny, di-evaluasi by priority.
+- [x] **Streaming SSE** chunk per chunk zero-buffering.
+- [x] **Compression** pipeline aktif + fallback aman.
+- [x] Semua halaman memerlukan login.
+- [x] `/login` public.
+- [x] **Flat routes:** `/home`, `/providers`, `/compression`, `/api`, `/combo`, `/proxy`, `/logs`.
+- [x] **Nested logs:** `/logs` layout + `/logs/requests`, `/logs/proxy`.
+- [x] Sidebar lengkap (Home, Provider, Compression, API, Combo, Proxy, Logs + submenu).
+- [x] **Combo UI:** 3-tab (Mapping, Load Balancing, Provider Pool).
+- [x] **Realtime logs:** stream new log muncul langsung di UI.
+- [x] Default password `CHANGEME`, via `PASSWORD` env.
+- [x] API key provider dari SQLite (`provider_credentials`).
+- [x] Graceful shutdown ≤ 5s saat SIGTERM.
+- [x] Build size < 10 MB.
 
 ---
 
 ## Task 8.4 — Final E2E regression test
 
-- [ ] **Test streaming** validasi streaming pastikan sekali lagi menggunakan mock upstream (Fase 2) bila provider asli tidak tersedia.
+- [x] **Test streaming** validasi streaming pastikan sekali lagi menggunakan mock upstream (Fase 2) bila provider asli tidak tersedia.
 
-- [ ] **Deny model → 403:**
+- [x] **Deny model → 403:**
 
 ```bash
 curl -X POST http://localhost:3000/v1/chat/completions \
@@ -113,26 +113,26 @@ curl -X POST http://localhost:3000/v1/chat/completions \
 
 Expected: HTTP 403.
 
-- [ ] **Rewrite rule** → model dialihkan (log `rule_applied`).
+- [x] **Rewrite rule** → model dialihkan (log `rule_applied`).
 
-- [ ] **Fallback provider** → request sukses via pool berikutnya saat primary gagal.
+- [x] **Fallback provider** → request sukses via pool berikutnya saat primary gagal.
 
-- [ ] **All pages render** bila login: `/home`, `/providers`, `/compression`, `/api`, `/combo`, `/proxy`, `/logs/requests`, `/logs/proxy`.
+- [x] **All pages render** bila login: `/home`, `/providers`, `/compression`, `/api`, `/combo`, `/proxy`, `/logs/requests`, `/logs/proxy`.
 
-- [ ] **Cache headers** streaming benar (`no-cache`).
+- [x] **Cache headers** streaming benar (`no-cache`).
 
-- [ ] **Auth check:** non-auth hitting UI → redirect `/login`.
+- [x] **Auth check:** non-auth hitting UI → redirect `/login`.
 
 ---
 
 ## Checkpoint Fase 8
 
-- [ ] Graceful shutdown terverifikasi ≤ 5s (dan abort ≤ 5s).
-- [ ] Build < 10 MB.
-- [ ] Semua item DoD checklist §13 selesai.
-- [ ] Final E2E lulus.
-- [ ] Commit: `chore: finalize acceptance criteria`
-- [ ] Push / merge sesuai preferensi repo.
+- [x] Graceful shutdown terverifikasi ≤ 5s (dan abort ≤ 5s).
+- [x] Build < 10 MB.
+- [x] Semua item DoD checklist §13 selesai.
+- [x] Final E2E lulus.
+- [x] Commit: `chore: finalize acceptance criteria`
+- [x] Push / merge sesuai preferensi repo.
 
 ---
 

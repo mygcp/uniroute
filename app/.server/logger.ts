@@ -82,3 +82,8 @@ export function recordProxyLog(log: ProxyLog): void {
   queueMicrotask(flush);
   broadcast({ type: "proxy", ...log, created_at: Date.now() });
 }
+
+/** Drain queued logs synchronously — dipanggil saat graceful shutdown. */
+export function flushLogs(): void {
+  flush();
+}

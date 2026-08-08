@@ -1,6 +1,8 @@
 import { createRequestHandler } from "react-router";
 import type { ServerBuild } from "react-router";
 import path from "node:path";
+import { closeDb } from "./app/.server/db";
+import { flushLogs } from "./app/.server/logger";
 // @ts-expect-error — build artifact generated at build time
 import * as build from "./build/server/index.js";
 
@@ -30,10 +32,31 @@ const server = Bun.serve({
 
 console.log(`UniRoute listening on http://localhost:${server.port}`);
 
+let shuttingDown = false;
+
 function shutdown(signal: string) {
+  if (shuttingDown) return;
+  shuttingDown = true;
   console.log(`[server] ${signal} received, shutting down...`);
-  server.stop(true);
-  process.exit(0);
+
+  // Force exit bila melebihi 5s (DoD graceful shutdown ≤ 5s).
+  const force = setTimeout(() => {
+    console.error("[server] shutdown timeout, forcing exit");
+    process.exit(1);
+  }, 5000);
+
+  Promise.resolve()
+    .then(() => server.stop(true))
+    .then(() => flushLogs())
+    .then(() => closeDb())
+    .then(() => {
+      clearTimeout(force);
+      process.exit(0);
+    })
+    .catch((err) => {
+      console.error("[server] shutdown error", err);
+      process.exit(1);
+    });
 }
 
 process.on("SIGTERM", () => shutdown("SIGTERM"));
