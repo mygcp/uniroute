@@ -7,9 +7,10 @@ import {
   markUsed,
   selectProvider,
 } from "../.server/balancer";
+import { compress, isEnabled } from "../.server/compressor";
 import { executeStreaming } from "../.server/executor";
 import { checkAllowlist } from "../.server/guard";
-import { recordRequestLog } from "../.server/logger";
+import { recordProxyLog, recordRequestLog } from "../.server/logger";
 import { getProviders, reload, type Provider } from "../.server/registry";
 import { evaluateRules } from "../.server/rules";
 
@@ -88,6 +89,29 @@ export async function action({ request }: Route.ActionArgs) {
       { error: { message: "model denied by routing rule", rule: rule.ruleApplied } },
       403,
     );
+  }
+
+  const enabled = isEnabled();
+  if (
+    (enabled.rtk || enabled.caveman) &&
+    Array.isArray(body.messages) &&
+    body.messages.length > 0
+  ) {
+    const last = body.messages[body.messages.length - 1] as {
+      content?: unknown;
+    };
+    if (typeof last.content === "string") {
+      const { output, usedFallback, durationMs } = await compress(last.content);
+      if (usedFallback) {
+        recordProxyLog({
+          level: "info",
+          source: "compressor",
+          message: "fallback to original prompt",
+          metadata: { durationMs },
+        });
+      }
+      last.content = output;
+    }
   }
 
   let effectiveModel = model;

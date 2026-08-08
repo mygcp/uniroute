@@ -19,7 +19,7 @@
 - Consumes: `db` (compression_settings), `proxyLog` (Fase 6.1).
 - Produces: `isEnabled(): { rtk: boolean; caveman: boolean }`, `compress(prompt: string): Promise<{ output: string; usedFallback: boolean; durationMs: number }>`, `testCompression(sample: string): Promise<CompressionResult>`.
 
-- [ ] **Step 1: Baca setting**
+- [x] **Step 1: Baca setting**
 
 ```ts
 export function isEnabled() {
@@ -28,7 +28,7 @@ export function isEnabled() {
 }
 ```
 
-- [ ] **Step 2: Helper spawn satu subprocess dengan timeout 5s**
+- [x] **Step 2: Helper spawn satu subprocess dengan timeout 5s**
 
 ```ts
 import { spawn } from "bun";
@@ -49,7 +49,7 @@ async function runBinary(binPath: string, input: string): Promise<string> {
 }
 ```
 
-- [ ] **Step 3: Pipeline = RTK → Caveman bila keduanya enabled**
+- [x] **Step 3: Pipeline = RTK → Caveman bila keduanya enabled**
 
 ```ts
 export async function compress(prompt: string): Promise<{ output: string; usedFallback: boolean; durationMs: number }> {
@@ -78,11 +78,11 @@ export async function compress(prompt: string): Promise<{ output: string; usedFa
 
 > **Fallback aman:** binary tidak ada / timeout / exit non-zero → prompt asli + `proxyLog` warning. Bukan error fatal ke user.
 
-- [ ] **Step 4: `testCompression`**
+- [x] **Step 4: `testCompression`**
 
 Sama seperti `compress` tapi selalu menjalankan walaupun non-enabled (untuk tombol Test di UI). Return realisasi + hasil.
 
-- [ ] **Step 5: Test TDD**
+- [x] **Step 5: Test TDD**
 
 - `isEnabled` dengan setting default (0,0) → `{rtk: false, caveman: false}`.
 
@@ -92,7 +92,7 @@ Sama seperti `compress` tapi selalu menjalankan walaupun non-enabled (untuk tomb
 - Timeout: binary `sleep 10` → timeout 5s → fallback.
 - Nonaktif → langsung return asli tanpa spawn.
 
-- [ ] **Step 6: Verifikasi**
+- [x] **Step 6: Verifikasi**
 
 ```bash
 bun test app/.server/compressor.test.ts
@@ -108,7 +108,7 @@ Expected: PASS.
 - Modify: `app/routes/v1.chat.completions.ts` (translate stage)
 - Modify: `app/routes/compression.tsx` (test button Fase 5.3 wired)
 
-- [ ] **Step 1: Integrasi ke pipeline**
+- [x] **Step 1: Integrasi ke pipeline**
 
 Di stage Translate (setelah transformRequest, sebelum fetch):
 
@@ -126,11 +126,11 @@ if (isEnabled().rtk || isEnabled().caveman) {
 
 > PRD kompresi target `prompt` — kompresi diterapkan pada pesan user terakhir. `usedFallback` & durasi dapat dicatat; cache hasil per-prompt (Map) untuk menghindari spawn berulang pada request yang sama.
 
-- [ ] **Step 2: Compression page Test button → `testCompression`**
+- [x] **Step 2: Compression page Test button → `testCompression`**
 
 `compression.tsx` action POST → hasil `testCompression("Contoh prompt...")` via route action → tampil output + `usedFallback` + duration.
 
-- [ ] **Step 3: Paste seeding**
+- [x] **Step 3: Paste seeding**
 
 Pastikan setting `compression_settings` row id=1 ada (default 0) — seeded di Fase 1.
 
@@ -138,8 +138,15 @@ Pastikan setting `compression_settings` row id=1 ada (default 0) — seeded di F
 
 ## Checkpoint Fase 7
 
-- [ ] `bun test app/.server/compressor.test.ts` PASS.
-- [ ] Pipeline RTK→Caveman berjalan (dengan binary dummy).
-- [ ] Binary tidak ada / timeout → fallback prompt asli + `proxy_logs` warning.
-- [ ] `/compression` tombol Test menampilkan hasil + fallback status.
-- [ ] Commit: `feat: compression pipeline rtk+caveman`
+- [x] `bun test app/.server/compressor.test.ts` PASS.
+- [x] Pipeline RTK→Caveman berjalan (dengan binary dummy).
+- [x] Binary tidak ada / timeout → fallback prompt asli + `proxy_logs` warning.
+- [x] `/compression` tombol Test menampilkan hasil + fallback status.
+- [x] Commit: `feat: compression pipeline rtk+caveman`
+---
+
+## Catatan Deviasi
+
+- **Biner dummy:** dibuat `bin/rtk` & `bin/caveman` (shebang cat) + `bin/sleep-binary` untuk test timeout — rtk/caveman asli tetap belum ada.
+- **Timeout 5s:** `proc.kill()` tidak mematikan child (`sleep`) dari shell, stdout tetap terbuka → read hang. Fix: pada timeout panggil `reader.cancel()` juga agar `reader.read()` berhenti; lalu throw.
+- **Dummy bin di-commit** ke repo (dipakai dev/test; akan diganti biner asli tanpa ubah kode).
