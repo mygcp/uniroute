@@ -1,9 +1,17 @@
 import type { Route } from "./+types/v1.chat.completions";
 import { transformRequest } from "../.server/adapter";
+import {
+  beginConnection,
+  endConnection,
+  getStrategy,
+  markUsed,
+  selectProvider,
+} from "../.server/balancer";
 import { executeStreaming } from "../.server/executor";
 import { checkAllowlist } from "../.server/guard";
 import { recordRequestLog } from "../.server/logger";
-import { getProviders } from "../.server/registry";
+import { getProviders, reload, type Provider } from "../.server/registry";
+import { evaluateRules } from "../.server/rules";
 
 function json(payload: unknown, status = 200): Response {
   return new Response(JSON.stringify(payload), {
@@ -18,6 +26,21 @@ type ChatRequestBody = {
   stream?: unknown;
   [key: string]: unknown;
 };
+
+function orderCandidates(
+  pool: Provider[],
+  selected: Provider,
+  fallbackId: string | null | undefined,
+): Provider[] {
+  const list: Provider[] = [];
+  const push = (p?: Provider) => {
+    if (p && !list.includes(p)) list.push(p);
+  };
+  push(selected);
+  if (fallbackId) push(pool.find((p) => p.id === fallbackId));
+  for (const p of pool) push(p);
+  return list;
+}
 
 export async function action({ request }: Route.ActionArgs) {
   let payload: unknown;
@@ -43,6 +66,7 @@ export async function action({ request }: Route.ActionArgs) {
       model,
       provider_id: "guard",
       status: "denied",
+      rule_applied: "allowlist",
       error_message: guard.reason,
     });
     return json(
@@ -51,47 +75,101 @@ export async function action({ request }: Route.ActionArgs) {
     );
   }
 
-  const providers = getProviders(model);
-  if (providers.length === 0) {
+  const rule = evaluateRules(model);
+  if (rule.action === "deny") {
     recordRequestLog({
       model,
+      provider_id: "guard",
+      status: "denied",
+      rule_applied: rule.ruleApplied,
+      error_message: "routing rule deny",
+    });
+    return json(
+      { error: { message: "model denied by routing rule", rule: rule.ruleApplied } },
+      403,
+    );
+  }
+
+  let effectiveModel = model;
+  let ruleApplied: string | null = null;
+  if (rule.action === "rewrite") {
+    effectiveModel = rule.targetModel;
+    body.model = rule.targetModel;
+    ruleApplied = rule.ruleApplied;
+  }
+  const fallbackId =
+    rule.action === "fallback" ? rule.targetProviderId : null;
+
+  const pool = getProviders(effectiveModel);
+  if (pool.length === 0) {
+    recordRequestLog({
+      model: effectiveModel,
       provider_id: "none",
       status: "error",
       error_message: "model not found",
     });
     return json(
-      { error: { message: "model not found", type: "model_not_found" } },
+      {
+        error: {
+          message: "model not found",
+          type: "model_not_found",
+          model: effectiveModel,
+        },
+      },
       404,
     );
   }
 
-  const provider = providers[0];
+  const cfg = getStrategy(effectiveModel);
+  const selected = selectProvider(pool, effectiveModel) ?? pool[0];
+  const candidates = orderCandidates(pool, selected, fallbackId);
+  markUsed(selected);
+  reload();
 
-  let transformed;
-  try {
-    transformed = transformRequest(body, provider);
-  } catch (err) {
-    recordRequestLog({
-      model,
-      provider_id: provider.id,
-      strategy_used: "first_available",
-      status: "error",
-      error_message: err instanceof Error ? err.message : String(err),
+  let attempts = 0;
+  let response: Response | null = null;
+
+  for (const provider of candidates) {
+    if (attempts >= 2) break;
+    attempts += 1;
+    beginConnection(provider.id);
+
+    let transformed;
+    try {
+      transformed = transformRequest(body, provider);
+    } catch (err) {
+      endConnection(provider.id);
+      recordRequestLog({
+        model: effectiveModel,
+        provider_id: provider.id,
+        strategy_used: cfg.strategy,
+        rule_applied: ruleApplied,
+        status: "error",
+        error_message: err instanceof Error ? err.message : String(err),
+      });
+      response = json({ error: { message: "provider request failed" } }, 500);
+      break;
+    }
+
+    response = await executeStreaming({
+      url: transformed.url,
+      headers: transformed.headers,
+      body: transformed.body,
+      signal: request.signal,
+      onComplete: (log) => {
+        recordRequestLog({
+          model: effectiveModel,
+          provider_id: provider.id,
+          strategy_used: cfg.strategy,
+          rule_applied: ruleApplied,
+          ...log,
+        });
+        endConnection(provider.id);
+      },
     });
-    return json({ error: { message: "provider request failed" } }, 500);
+
+    if (response.status < 400) break;
   }
 
-  return executeStreaming({
-    url: transformed.url,
-    headers: transformed.headers,
-    body: transformed.body,
-    signal: request.signal,
-    onComplete: (log) =>
-      recordRequestLog({
-        model,
-        provider_id: provider.id,
-        strategy_used: "first_available",
-        ...log,
-      }),
-  });
+  return response ?? json({ error: { message: "no provider available" } }, 502);
 }

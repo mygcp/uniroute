@@ -19,7 +19,7 @@
 - Consumes: `Provider` (Fase 2.1), `db` (Fase 1).
 - Produces: `selectProvider(pool: Provider[], model: string): Promise<Provider | null>`, `getStrategy(model: string): string`, `beginConnection(providerId)`, `endConnection(providerId)`.
 
-- [ ] **Step 1: Baca konfigurasi strategy per model dari `load_balancing`**
+- [x] **Step 1: Baca konfigurasi strategy per model dari `load_balancing`**
 
 ```ts
 export function getStrategy(model: string): { strategy: string; fallbackEnabled: boolean; healthCheck: { enabled: boolean; url?: string; interval: number } } {
@@ -29,7 +29,7 @@ export function getStrategy(model: string): { strategy: string; fallbackEnabled:
 }
 ```
 
-- [ ] **Step 2: `select` — implementasi 6 strategy**
+- [x] **Step 2: `select` — implementasi 6 strategy**
 
 ```ts
 export function selectProvider(pool: Provider[], model: string): Provider | undefined {
@@ -54,7 +54,7 @@ export function selectProvider(pool: Provider[], model: string): Provider | unde
 
 **FirstAvailable:** bila `health.enabled`, cek cache health (in-memory map `providerId → lastCheck{ok,ts}`); pilih yang healthy & aktif.
 
-- [ ] **Step 3: `beginConnection` / `endConnection` — thread-safe counter**
+- [x] **Step 3: `beginConnection` / `endConnection` — thread-safe counter**
 
 ```ts
 export function beginConnection(providerId: string) {
@@ -67,7 +67,7 @@ export function endConnection(providerId: string) {
 
 > Di Bun (single-thread event loop) counter DB `UPDATE` berbasis SQL aman untuk kompetisi antar-request async.
 
-- [ ] **Step 4: TDD — test `balancer.test.ts`**
+- [x] **Step 4: TDD — test `balancer.test.ts`**
 
 Test untuk tiap strategy dengan fixture pool:
 
@@ -84,7 +84,7 @@ Provider C: weight 2, priority 0, current_connections 3
 - `least_conn`: selalu B (1 koneksi).
 - `first_available`: dengan health cache hasil healthy → pertama; fatal semua → null.
 
-- [ ] **Step 5: Verifikasi**
+- [x] **Step 5: Verifikasi**
 
 ```bash
 bun test app/.server/balancer.test.ts
@@ -102,7 +102,7 @@ Expected: PASS.
 **Interfaces:**
 - Produces: `evaluateRules(model: string): { action: "rewrite" | "deny" | "fallback" | "none"; targetModel?: string; targetProviderId?: string; ruleApplied?: string }`.
 
-- [ ] **Step 1: Query `routing_rules` by priority**
+- [x] **Step 1: Query `routing_rules` by priority**
 
 ```ts
 export function evaluateRules(model: string) {
@@ -125,7 +125,7 @@ export function evaluateRules(model: string) {
 
 > Prioritasi deny → rewrite → fallback. Auto-resolve: karena `source_model` bisa juga hasil rewrite (rule chaining), batasi 1x rewrite untuk kesederhanaan.
 
-- [ ] **Step 2: TDD test**
+- [x] **Step 2: TDD test**
 
 - Rule deny aktif → action deny.
 - Rule rewrite → model berubah.
@@ -140,7 +140,7 @@ export function evaluateRules(model: string) {
 **Files:**
 - Modify: `app/routes/v1.chat.completions.ts`
 
-- [ ] **Step 1: Update alur action**
+- [x] **Step 1: Update alur action**
 
 ```
 1. parse body
@@ -158,11 +158,11 @@ export function evaluateRules(model: string) {
 10. Record log dengan strategy_used + rule_applied
 ```
 
-- [ ] **Step 2: Update record untuk menyertakan `strategy_used` & `rule_applied`**
+- [x] **Step 2: Update record untuk menyertakan `strategy_used` & `rule_applied`**
 
 `recordRequestLog({... strategy_used: cfg.strategy, rule_applied: rule.ruleApplied})`.
 
-- [ ] **Step 3: Manual E2E**
+- [x] **Step 3: Manual E2E**
 
 - `gpt-4o` seed round_robin: request beruntun 3x → provider berganti (openai → groq → openrouter) berdasarkan `last_used_at`.
 - Deny rule pada model → 403.
@@ -172,9 +172,16 @@ export function evaluateRules(model: string) {
 
 ## Checkpoint Fase 3
 
-- [ ] `bun test` balancer (6 strategy) + rules PASS.
-- [ ] Round-robin: 3 request → 3 provider berganti.
-- [ ] Deny rule → 403.
-- [ ] Rewrite rule → forwarded ke model target.
-- [ ] Fallback provider gagal → request sukses via provider lain (1x).
-- [ ] Commit: `feat: load balancing 6 strategies + rule engine`
+- [x] `bun test` balancer (6 strategy) + rules PASS.
+- [x] Round-robin: 3 request → 3 provider berganti.
+- [x] Deny rule → 403.
+- [x] Rewrite rule → forwarded ke model target.
+- [x] Fallback provider gagal → request sukses via provider lain (1x).
+- [x] Commit: `feat: load balancing 6 strategies + rule engine`
+---
+
+## Catatan Deviasi
+
+- **Round-robin:** `markUsed` memakai timestamp ms (`strftime('%s','now')*1000 + substr(milisec)`), bukan `unixepoch()` detik, karena per-request berurutan dalam detik yang sama tidak menghasilkan rotasi.
+- **Sync cache registry:** `getProviders` memakai cache in-memory; setelah `markUsed`, route memanggil `registry.reload()` supaya `last_used_at` terbaru ikut dipakai round_robin.
+- **Fallback provider:** `executeStreaming` sdh retry 1x internal; route menambah fallback/switch provider antar-pool (maks 2 attempt total). Connection counter naik/turun via `beginConnection`/`endConnection`.
