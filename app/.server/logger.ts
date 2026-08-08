@@ -1,4 +1,5 @@
 import { exec, query } from "./db";
+import { broadcast } from "./log-stream";
 
 export type RequestLog = {
   model: string;
@@ -73,9 +74,11 @@ function flush() {
 export function recordRequestLog(log: RequestLog): void {
   requestQueue.push(log);
   queueMicrotask(flush);
+  broadcast({ type: "request", ...log, created_at: Date.now() });
 }
 
 export function recordProxyLog(log: ProxyLog): void {
   proxyQueue.push(log);
   queueMicrotask(flush);
+  broadcast({ type: "proxy", ...log, created_at: Date.now() });
 }

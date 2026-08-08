@@ -18,7 +18,7 @@
 **Interfaces:**
 - Produces: `recordRequestLog(entry): void`, `proxyLog(level, source, message, metadata?): void`.
 
-- [ ] **Step 1: Queue + flush**
+- [x] **Step 1: Queue + flush**
 
 ```ts
 const queue: (() => void)[] = [];
@@ -41,7 +41,7 @@ async function flush() {
 
 > Ini tetap non-blocking terhadap request: insert dilakuan secara asynchronous di microtask/queue, request stream tidak menunggu.
 
-- [ ] **Step 2: `recordRequestLog`**
+- [x] **Step 2: `recordRequestLog`**
 
 ```ts
 export function recordRequestLog({ model, provider_id, strategy_used, rule_applied, duration_ms, status, error_message, prompt_tokens, completion_tokens }) {
@@ -55,7 +55,7 @@ export function recordRequestLog({ model, provider_id, strategy_used, rule_appli
 }
 ```
 
-- [ ] **Step 3: `proxyLog`**
+- [x] **Step 3: `proxyLog`**
 
 ```ts
 export function proxyLog(level: "info"|"warn"|"error"|"debug", source: string, message: string, metadata?: object) {
@@ -66,7 +66,7 @@ export function proxyLog(level: "info"|"warn"|"error"|"debug", source: string, m
 }
 ```
 
-- [ ] **Step 4: Test**
+- [x] **Step 4: Test**
 
 Trigger `recordRequestLog` + `proxyLog` → row muncul di DB async (kecil sleep lalu query).
 
@@ -81,7 +81,7 @@ Trigger `recordRequestLog` + `proxyLog` → row muncul di DB async (kecil sleep 
 **Interfaces:**
 - Produces: `subscribe(fn)`, `broadcast(payload)`, `getClientsCount()`.
 
-- [ ] **Step 1: Hub in-memory**
+- [x] **Step 1: Hub in-memory**
 
 ```ts
 const clients = new Set<(payload: unknown) => void>();
@@ -96,7 +96,7 @@ export function broadcast(payload: unknown) {
 }
 ```
 
-- [ ] **Step 2: Resource route SSE**
+- [x] **Step 2: Resource route SSE**
 
 ```ts
 export async function loader({ request }: Route.LoaderArgs) {
@@ -113,11 +113,11 @@ export async function loader({ request }: Route.LoaderArgs) {
 }
 ```
 
-- [ ] **Step 3: Integrasi**
+- [x] **Step 3: Integrasi**
 
 `logger.ts` memanggil `broadcast` setelah setiap insert (seperti step 2-3 di 6.1).
 
-- [ ] **Step 4: Test manual**
+- [x] **Step 4: Test manual**
 
 ```bash
 curl -N http://localhost:3000/api/logs/stream  # terminal A, hold
@@ -135,7 +135,7 @@ Terminal B: trigger request proxy → SSE line baru muncul di terminal A.
 - Create: `app/components/request-log-table.tsx`
 - Create: `app/hooks/use-realtime-logs.ts`
 
-- [ ] **Step 1: `use-realtime-logs` hook**
+- [x] **Step 1: `use-realtime-logs` hook**
 
 Connect `EventSource` ke `/api/logs/stream`; state array log; auto-scroll ref; pause/resume toggle; filter callback.
 
@@ -155,22 +155,22 @@ export function useRealtimeLogs({ filter }: { filter?: (e: any) => boolean }) {
 }
 ```
 
-- [ ] **Step 2: `log-viewer.tsx` component**
+- [x] **Step 2: `log-viewer.tsx` component**
 
 - Header dengan toggle pause/resume + badge jumlah.
 - List auto-scroll ke bawah (ref + scrollTop) saat baru, reset saat pause.
 
-- [ ] **Step 3: `logs.requests.tsx`**
+- [x] **Step 3: `logs.requests.tsx`**
 
 - Filter: model/provider/status.
 - Render row: timestamp, model, provider, strategy, status, duration (dari `log-viewer`).
 
-- [ ] **Step 4: `logs.proxy.tsx`**
+- [x] **Step 4: `logs.proxy.tsx`**
 
 - Filter: level + source.
 - Color by level (info blue, warn amber, error red, debug gray) + source badge.
 
-- [ ] **Step 5: Verifikasi**
+- [x] **Step 5: Verifikasi**
 
 Trigger beberapa request proxy + proxyLog → kedua page menampilkan secara realtime; pause/resume & filter jalan.
 
@@ -178,8 +178,15 @@ Trigger beberapa request proxy + proxyLog → kedua page menampilkan secara real
 
 ## Checkpoint Fase 6
 
-- [ ] Logger insert non-blocking (request tidak lambat).
-- [ ] `/api/logs/stream` SSE stream hidup.
-- [ ] `/logs/requests` stream realtime + pause/resume.
-- [ ] `/logs/proxy` + filter level/source.
-- [ ] Commit: `feat: realtime logs + sse`
+- [x] Logger insert non-blocking (request tidak lambat).
+- [x] `/api/logs/stream` SSE stream hidup.
+- [x] `/logs/requests` stream realtime + pause/resume.
+- [x] `/logs/proxy` + filter level/source.
+- [x] Commit: `feat: realtime logs + sse`
+---
+
+## Catatan Deviasi
+
+- Logger queue+flush sudah dibuat sejak Fase 2; Fase 6 menambahkan SSE `broadcast` (dari `log-stream.ts` hub) di `recordRequestLog`/`recordProxyLog`.
+- `/api/logs/stream` tetap terproteksi cookie (Resource route; EventSource mengirim cookie same-origin).
+- `use-realtime-logs` memakai `filterRef` supaya tidak subscribe ulang tiap re-render; initial history dari loader (100 row terakhir) + live events.
