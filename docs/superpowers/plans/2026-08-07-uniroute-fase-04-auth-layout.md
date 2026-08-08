@@ -18,7 +18,7 @@
 **Interfaces:**
 - Produces: `createSession(): string` (return token), `setSessionCookie(response: Response, token: string): void`, `verifySessionCookie(request: Request): Promise<boolean>`, `destroySessionCookie(response: Response): void`, `const SESSION_COOKIE`.
 
-- [ ] **Step 1: Buat token + store session in-memory**
+- [x] **Step 1: Buat token + store session in-memory**
 
 ```ts
 const sessions = new Set<string>();
@@ -38,7 +38,7 @@ export function destroySession(token: string) { sessions.delete(token); }
 
 > Session in-memory memenuhi kebutuhan single-instance. (Skala multi-instance memerlukan store shared — di luar scope fase ini.)
 
-- [ ] **Step 2: Set cookie helper**
+- [x] **Step 2: Set cookie helper**
 
 ```ts
 export function setSessionCookie(response: Response, token: string) {
@@ -55,7 +55,7 @@ export function getSessionToken(request: Request): string | null {
 }
 ```
 
-- [ ] **Step 3: Password verify constant-time (env `PASSWORD`)**
+- [x] **Step 3: Password verify constant-time (env `PASSWORD`)**
 
 ```ts
 export function verifyPassword(input: string): boolean {
@@ -70,7 +70,7 @@ export function verifyPassword(input: string): boolean {
 }
 ```
 
-- [ ] **Step 4: TDD test `auth.test.ts`**
+- [x] **Step 4: TDD test `auth.test.ts`**
 
 - `createSession` → token; `isValid(token)` true; setelah `destroy` false.
 - `verifyPassword("CHANGEME")` true saat PASSWORD=CHANGEME; salah → false.
@@ -84,11 +84,11 @@ export function verifyPassword(input: string): boolean {
 - Modify: `app/routes/login.tsx`
 - Create: `app/components/login-form.tsx` (opsional, form password)
 
-- [ ] **Step 1: Route `login.tsx` — public only**
+- [x] **Step 1: Route `login.tsx` — public only**
 
 Route ini TIDAK dilindungi. `loader` render langsung (tidak redirect).
 
-- [ ] **Step 2: Action - handle POST password**
+- [x] **Step 2: Action - handle POST password**
 
 ```tsx
 export async function action({ request }: Route.ActionArgs) {
@@ -104,11 +104,11 @@ export async function action({ request }: Route.ActionArgs) {
 }
 ```
 
-- [ ] **Step 3: UI form**
+- [x] **Step 3: UI form**
 
 Input password (type=password) + tombol Login + text error server-rendered. Style Tailwind sederhana (centered card).
 
-- [ ] **Step 4: TDD / manual verifikasi**
+- [x] **Step 4: TDD / manual verifikasi**
 
 ```bash
 curl -c cookies.txt -X POST http://localhost:3000/login \
@@ -131,7 +131,7 @@ Expected: 200 dengan text error "Password salah" (tanpa cookie).
 **Files:**
 - Modify: `app/root.tsx`
 
-- [ ] **Step 1: Tambah `loader` di root — validasi session**
+- [x] **Step 1: Tambah `loader` di root — validasi session**
 
 ```ts
 export async function loader({ request }: Route.LoaderArgs) {
@@ -152,15 +152,15 @@ export async function loader({ request }: Route.LoaderArgs) {
 
 > **Rekomendasi B:** gunakan route-level approach: `login.tsx` tidak memakai sidebar `Layout`. Bila flatRoutes tidak mendukung easy-exclude, gunakan `routes.ts` manual: `route("/", "root.tsx")` nested + `route("login", "routes/login.tsx")` di luar.
 
-- [ ] **Step 2: Layout publik vs protected**
+- [x] **Step 2: Layout publik vs protected**
 
 Root layout memakai sidebar + guard (protected). Route login berdiri sendiri (hanya form, no sidebar).
 
-- [ ] **Step 3: Logout**
+- [x] **Step 3: Logout**
 
 Di sidebar, link/action POST ke `/_logout` resource → hapus session + clear cookie → redirect `/login`. Tambah resource route `_logout.tsx` dengan `action`.
 
-- [ ] **Step 4: Verifikasi manual**
+- [x] **Step 4: Verifikasi manual**
 
 - Akses `/home`, `/providers`, dst tanpa cookie → redirect `/login`.
 - Login sukses → akses semua route.
@@ -175,7 +175,7 @@ Di sidebar, link/action POST ke `/_logout` resource → hapus session + clear co
 - Modify: `app/root.tsx`
 - Create: `app/components/sidebar.tsx`
 
-- [ ] **Step 1: Buat sidebar komponen**
+- [x] **Step 1: Buat sidebar komponen**
 
 List navigasi dengan NavLink (`react-router`):
 
@@ -192,7 +192,7 @@ List navigasi dengan NavLink (`react-router`):
 
 Styling Tailwind: fixed sidebar kiri (w-64), item aktif highlight, submenu logs (nested NavLink).
 
-- [ ] **Step 2: Root layout render layout**
+- [x] **Step 2: Root layout render layout**
 
 ```tsx
 export default function Root() {
@@ -207,9 +207,9 @@ export default function Root() {
 }
 ```
 
-- [ ] **Step 3: placeholder halaman protected lain (sudah dibuat placeholder Fase 1) isi minimal "Coming"** — hanya untuk memastikan navbar link tidak 404.
+- [x] **Step 3: placeholder halaman protected lain (sudah dibuat placeholder Fase 1) isi minimal "Coming"** — hanya untuk memastikan navbar link tidak 404.
 
-- [ ] **Step 4: TDD manual stitch**
+- [x] **Step 4: TDD manual stitch**
 
 Proxy:
 ```
@@ -221,9 +221,15 @@ Proxy:
 
 ## Checkpoint Fase 4
 
-- [ ] Semua route (kecuali `/login`) → redirect `/login` saat tidak punya cookie.
-- [ ] Login benar → cookie session HttpOnly, umur 24 jam → masuk.
-- [ ] Password salah → error.
-- [ ] Logout → cookie clear + redirect `/login`.
-- [ ] Sidebar lengkap 7 menu + submenu Logs + semua route tidak 404.
-- [ ] Commit: `feat: auth guard + sidebar layout`
+- [x] Semua route (kecuali `/login`) → redirect `/login` saat tidak punya cookie.
+- [x] Login benar → cookie session HttpOnly, umur 24 jam → masuk.
+- [x] Password salah → error.
+- [x] Logout → cookie clear + redirect `/login`.
+- [x] Sidebar lengkap 7 menu + submenu Logs + semua route tidak 404.
+- [x] Commit: `feat: auth guard + sidebar layout`
+---
+
+## Catatan Deviasi
+
+- **Route logout:** file `_logout.tsx` dihindari karena nama ber-`_` (tanpa dot) di `flatRoutes` jadi pathless route (404). Dipakai `logout.tsx` → path `/logout` (sesuai menu "POST /logout") dengan `loader` redirect & POST `action`.
+- **Guard:** pendekatan A (root loader) — skip `/login` dan `/v1/*`, redirect protected → `/login?next=...`. `useLocation` di root untuk menampilkan sidebar hanya di halaman protected.
