@@ -16,7 +16,7 @@
 - Create: `package.json`, `tsconfig.json`, `bun.lock`, `.gitignore`, `vite.config.ts`, `react-router.config.ts`
 - Create: `app/root.tsx` (minimal), `app/entry.server.ts`, `app/entry.client.tsx` (framework mode entry)
 
-- [ ] **Step 1: Inisialisasi direktori minimal**
+- [x] **Step 1: Inisialisasi direktori minimal**
 
 ```bash
 cd /home/adieu/projects/uniroute
@@ -24,7 +24,7 @@ mkdir -p app data bin
 printf '{"name":"uniroute","version":"0.1.0","type":"module"}\n' > package.json
 ```
 
-- [ ] **Step 2: Install dependensi core**
+- [x] **Step 2: Install dependensi core**
 
 ```bash
 bun add react react-dom react-router
@@ -33,7 +33,7 @@ bun add -d @react-router/dev @react-router/fs-routes vite @vitejs/plugin-react t
 
 > Catatan: PRD §15 — pakai `react-router` (bukan `react-router-dom`); DOM-specific dari `react-router/dom`.
 
-- [ ] **Step 3: Konfigurasi Vite (`vite.config.ts`)**
+- [x] **Step 3: Konfigurasi Vite (`vite.config.ts`)**
 
 ```ts
 import { reactRouter } from "@react-router/dev/vite";
@@ -45,7 +45,7 @@ export default defineConfig({
 });
 ```
 
-- [ ] **Step 4: Konfigurasi React Router (`react-router.config.ts`)**
+- [x] **Step 4: Konfigurasi React Router (`react-router.config.ts`)**
 
 ```ts
 import { type Config } from "@react-router/dev/config";
@@ -57,12 +57,12 @@ export default {
 
 > Catatan: file-route `flatRoutes()` otomatis di-discover dari `app/routes/` pada React Router v8 — tidak perlu setup tambahan di config ini.
 
-- [ ] **Step 5: File entry minimal**
+- [x] **Step 5: File entry minimal**
   - `app/entry.server.ts`: render `handleRequest` standar React Router v8.
   - `app/entry.client.tsx`: `hydrateRoot` standar.
   - `app/root.tsx`: `export function Layout({ children }) { return <html><body>{children}</body></html> }` + `export default function Root()` dengan `<Outlet />`.
 
-- [ ] **Step 6: Verifikasi boot**
+- [x] **Step 6: Verifikasi boot**
 
 ```bash
 bun run dev
@@ -77,7 +77,7 @@ Expected: server jalan di `http://localhost:3000` tanpa error compile.
 **Files:**
 - Create: `.env`, `.env.example`
 
-- [ ] **Step 1: Tulis file env dengan 4 variabel**
+- [x] **Step 1: Tulis file env dengan 4 variabel**
 
 ```env
 PORT=3000
@@ -86,7 +86,7 @@ PASSWORD=CHANGEME
 DATABASE_URL=./data/uniroute.db
 ```
 
-- [ ] **Step 2: Buat `.env.example` (tanpa nilai rahasia nyata), dan tambahkan `.env` ke `.gitignore`**
+- [x] **Step 2: Buat `.env.example` (tanpa nilai rahasia nyata), dan tambahkan `.env` ke `.gitignore`**
 
 ```
 data/
@@ -95,7 +95,7 @@ node_modules/
 build/
 ```
 
-- [ ] **Step 3: Verifikasi env dibaca**
+- [x] **Step 3: Verifikasi env dibaca**
 
 ```bash
 bun -e "console.log(process.env.PORT, process.env.BASE_URL, process.env.PASSWORD, process.env.DATABASE_URL)"
@@ -111,7 +111,7 @@ Expected: 4 nilai tercetak sesuai `.env`.
 - Create: `app/.server/db.ts`
 - Create: `app/.server/seed.ts` (opsional, dipanggil dari `db.ts` saat inisialisasi)
 
-- [ ] **Step 1: Buat client `bun:sqlite` singleton di `app/.server/db.ts`**
+- [x] **Step 1: Buat client `bun:sqlite` singleton di `app/.server/db.ts`**
 
 ```ts
 import { Database } from "bun:sqlite";
@@ -126,7 +126,7 @@ db.exec("PRAGMA journal_mode = WAL;");
 db.exec("PRAGMA foreign_keys = ON;");
 ```
 
-- [ ] **Step 2: Jalankan schema (8 tabel) dari PRD §4 persis**
+- [x] **Step 2: Jalankan schema (8 tabel) dari PRD §4 persis**
 
 ```sql
 CREATE TABLE IF NOT EXISTS providers ( ... );        -- §4
@@ -141,7 +141,7 @@ CREATE TABLE IF NOT EXISTS proxy_logs ( ... );        -- §4
 
 > Copy identik definisi kolom dari PRD §4 (termasuk `UNIQUE`, `DEFAULT`, `CHECK`).
 
-- [ ] **Step 3: Seed data minimal (hanya jalankan jika tabel kosong)**
+- [x] **Step 3: Seed data minimal (hanya jalankan jika tabel kosong)**
 
 Provider: `openai`, `anthropic`, `google`, `groq`, `openrouter`, `mistral`, `cohere`, `deepseek` (+1 free provider).
 
@@ -174,7 +174,7 @@ VALUES
 
 Seed minimal untuk tabel lain: `compression_settings (id=1, defaults)`, `load_balancing` untuk `gpt-4o` (strategy `round_robin`), `model_allowlist` contoh (mis. deny `nonexistent-model`).
 
-- [ ] **Step 4: Verifikasi DB**
+- [x] **Step 4: Verifikasi DB**
 
 ```bash
 bun -e "await import('./app/.server/db.ts').then(() => console.log('ok'))"
@@ -198,7 +198,7 @@ Expected: 8 tabel terdaftar. Check jumlah baris seed.
 - Create: `app/routes/login.tsx` (placeholder, public)
 - Create: `app/styles/global.css` (Tailwind)
 
-- [ ] **Step 1: Buat placeholder route `_index.tsx`**
+- [x] **Step 1: Buat placeholder route `_index.tsx`**
 
 ```tsx
 import { redirect } from "react-router";
@@ -213,11 +213,11 @@ export default function Index() {
 }
 ```
 
-- [ ] **Step 2: Buat placeholder route lain (isolasi compile)**
+- [x] **Step 2: Buat placeholder route lain (isolasi compile)**
 
 `app/routes/home.tsx` (HTML statis sementara), `.tsx` untuk `/providers`, `/compression`, `/api`, `/combo`, `/proxy`, `logs.tsx`.
 
-- [ ] **Step 3: Tailwind CSS**
+- [x] **Step 3: Tailwind CSS**
 
 ```bash
 bun add -d tailwindcss @tailwindcss/vite
@@ -231,7 +231,7 @@ bun add -d tailwindcss @tailwindcss/vite
 
 Import `global.css` di `app/root.tsx`.
 
-- [ ] **Step 4: Verifikasi**
+- [x] **Step 4: Verifikasi**
 
 ```bash
 bun run dev        # boot OK
@@ -244,8 +244,17 @@ Check: `/` redirect ke `/home`; `/login` render placeholder.
 
 ## Checkpoint Fase 1
 
-- [ ] Server boot tanpa error (`bun run dev`).
-- [ ] 8 tabel seeded di `data/uniroute.db`.
-- [ ] Struktur `app/.server`, `app/routes`, `app/components`, `app/hooks` ada.
-- [ ] `/` redirect ke `/home`.
-- [ ] Commit: `feat: scaffold uniroute with RR8 + bun + sqlite schema`
+- [x] Server boot tanpa error (`bun run dev`).
+- [x] 8 tabel seeded di `data/uniroute.db`.
+- [x] Struktur `app/.server`, `app/routes`, `app/components`, `app/hooks` ada.
+- [x] `/` redirect ke `/home`.
+- [x] Commit: `feat: scaffold uniroute with RR8 + bun + sqlite schema`
+
+---
+
+## Catatan Deviasi (disetujui user)
+
+- **SQLite driver:** memakai `node:sqlite` (bukan `bun:sqlite`) karena dev server React Router v8 (Vite SSR) mengeksekusi modul server lewat Node ESM loader yang tidak bisa resolve skema `bun:`. `node:sqlite` berjalan di Node (dev) dan Bun (prod) — disetujui user.
+- **Production server:** `build/server/index.js` hanya manifest (tidak listen). Tambah `server.ts` (Bun.serve + `createRequestHandler` + static dari `build/client`) dan script `start: "bun server.ts"`.
+- **Entry API:** `entry.server.tsx` memakai `renderToReadableStream` (bukan `renderToPipeableStream`) karena `react-dom/server.bun` tidak mengekspor versi pipeable.
+- **Tailwind:** tetap via `app/app.css` (sudah `@import "tailwindcss"`), tidak buat `app/styles/global.css` duplikat.
