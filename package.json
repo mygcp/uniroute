@@ -6,7 +6,8 @@
     "build": "react-router build",
     "dev": "react-router dev",
     "start": "bun server.ts",
-    "typecheck": "react-router typegen && tsc"
+    "typecheck": "react-router typegen && tsc",
+    "test": "bun test $(find ./app/.server ./app/routes -maxdepth 1 -name '*.test.ts' 2>/dev/null)"
   },
   "dependencies": {
     "@react-router/node": "^8",

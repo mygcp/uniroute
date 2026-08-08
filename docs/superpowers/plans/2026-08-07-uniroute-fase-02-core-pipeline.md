@@ -19,7 +19,7 @@
 - Consumes: `db` dari `app/.server/db.ts` (Fase 1).
 - Produces: `getProviders(model: string): Provider[]`, `getAnyProvider(model: string): Provider[]`, `reload(): void`, `type Provider`.
 
-- [ ] **Step 1: Definisikan tipe `Provider`**
+- [x] **Step 1: Definisikan tipe `Provider`**
 
 ```ts
 export type Provider = {
@@ -35,7 +35,7 @@ export type Provider = {
 };
 ```
 
-- [ ] **Step 2: Buat cache in-memory + reload dari join `models` × `providers`**
+- [x] **Step 2: Buat cache in-memory + reload dari join `models` × `providers`**
 
 ```ts
 import { db } from "./db";
@@ -57,7 +57,7 @@ export function reload() {
 }
 ```
 
-- [ ] **Step 3: Getter**
+- [x] **Step 3: Getter**
 
 ```ts
 export function getProviders(model: string): Provider[] {
@@ -66,7 +66,7 @@ export function getProviders(model: string): Provider[] {
 }
 ```
 
-- [ ] **Step 4: TDD - tulis test `registry.test.ts` (bun:test)**
+- [x] **Step 4: TDD - tulis test `registry.test.ts` (bun:test)**
 
 ```ts
 import { describe, test, expect } from "bun:test";
@@ -74,7 +74,7 @@ import { describe, test, expect } from "bun:test";
 
 Test: seed dengan `gpt-4o` → 3 provider; provider non-aktif tidak dikembalikan; `reload()` setelah perubahan DB mengembalikan dengan benar.
 
-- [ ] **Step 5: Verifikasi**
+- [x] **Step 5: Verifikasi**
 
 ```bash
 bun test app/.server/registry.test.ts
@@ -95,7 +95,7 @@ Expected: PASS.
 
 > Fase ini fokus pada provider yang OpenAI-compatible (OpenAI, Groq, OpenRouter, Mistral, DeepSeek) yang mirip format. Provider khusus Anthropic/Google menjadi ekstensi di fase berikutnya (disampel placeholder path).
 
-- [ ] **Step 1: `transformRequest` untuk provider OpenAI-compatible**
+- [x] **Step 1: `transformRequest` untuk provider OpenAI-compatible**
 
 ```ts
 export function transformRequest(body, provider) {
@@ -114,7 +114,7 @@ export function transformRequest(body, provider) {
 }
 ```
 
-- [ ] **Step 2: `transformStreamChunk` — parse chunk upstream menjadi SSE OpenAI delta**
+- [x] **Step 2: `transformStreamChunk` — parse chunk upstream menjadi SSE OpenAI delta**
 
 ```ts
 export function transformStreamChunk(chunk, provider) {
@@ -127,11 +127,11 @@ export function transformStreamChunk(chunk, provider) {
 
 > Implementasi detail: parse buffer teks, sisakan potongan partial di toggle sampai baris `\n` lengkap (`buffered` state per stream). **Tetap zero-buffer**: hanya baris partial yang dipindah, bukan seluruh response.
 
-- [ ] **Step 3: TDD test adapter**
+- [x] **Step 3: TDD test adapter**
 
 Test: input chunk OpenAI-style partial + complete → output SSE delta benar; nama provider non-OpenAI menghasilkan path yang benar.
 
-- [ ] **Step 5: Verifikasi**
+- [x] **Step 5: Verifikasi**
 
 ```bash
 bun test app/.server/adapter.test.ts
@@ -148,7 +148,7 @@ bun test app/.server/adapter.test.ts
 - Consumes: `transformRequest`, `transformStreamChunk` (2.2), `Provider`.
 - Produces: `executeStreaming({ url, headers, body, signal, onRecord }): Promise<Response>`, dan granular `start + stream` internal helper.
 
-- [ ] **Step 1: `executeStreaming` — fetch + ReadableStream output**
+- [x] **Step 1: `executeStreaming` — fetch + ReadableStream output**
 
 ```ts
 export async function handleStreaming({ url, headers, body, signal, provider }) {
@@ -197,15 +197,15 @@ export async function handleStreaming({ url, headers, body, signal, provider }) 
 
 > **JANGAN** mengakumulasi seluruh response. Hanya potongan partial buffer (max 1 event) yang dipers.
 
-- [ ] **Step 2: Retry ≤ 1x**
+- [x] **Step 2: Retry ≤ 1x**
 
 Jika hasil pertama: network error / status 5xx / 429 sebelum stream : coba 1x lagi dengan provider sama. Setelah itu stop.
 
-- [ ] **Step 3: Test dengan mock upstream**
+- [x] **Step 3: Test dengan mock upstream**
 
 Buat `scripts/mock-upstream.ts` (Bun).Server): jalankan di `localhost:8787`, endpoint `/v1/chat/completions` yang mengeluarkan SSE bertahap dengan delay 20ms per token.
 
-- [ ] **Step 4: E2E streaming test**
+- [x] **Step 4: E2E streaming test**
 
 ```bash
 bun -e "const res = await fetch('http://localhost:8787/...') ..." # atau curl
@@ -226,7 +226,7 @@ Expected: token muncul bertahap `data: {...}` per chunk, diakhiri `data: [DONE]`
 **Interfaces:**
 - Produces: `checkAllowlist(model: string): {ok: boolean; reason?: string}`.
 
-- [ ] **Step 1: Implement check `model_allowlist`**
+- [x] **Step 1: Implement check `model_allowlist`**
 
 ```ts
 export function checkAllowlist(model: string) {
@@ -238,7 +238,7 @@ export function checkAllowlist(model: string) {
 
 Mode default permissive: hanya deny yang memblokir.
 
-- [ ] **Step 2: Test**
+- [x] **Step 2: Test**
 
 Model `nonexistent-model` yang di-seed sebagai deny → `ok: false`; model lain → `ok: true`.
 
@@ -252,7 +252,7 @@ Model `nonexistent-model` yang di-seed sebagai deny → `ok: false`; model lain 
 
 **Keputusan Tersimpan:** PRD menyimpan API key di SQLite. Karena skema §4 belum punya kolom `api_key`, tambahkan tabel `provider_credentials (provider_id TEXT PK, api_key TEXT)` — dipilih atas penyimpanan di env karena PRD §13 "API Key provider diambil dari SQLite".
 
-- [ ] **Step 1: Tambah kolom/tabel credential di `db.ts`**
+- [x] **Step 1: Tambah kolom/tabel credential di `db.ts`**
 
 ```sql
 CREATE TABLE IF NOT EXISTS provider_credentials (
@@ -264,11 +264,11 @@ CREATE TABLE IF NOT EXISTS provider_credentials (
 
 Provider seed yang memakai token belum punya key → ditandai `auth_type` saja.
 
-- [ ] **Step 2: `getApiKey(providerId): string | null` di `app/.server/credential.ts`**
+- [x] **Step 2: `getApiKey(providerId): string | null` di `app/.server/credential.ts`**
 
 Query `provider_credentials.api_key`.
 
-- [ ] **Step 3: Resource route action `v1.chat.completions.ts`**
+- [x] **Step 3: Resource route action `v1.chat.completions.ts`**
 
 Alur sesuai PRD §11:
 
@@ -282,11 +282,11 @@ Alur sesuai PRD §11:
 7. Record: insert request_logs non-blocking (fire-and-forget .then())
 ```
 
-- [ ] **Step 4: Record log non-blocking**
+- [x] **Step 4: Record log non-blocking**
 
 Function `recordRequestLog({model, provider_id, strategy_used, rule_applied, duration_ms, status, error_message, prompt_tokens, completion_tokens})` di `app/.server/logger.ts` (detail Fase 6) → call tanpa `await` dari action; internal pakai queue async.
 
-- [ ] **Step 5: Test E2E penuh**
+- [x] **Step 5: Test E2E penuh**
 
 - Mock provider dijalankan.
 - Curl ke `POST /v1/chat/completions` dengan model ter-seed.
@@ -301,15 +301,15 @@ Function `recordRequestLog({model, provider_id, strategy_used, rule_applied, dur
 - Modify: `app/routes/v1.chat.completions.ts`
 - Create: `scripts/mock-upstream.ts` (final)
 
-- [ ] **Step 1: Upstream not found**
+- [x] **Step 1: Upstream not found**
 
 Jika `getProviders(model)` kosong → `404 { error: { message: "model not found" } }`.
 
-- [ ] **Step 2: Standar error**
+- [x] **Step 2: Standar error**
 
 Untuk error provider (timeout/fetch) → `502 Bad Gateway` JSON dengan message bawaan upstream.
 
-- [ ] **Step 3: Pastikan log & fallback**
+- [x] **Step 3: Pastikan log & fallback**
 
 Jalankan `bun run dev`, streaming ke mock → `request_logs` dapat diinspeksi via sqlite3 manual (`sqlite3 data/uniroute.db "select * from request_logs"`).
 
@@ -317,8 +317,15 @@ Jalankan `bun run dev`, streaming ke mock → `request_logs` dapat diinspeksi vi
 
 ## Checkpoint Fase 2 — Verified
 
-- [ ] `curl -N` streaming token-per-token dengan `Content-Type: text/event-stream` dari mock upstream.
-- [ ] `data: [DONE]` sebagai EOF.
-- [ ] Model deny → 403; model tidak dikenal → 404.
-- [ ] `request_logs` tercatat non-blocking.
-- [ ] Commit: `feat: core streaming proxy pipeline`
+- [x] `curl -N` streaming token-per-token dengan `Content-Type: text/event-stream` dari mock upstream.
+- [x] `data: [DONE]` sebagai EOF.
+- [x] Model deny → 403; model tidak dikenal → 404.
+- [x] `request_logs` tercatat non-blocking.
+- [x] Commit: `feat: core streaming proxy pipeline`
+---
+
+## Catatan Deviasi (disetujui user)
+
+- **DB driver dual-runtime:** `db.ts` memakai `bun:sqlite` saat runtime Bun (prod `bun server.ts` & `bun test`), fallback `node:sqlite` saat runtime Node (dev server Vite SSR). Inisialisasi via `createRequire` + try/catch. Semua modul memakai helper `query(sql)` (kompatibel `.query` bun & `.prepare` node) — bukan `db.query`/`db.prepare` langsung.
+- **React Router v8:** `json()` dari `react-router` sudah tidak ada → helper lokal `json()` di resource route.
+- **openai provider** di-set base_url ke `http://localhost:8787` (mock upstream) untuk E2E lokal; kembali ke `https://api.openai.com` saat mau live.

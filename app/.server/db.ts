@@ -1,13 +1,59 @@
-import { DatabaseSync } from "node:sqlite";
+import { createRequire } from "node:module";
 import { mkdirSync } from "node:fs";
 import path from "node:path";
+
+type SqliteApi = {
+  exec(sql: string): void;
+  close(): void;
+};
+
+type StatementApi = {
+  run(...params: unknown[]): unknown;
+  get(...params: unknown[]): Record<string, unknown> | undefined;
+  all(...params: unknown[]): Record<string, unknown>[];
+};
 
 const dbPath = process.env.DATABASE_URL ?? "./data/uniroute.db";
 mkdirSync(path.dirname(dbPath), { recursive: true });
 
-export const db = new DatabaseSync(dbPath);
+const require = createRequire(import.meta.url);
+
+let db: SqliteApi;
+
+try {
+  // Bun runtime
+  const { Database } = require("bun:sqlite") as {
+    Database: new (p: string, opts: { create: boolean }) => SqliteApi;
+  };
+  db = new Database(dbPath, { create: true });
+} catch {
+  // Node runtime (dev server / vite SSR)
+  const { DatabaseSync } = require("node:sqlite") as {
+    DatabaseSync: new (p: string) => SqliteApi;
+  };
+  db = new DatabaseSync(dbPath);
+}
+
 db.exec("PRAGMA journal_mode = WAL;");
 db.exec("PRAGMA foreign_keys = ON;");
+
+/**
+ * Statement factory compatible with bun:sqlite (`.query`) and node:sqlite
+ * (`.prepare`). Statement results are normalized to `Record<string, unknown>[]`.
+ */
+export function query(sql: string): StatementApi {
+  const q = (db as { query?: (sql: string) => unknown }).query;
+  if (typeof q === "function") {
+    return q.call(db, sql) as StatementApi;
+  }
+  const prepare = (db as { prepare?: (sql: string) => unknown }).prepare;
+  if (typeof prepare === "function") {
+    return prepare.call(db, sql) as StatementApi;
+  }
+  throw new Error("sqlite API not available");
+}
+
+export const exec = (sql: string): void => db.exec(sql);
 
 db.exec(`CREATE TABLE IF NOT EXISTS providers (
   id TEXT PRIMARY KEY,
@@ -98,19 +144,27 @@ db.exec(`CREATE TABLE IF NOT EXISTS proxy_logs (
   created_at INTEGER DEFAULT (unixepoch())
 );`);
 
+db.exec(`CREATE TABLE IF NOT EXISTS provider_credentials (
+  provider_id TEXT PRIMARY KEY,
+  api_key TEXT NOT NULL,
+  updated_at INTEGER DEFAULT (unixepoch())
+);`);
+
 export function seed() {
   const count = (
-    db.prepare("SELECT COUNT(*) AS c FROM providers").get() as { c: number }
+    query("SELECT COUNT(*) AS c FROM providers").get() as {
+      c: number;
+    } | undefined
   )?.c ?? 0;
   if (count > 0) return;
 
-  const insertProvider = db.prepare(
+  const insertProvider = query(
     `INSERT INTO providers (id, name, base_url, auth_type, is_active, weight, priority)
      VALUES (?, ?, ?, ?, ?, ?, ?)`,
   );
-  const insertModel = db.prepare(
+  const insertModel = query(
     `INSERT INTO models (model_name, provider_id, context_length, is_active, is_primary)
-     VALUES (?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?)`,
   );
 
   db.exec("BEGIN");
@@ -199,22 +253,24 @@ export function seed() {
   }
 
   const allowlistCount = (
-    db.prepare("SELECT COUNT(*) AS c FROM model_allowlist").get() as { c: number }
+    query("SELECT COUNT(*) AS c FROM model_allowlist").get() as {
+      c: number;
+    } | undefined
   )?.c ?? 0;
   if (allowlistCount === 0) {
-    db.prepare(
+    query(
       `INSERT INTO model_allowlist (model_name, action, reason)
        VALUES ('nonexistent-model', 'deny', 'seed denylist contoh')`,
     ).run();
   }
 
-  db.prepare(
+  query(
     `INSERT INTO compression_settings (id, rtk_enabled, caveman_enabled)
      VALUES (1, 1, 0)
      ON CONFLICT(id) DO NOTHING`,
   ).run();
 
-  db.prepare(
+  query(
     `INSERT INTO load_balancing (model_name, strategy)
      VALUES ('gpt-4o', 'round_robin')
      ON CONFLICT(model_name) DO NOTHING`,
