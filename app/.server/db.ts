@@ -298,6 +298,15 @@ export function seed() {
       1,
       0,
     );
+    insertProvider.run(
+      "dahl",
+      "Dahl Global",
+      "https://inference.dahl.global/v1",
+      "bearer",
+      0,
+      1,
+      0,
+    );
 
     const models: [string, string, number, number, number][] = [
       ["gpt-4o", "openai", 128000, 1, 1],
@@ -316,6 +325,8 @@ export function seed() {
       ["north-mini-code-free", "opencode", 131000, 1, 0],
       ["laguna-s-2.1-free", "opencode", 200000, 1, 0],
       ["longcat-2.0-free", "opencode", 200000, 1, 0],
+      ["moonshotai/Kimi-K2.6", "dahl", 200000, 1, 1],
+      ["MiniMaxAI/MiniMax-M2.7", "dahl", 200000, 1, 0],
     ];
     for (const [name, provider, ctx, active, primary] of models) {
       insertModel.run(name, provider, ctx, active, primary);
@@ -382,6 +393,29 @@ export function ensureOpenCodeProvider() {
   ).run();
 }
 
+export function ensureDahlProvider() {
+  query(
+    `INSERT OR IGNORE INTO providers (id, name, base_url, auth_type, is_active, weight, priority)
+     VALUES ('dahl', 'Dahl Global', 'https://inference.dahl.global/v1', 'bearer', 0, 1, 0)`,
+  ).run();
+  query(
+    "UPDATE providers SET auth_type = 'bearer' WHERE id = 'dahl' AND auth_type != 'bearer'",
+  ).run();
+  const dahlModels: [string, number][] = [
+    ["moonshotai/Kimi-K2.6", 200000],
+    ["MiniMaxAI/MiniMax-M2.7", 200000],
+  ];
+  for (const [name, ctx] of dahlModels) {
+    query(
+      `INSERT OR IGNORE INTO models (model_name, provider_id, context_length, is_active, is_primary)
+       VALUES (?, 'dahl', ?, 1, CASE WHEN NOT EXISTS
+         (SELECT 1 FROM models WHERE provider_id = 'dahl' AND is_primary = 1) THEN 1 ELSE 0 END)`,
+    ).run(name, ctx);
+  }
+}
+
 seed();
 
 ensureOpenCodeProvider();
+
+ensureDahlProvider();
