@@ -2,18 +2,16 @@ import type { RegistryEntry } from "~/types";
 
 export const OPENCODE_ENTRY: RegistryEntry = {
   id: "opencode",
-  alias: "oc",
+  alias: "OpenCode Zen",
   format: "openai",
-  executor: "opencode",
-  authType: "apikey",
+  authType: "none",
   baseUrl: "https://opencode.ai/zen/v1",
   modelsUrl: "https://opencode.ai/zen/v1/models",
-  authHeader: "Authorization",
-  authPrefix: "Bearer",
+  urlSuffix: "chat/completions",
   passthroughModels: true,
   defaultContextLength: 200000,
   free: true,
-  description: "OpenCode ZEN gateway (OpenAI-compatible)",
+  description: "OpenCode ZEN gateway (OpenAI-compatible, no API key)",
   color: "bg-slate-500",
   models: [
     {
@@ -28,7 +26,8 @@ export const OPENCODE_ENTRY: RegistryEntry = {
       supportsReasoning: true,
     },
     { id: "mimo-v2.5-free", name: "MiMo V2.5 Free", contextLength: 131000 },
-    { id: "hy3-free", name: "HY3 Free", contextLength: 131000 },
+    { id: "ling-3.0-flash-free", name: "Ling 3.0 Flash Free" },
+    { id: "ling-3.0-tiny-free", name: "Ling 3.0 Tiny Free" },
     {
       id: "nemotron-3-ultra-free",
       name: "Nemotron 3 Ultra Free",
@@ -39,5 +38,7 @@ export const OPENCODE_ENTRY: RegistryEntry = {
       name: "North Mini Code Free",
       contextLength: 131000,
     },
+    { id: "laguna-s-2.1-free", name: "Laguna S 2.1 Free" },
+    { id: "longcat-2.0-free", name: "Longcat 2.0 Free" },
   ],
 };
