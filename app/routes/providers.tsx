@@ -36,12 +36,26 @@ function testProvider(providerId: string): Promise<{ connected: number; total: n
   ).get(providerId) as { base_url: string; auth_type: string } | undefined;
   if (!provider) return Promise.resolve({ connected: 0, total: 0 });
 
-  const keys = listApiKeys(providerId).filter((k) => k.is_active);
-  if (keys.length === 0) return Promise.resolve({ connected: 0, total: 0 });
-
   const entry = getRegistryEntry(providerId);
   const modelsUrl =
     entry?.modelsUrl ?? new URL("/v1/models", provider.base_url).toString();
+
+  if (provider.auth_type === "none") {
+    return (async () => {
+      try {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 5000);
+        const res = await fetch(modelsUrl, { signal: controller.signal });
+        clearTimeout(timer);
+        return { connected: res.ok ? 1 : 0, total: 1 };
+      } catch {
+        return { connected: 0, total: 1 };
+      }
+    })();
+  }
+
+  const keys = listApiKeys(providerId).filter((k) => k.is_active);
+  if (keys.length === 0) return Promise.resolve({ connected: 0, total: 0 });
 
   return (async () => {
     let connected = 0;
