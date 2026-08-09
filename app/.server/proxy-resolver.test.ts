@@ -6,6 +6,7 @@ import {
   getProxy,
   listAssignments,
   listProxies,
+  parseBulkProxies,
   removeProxyAssignment,
   setProxyActive,
   updateProxy,
@@ -69,5 +70,74 @@ describe("provider_proxies assignments", () => {
     removeProxyAssignment("deepseek", p1);
     const remaining = listAssignments().filter((a) => a.provider_id === "deepseek").map((a) => a.proxy_id);
     expect(remaining).toEqual([p2]);
+  });
+});
+
+describe("parseBulkProxies", () => {
+  test("plain lines: host:port and host:port:user:pass", () => {
+    const { imported, skipped } = parseBulkProxies(
+      "1.2.3.4:8080\n5.6.7.8:3128:user:pass\n",
+    );
+    expect(skipped).toEqual([]);
+    expect(imported).toEqual([
+      { protocol: "http", host: "1.2.3.4", port: 8080, username: null, password: null },
+      { protocol: "http", host: "5.6.7.8", port: 3128, username: "user", password: "pass" },
+    ]);
+  });
+
+  test("url lines with protocol and credentials", () => {
+    const { imported, skipped } = parseBulkProxies(
+      "socks5://user:pass@10.0.0.1:1080\nhttp://10.0.0.2:8080\nhttp://u%40x:p%3Ay@10.0.0.3:8080",
+    );
+    expect(skipped).toEqual([]);
+    expect(imported).toEqual([
+      { protocol: "socks5", host: "10.0.0.1", port: 1080, username: "user", password: "pass" },
+      { protocol: "http", host: "10.0.0.2", port: 8080, username: null, password: null },
+      { protocol: "http", host: "10.0.0.3", port: 8080, username: "u@x", password: "p:y" },
+    ]);
+  });
+
+  test("ipv6 bracketed", () => {
+    const { imported, skipped } = parseBulkProxies("[::1]:1080\nhttp://u:p@[::1]:3128");
+    expect(skipped).toEqual([]);
+    expect(imported).toEqual([
+      { protocol: "http", host: "::1", port: 1080, username: null, password: null },
+      { protocol: "http", host: "::1", port: 3128, username: "u", password: "p" },
+    ]);
+  });
+
+  test("json array", () => {
+    const text = JSON.stringify([
+      { protocol: "socks5", host: "pi.example", port: 1080 },
+      { protocol: "http", host: "www.example", port: 80, username: "a", password: "b" },
+    ]);
+    const { imported, skipped } = parseBulkProxies(text);
+    expect(skipped).toEqual([]);
+    expect(imported).toEqual([
+      { protocol: "socks5", host: "pi.example", port: 1080, username: null, password: null },
+      { protocol: "http", host: "www.example", port: 80, username: "a", password: "b" },
+    ]);
+  });
+
+  test("invalid entries skipped with reasons", () => {
+    const { imported, skipped } = parseBulkProxies("not-a-proxy\n1.2.3.4:999999\n");
+    expect(imported).toEqual([]);
+    expect(skipped.length).toBe(2);
+  });
+
+  test("duplicates within input and vs existing are skipped", () => {
+    const { imported, skipped } = parseBulkProxies(
+      "1.2.3.4:8080\n1.2.3.4:8080\n2.3.4.5:8080",
+      [{ id: 9, protocol: "http", host: "2.3.4.5", port: 8080, username: null, password: null }],
+    );
+    expect(imported).toEqual([
+      { protocol: "http", host: "1.2.3.4", port: 8080, username: null, password: null },
+    ]);
+    expect(skipped).toContain("duplicate: http://1.2.3.4:8080");
+    expect(skipped.some((s) => s.includes("2.3.4.5"))).toBe(true);
+  });
+
+  test("empty input returns nothing", () => {
+    expect(parseBulkProxies("  \n")).toEqual({ imported: [], skipped: [] });
   });
 });

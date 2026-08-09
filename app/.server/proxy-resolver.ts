@@ -118,3 +118,138 @@ export function listAssignments(): AssignmentRow[] {
      ORDER BY pr.id, px.port`,
   ).all() as unknown as AssignmentRow[];
 }
+
+function validPort(port: number): boolean {
+  return Number.isInteger(port) && port > 0 && port < 65536;
+}
+
+function parsePlainLine(s: string): ProxyInput | { error: string } {
+  if (s.startsWith("[")) {
+    const m = s.match(/^\[([^\]]+)\](?::(\d+))?(?::(.*))?$/);
+    if (!m || !m[1]) return { error: "invalid format" };
+    const port = m[2] ? Number(m[2]) : 1080;
+    if (!validPort(port)) return { error: "invalid port" };
+    let username: string | null = null;
+    let password: string | null = null;
+    if (m[3]) {
+      const [u, ...rest] = m[3].split(":");
+      username = u || null;
+      password = rest.join(":") || null;
+    }
+    return { protocol: "http", host: m[1], port, username, password };
+  }
+  const parts = s.split(":");
+  if (parts.length < 2 || parts.length > 4) return { error: "invalid format" };
+  const host = parts[0];
+  const port = Number(parts[1]);
+  if (!host || !validPort(port)) return { error: "invalid format" };
+  let username: string | null = null;
+  let password: string | null = null;
+  if (parts.length === 3) {
+    username = parts[2] || null;
+  } else if (parts.length === 4) {
+    username = parts[2] || null;
+    password = parts[3];
+  }
+  return { protocol: "http", host, port, username, password };
+}
+
+function parseUrlLine(s: string): ProxyInput | { error: string } {
+  const m = s.match(
+    /^(https?|socks5):\/\/(?:([^:@/]+)(?::([^@/]*))?@)?(\[[^\]]+\]|[^:/]+):(\d+)\/?$/i,
+  );
+  if (!m) return { error: "invalid URL format" };
+  const scheme = m[1]!.toLowerCase();
+  const host = m[4]!.startsWith("[") ? m[4]!.slice(1, -1) : m[4]!;
+  const port = Number(m[5]);
+  if (!validPort(port)) return { error: "invalid port" };
+  return {
+    protocol: scheme === "socks5" ? "socks5" : "http",
+    host,
+    port,
+    username: m[2] != null ? decodeURIComponent(m[2]) : null,
+    password: m[3] != null ? decodeURIComponent(m[3]) : null,
+  };
+}
+
+export function parseBulkProxies(
+  text: string,
+  existing: ProxyConfig[] = [],
+): { imported: ProxyInput[]; skipped: string[] } {
+  const imported: ProxyInput[] = [];
+  const skipped: string[] = [];
+  const known = new Set(
+    existing.map((p) => `${p.protocol}://${p.host}:${p.port}`),
+  );
+  const push = (item: ProxyInput | { error: string }, label: string): void => {
+    if ("error" in item) {
+      skipped.push(`${label}: ${item.error}`);
+      return;
+    }
+    const key = `${item.protocol}://${item.host}:${item.port}`;
+    if (known.has(key)) {
+      skipped.push(`duplicate: ${key}`);
+      return;
+    }
+    known.add(key);
+    imported.push(item);
+  };
+  const trimmed = text.trim();
+  if (trimmed === "") return { imported, skipped };
+
+  let raw: unknown;
+  let isJson = false;
+  if (trimmed.startsWith("[") || trimmed.startsWith("{")) {
+    try {
+      raw = JSON.parse(trimmed);
+      isJson = true;
+    } catch {
+      // not JSON; fall through to line-by-line parsing
+    }
+  }
+  if (isJson) {
+    const items = Array.isArray(raw) ? raw : [raw];
+    items.forEach((item, i) => {
+      const label = `item ${i + 1}`;
+      if (typeof item !== "object" || item === null) {
+        skipped.push(`${label}: invalid format`);
+        return;
+      }
+      const obj = item as Record<string, unknown>;
+      if (typeof obj.host !== "string" || typeof obj.port !== "number") {
+        skipped.push(`${label}: host/port required`);
+        return;
+      }
+      const protocol =
+        typeof obj.protocol === "string" ? obj.protocol.toLowerCase() : "http";
+      if (protocol !== "http" && protocol !== "socks5") {
+        skipped.push(`${label}: protocol harus http/socks5`);
+        return;
+      }
+      if (!validPort(obj.port)) {
+        skipped.push(`${label}: invalid port`);
+        return;
+      }
+      push(
+        {
+          protocol,
+          host: obj.host,
+          port: obj.port,
+          username:
+            typeof obj.username === "string" && obj.username !== "" ? obj.username : null,
+          password:
+            typeof obj.password === "string" && obj.password !== "" ? obj.password : null,
+        },
+        label,
+      );
+    });
+    return { imported, skipped };
+  }
+
+  text.split("\n").forEach((line, i) => {
+    const l = line.trim();
+    if (l === "") return;
+    push(l.includes("://") ? parseUrlLine(l) : parsePlainLine(l), `line ${i + 1}`);
+  });
+  return { imported, skipped };
+}
