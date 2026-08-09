@@ -2,6 +2,7 @@ import type { RegistryEntry } from "~/types";
 import { ANTHROPIC_ENTRY } from "./anthropic";
 import { CLOUDFLARE_ENTRY } from "./cloudflare";
 import { CUSTOM_ENTRY } from "./custom";
+import { DAHL_ENTRY } from "./dahl";
 import { DEEPSEEK_ENTRY } from "./deepseek";
 import { GEMINI_ENTRY } from "./gemini";
 import { GROQ_ENTRY } from "./groq";
@@ -25,6 +26,7 @@ export const PROVIDER_REGISTRY: RegistryEntry[] = [
   DEEPSEEK_ENTRY,
   OLLAMA_ENTRY,
   LMSTUDIO_ENTRY,
+  DAHL_ENTRY,
   OPENCODE_ENTRY,
   CUSTOM_ENTRY,
 ];
