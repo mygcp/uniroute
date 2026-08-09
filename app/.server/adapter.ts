@@ -12,10 +12,12 @@ export function transformRequest(
   body: Record<string, unknown>,
   provider: Provider,
 ): TransformResult {
-  const url = new URL("/v1/chat/completions", provider.base_url).toString();
+  const entry = getRegistryEntry(provider.id);
+  const url = entry?.urlSuffix
+    ? `${provider.base_url.replace(/\/+$/, "")}/${entry.urlSuffix}`
+    : new URL("/v1/chat/completions", provider.base_url).toString();
   const headers = new Headers({ "Content-Type": "application/json" });
 
-  const entry = getRegistryEntry(provider.id);
   if (entry?.authHeader) {
     const key = getApiKey(provider.id);
     if (key) {

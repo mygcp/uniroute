@@ -41,15 +41,30 @@ describe("transformRequest", () => {
     deleteApiKey("test-apikey");
   });
 
-  test("opencode entry uses Authorization Bearer via authHeader", () => {
-    setApiKey("opencode", "zen-key");
-    const { headers } = transformRequest(
-      { model: "hy3-free" },
-      { ...TEST_PROVIDER, id: "opencode", auth_type: "apikey" },
-    );
-    expect(headers.get("Authorization")).toBe("Bearer zen-key");
-    expect(headers.get("x-goog-api-key")).toBeNull();
+  test("opencode uses urlSuffix to keep the /zen path and sends no auth header", () => {
     deleteApiKey("opencode");
+    const { url, headers } = transformRequest(
+      { model: "deepseek-v4-flash-free" },
+      {
+        ...TEST_PROVIDER,
+        id: "opencode",
+        base_url: "https://opencode.ai/zen/v1",
+        auth_type: "none",
+      },
+    );
+    expect(url).toBe("https://opencode.ai/zen/v1/chat/completions");
+    expect(headers.get("Authorization")).toBeNull();
+    expect(headers.get("x-goog-api-key")).toBeNull();
+  });
+
+  test("provider without urlSuffix keeps the fallback /v1/chat/completions URL", () => {
+    deleteApiKey("test-provider");
+    const { url, headers } = transformRequest(
+      { model: "gpt-4o" },
+      TEST_PROVIDER,
+    );
+    expect(url).toBe("https://mock.example.com/v1/chat/completions");
+    expect(headers.get("Authorization")).toBeNull();
   });
 
   test("provider without key has no auth header", () => {
