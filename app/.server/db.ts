@@ -291,9 +291,9 @@ export function seed() {
     );
     insertProvider.run(
       "opencode",
-      "OpenCode",
+      "OpenCode Zen",
       "https://opencode.ai/zen/v1",
-      "apikey",
+      "none",
       0,
       1,
       0,
@@ -310,9 +310,12 @@ export function seed() {
       ["big-pickle", "opencode", 200000, 1, 1],
       ["deepseek-v4-flash-free", "opencode", 200000, 1, 0],
       ["mimo-v2.5-free", "opencode", 131000, 1, 0],
-      ["hy3-free", "opencode", 131000, 1, 0],
+      ["ling-3.0-flash-free", "opencode", 200000, 1, 0],
+      ["ling-3.0-tiny-free", "opencode", 200000, 1, 0],
       ["nemotron-3-ultra-free", "opencode", 1000000, 1, 0],
       ["north-mini-code-free", "opencode", 131000, 1, 0],
+      ["laguna-s-2.1-free", "opencode", 200000, 1, 0],
+      ["longcat-2.0-free", "opencode", 200000, 1, 0],
     ];
     for (const [name, provider, ctx, active, primary] of models) {
       insertModel.run(name, provider, ctx, active, primary);
@@ -351,15 +354,21 @@ export function seed() {
 export function ensureOpenCodeProvider() {
   query(
     `INSERT OR IGNORE INTO providers (id, name, base_url, auth_type, is_active, weight, priority)
-     VALUES ('opencode', 'OpenCode', 'https://opencode.ai/zen/v1', 'apikey', 0, 1, 0)`,
+     VALUES ('opencode', 'OpenCode Zen', 'https://opencode.ai/zen/v1', 'none', 0, 1, 0)`,
+  ).run();
+  query(
+    "UPDATE providers SET auth_type = 'none' WHERE id = 'opencode' AND auth_type != 'none'",
   ).run();
   const opencodeModels: [string, number][] = [
     ["big-pickle", 200000],
     ["deepseek-v4-flash-free", 200000],
     ["mimo-v2.5-free", 131000],
-    ["hy3-free", 131000],
+    ["ling-3.0-flash-free", 200000],
+    ["ling-3.0-tiny-free", 200000],
     ["nemotron-3-ultra-free", 1000000],
     ["north-mini-code-free", 131000],
+    ["laguna-s-2.1-free", 200000],
+    ["longcat-2.0-free", 200000],
   ];
   for (const [name, ctx] of opencodeModels) {
     query(
@@ -368,6 +377,9 @@ export function ensureOpenCodeProvider() {
          (SELECT 1 FROM models WHERE provider_id = 'opencode' AND is_primary = 1) THEN 1 ELSE 0 END)`,
     ).run(name, ctx);
   }
+  query(
+    "UPDATE models SET is_active = 0 WHERE model_name = 'hy3-free' AND provider_id = 'opencode'",
+  ).run();
 }
 
 seed();

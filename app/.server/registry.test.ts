@@ -47,7 +47,7 @@ describe("registry", () => {
     expect(reg.getProviders("no-such-model")).toEqual([]);
   });
 
-  test("opencode is seeded as a provider and maps its models", () => {
+  test("opencode is seeded as a free provider and maps its models", () => {
     db.seed();
     db.query("UPDATE providers SET is_active = 1 WHERE id = 'opencode'").run();
     reg.reload();
@@ -56,8 +56,39 @@ describe("registry", () => {
     expect(direct.length).toBe(1);
     expect(direct[0].id).toBe("opencode");
     expect(direct[0].base_url).toBe("https://opencode.ai/zen/v1");
+    expect(direct[0].auth_type).toBe("none");
     db.query("UPDATE providers SET is_active = 0 WHERE id = 'opencode'").run();
     reg.reload();
+  });
+
+  test("opencode model list matches live Zen free models", () => {
+    const rows = db.query(
+      "SELECT model_name, is_active FROM models WHERE provider_id = 'opencode' ORDER BY model_name",
+    ).all() as unknown as { model_name: string; is_active: number }[];
+    expect(rows.map((r) => r.model_name)).toEqual([
+      "big-pickle",
+      "deepseek-v4-flash-free",
+      "laguna-s-2.1-free",
+      "ling-3.0-flash-free",
+      "ling-3.0-tiny-free",
+      "longcat-2.0-free",
+      "mimo-v2.5-free",
+      "nemotron-3-ultra-free",
+      "north-mini-code-free",
+    ]);
+    expect(rows.every((r) => r.is_active === 1)).toBe(true);
+  });
+
+  test("ensureOpenCodeProvider deactivates legacy hy3-free model", () => {
+    db.query(
+      "INSERT INTO models (model_name, provider_id, context_length, is_active, is_primary) VALUES ('hy3-free', 'opencode', 131000, 1, 0)",
+    ).run();
+    db.ensureOpenCodeProvider();
+    const hy3 = db.query(
+      "SELECT is_active FROM models WHERE model_name = 'hy3-free' AND provider_id = 'opencode'",
+    ).get() as { is_active: number };
+    expect(hy3.is_active).toBe(0);
+    db.query("DELETE FROM models WHERE model_name = 'hy3-free'").run();
   });
 
   test("inactive provider is filtered out after reload", () => {
