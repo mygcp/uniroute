@@ -19,3 +19,27 @@ html,
 body {
   @apply bg-white text-gray-900 dark:bg-gray-950 dark:text-gray-100;
 }
+
+/* Mobile responsive table wrapper */
+.table-wrap {
+  @apply w-full overflow-x-auto;
+}
+
+.table-wrap table {
+  @apply min-w-max;
+}
+
+/* Better mobile tabs: scrollable instead of wrapping */
+.tabs-scroll {
+  @apply flex gap-2 overflow-x-auto pb-1 scrollbar-none;
+}
+
+.tabs-scroll::-webkit-scrollbar {
+  display: none;
+}
+
+/* Hide scrollbar for mobile tabs */
+.scrollbar-none {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}

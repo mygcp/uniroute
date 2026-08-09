@@ -7,7 +7,7 @@ type Props = {
 
 export function StreamingResponse({ content, streaming, done, error }: Props) {
   return (
-    <div className="min-h-[200px] rounded-lg bg-gray-50 p-4 dark:bg-gray-800">
+    <div className="min-h-[160px] rounded-lg bg-gray-50 p-3 dark:bg-gray-800 sm:min-h-[200px] sm:p-4">
       {error ? (
         <pre className="whitespace-pre-wrap text-sm text-red-600 dark:text-red-400">{error}</pre>
       ) : content ? (

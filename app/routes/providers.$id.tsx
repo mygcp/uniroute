@@ -267,22 +267,22 @@ export default function ProviderDetail({ loaderData }: Route.ComponentProps) {
   return (
     <div>
       <div className="mb-6 flex flex-wrap items-center justify-between gap-4">
-        <div className="flex items-center gap-4">
+        <div className="flex items-start gap-3 sm:items-center">
           <a
             href="/providers"
-            className="rounded-lg border border-gray-300 p-2 text-gray-600 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"
+            className="mt-1 shrink-0 rounded-lg border border-gray-300 p-2 text-gray-600 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"
           >
             <ArrowLeft size={18} />
           </a>
-          <div>
-            <h1 className="text-2xl font-bold text-gray-900 dark:text-white">{provider.name}</h1>
-            <p className="text-sm text-gray-500 dark:text-gray-400">
+          <div className="min-w-0 flex-1">
+            <h1 className="text-xl font-bold text-gray-900 dark:text-white sm:text-2xl">{provider.name}</h1>
+            <p className="truncate text-sm text-gray-500 dark:text-gray-400">
               {provider.id} · {provider.base_url}
             </p>
           </div>
         </div>
         <span
-          className={`rounded-full px-3 py-1 text-xs font-medium ${
+          className={`mt-2 shrink-0 self-start rounded-full px-3 py-1 text-xs font-medium ${
             provider.is_active
               ? "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300"
               : "bg-gray-200 text-gray-600 dark:bg-gray-800 dark:text-gray-400"
@@ -292,7 +292,7 @@ export default function ProviderDetail({ loaderData }: Route.ComponentProps) {
         </span>
       </div>
 
-      <div className="mb-6 flex gap-2">
+      <div className="tabs-scroll mb-6">
         <TabButton
           active={tab === "keys"}
           onClick={() => setTab("keys")}
@@ -586,7 +586,7 @@ export default function ProviderDetail({ loaderData }: Route.ComponentProps) {
         </div>
       )}
 
-      <Form method="post" className="mt-8">
+      <Form method="post" className="mt-6 sm:mt-8">
         <input type="hidden" name="intent" value="delete-provider" />
         <button
           type="submit"

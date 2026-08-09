@@ -161,7 +161,7 @@ export default function Combo({ loaderData }: Route.ComponentProps) {
       <h1 className="mb-6 flex items-center gap-2 text-2xl font-bold text-gray-900 dark:text-white">
         <Link2 size={24} /> Combo
       </h1>
-      <div className="mb-6 flex gap-2">
+      <div className="tabs-scroll mb-6">
         {nthTab("Model Mapping", "mapping")}
         {nthTab("Load Balancing", "balancing")}
         {nthTab("Provider Pool", "pool")}
@@ -195,43 +195,46 @@ export default function Combo({ loaderData }: Route.ComponentProps) {
             </label>
             <button className="rounded-lg bg-blue-600 px-4 py-2 text-sm text-white">Add</button>
           </Form>
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b text-left text-xs uppercase text-gray-400 dark:border-gray-700">
-                <th className="py-3 pr-4">Model</th>
-                <th className="py-3 pr-4">Provider</th>
-                <th className="py-3 pr-4">Context</th>
-                <th className="py-3 pr-4">Primary</th>
-                <th className="py-3">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {models.map((m) => (
-                <tr key={m.id} className="border-b border-gray-100 dark:border-gray-800">
-                  <td className="py-2 pr-4 font-medium text-gray-900 dark:text-white">{m.model_name}</td>
-                  <td className="py-2 pr-4 text-gray-800 dark:text-gray-200">{m.provider_id}</td>
-                  <td className="py-2 pr-4 text-gray-800 dark:text-gray-200">{m.context_length ?? "-"}</td>
-                  <td className="py-2 pr-4">
-                    {m.is_primary ? (
-                      <span className="rounded bg-blue-100 px-2 py-0.5 text-xs text-blue-700 dark:bg-blue-900/50 dark:text-blue-300">primary</span>
-                    ) : null}
-                  </td>
-                  <td className="py-2">
-                    <Form method="post">
-                      <input type="hidden" name="section" value="mapping" />
-                      <input type="hidden" name="intent" value="delete" />
-                      <input type="hidden" name="id" value={m.id} />
-                      <button className="text-red-500 hover:underline dark:text-red-400">Delete</button>
-                    </Form>
-                  </td>
+          <div className="table-wrap">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b text-left text-xs uppercase text-gray-400 dark:border-gray-700">
+                  <th className="py-3 pr-4">Model</th>
+                  <th className="py-3 pr-4">Provider</th>
+                  <th className="py-3 pr-4">Context</th>
+                  <th className="py-3 pr-4">Primary</th>
+                  <th className="py-3">Actions</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {models.map((m) => (
+                  <tr key={m.id} className="border-b border-gray-100 dark:border-gray-800">
+                    <td className="py-2 pr-4 font-medium text-gray-900 dark:text-white">{m.model_name}</td>
+                    <td className="py-2 pr-4 text-gray-800 dark:text-gray-200">{m.provider_id}</td>
+                    <td className="py-2 pr-4 text-gray-800 dark:text-gray-200">{m.context_length ?? "-"}</td>
+                    <td className="py-2 pr-4">
+                      {m.is_primary ? (
+                        <span className="rounded bg-blue-100 px-2 py-0.5 text-xs text-blue-700 dark:bg-blue-900/50 dark:text-blue-300">primary</span>
+                      ) : null}
+                    </td>
+                    <td className="py-2">
+                      <Form method="post">
+                        <input type="hidden" name="section" value="mapping" />
+                        <input type="hidden" name="intent" value="delete" />
+                        <input type="hidden" name="id" value={m.id} />
+                        <button className="text-red-500 hover:underline dark:text-red-400">Delete</button>
+                      </Form>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       ) : tab === "balancing" ? (
         <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-gray-900">
-          <table className="w-full text-sm">
+          <div className="table-wrap">
+            <table className="w-full text-sm">
             <thead>
               <tr className="border-b text-left text-xs uppercase text-gray-400 dark:border-gray-700">
                 <th className="py-3 pr-4">Model</th>
@@ -300,6 +303,7 @@ export default function Combo({ loaderData }: Route.ComponentProps) {
               ))}
             </tbody>
           </table>
+          </div>
         </div>
       ) : (
         <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-gray-900">
@@ -328,6 +332,7 @@ export default function Combo({ loaderData }: Route.ComponentProps) {
               Add to pool
             </button>
           </Form>
+          <div className="table-wrap">
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b text-left text-xs uppercase text-gray-400 dark:border-gray-700">
@@ -374,6 +379,7 @@ export default function Combo({ loaderData }: Route.ComponentProps) {
               ))}
             </tbody>
           </table>
+          </div>
         </div>
       )}
     </div>

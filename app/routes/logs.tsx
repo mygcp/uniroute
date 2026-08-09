@@ -15,7 +15,7 @@ export default function Logs() {
   return (
     <div>
       <h1 className="mb-4 text-xl font-bold">📋 Logs</h1>
-      <nav className="mb-4 flex gap-2">
+      <nav className="tabs-scroll mb-4">
         <NavLink to="/logs/requests" className={tabClass}>
           Request Logs
         </NavLink>

@@ -17,9 +17,9 @@ export function LogViewer({
   renderRow,
 }: Props) {
   return (
-    <div className="flex h-[calc(100vh-220px)] flex-col rounded-xl border border-gray-200 bg-white shadow-sm dark:border-gray-800 dark:bg-gray-900">
-      <div className="flex items-center justify-between border-b border-gray-200 px-4 py-3 dark:border-gray-800">
-        <div className="flex items-center gap-3">
+    <div className="flex h-[calc(100vh-280px)] flex-col rounded-xl border border-gray-200 bg-white shadow-sm dark:border-gray-800 dark:bg-gray-900 sm:h-[calc(100vh-220px)]">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-gray-200 px-3 py-2 dark:border-gray-800 sm:px-4 sm:py-3">
+        <div className="flex items-center gap-2 sm:gap-3">
           <span className="text-sm font-medium text-gray-700 dark:text-gray-200">
             {logs.length} event
           </span>

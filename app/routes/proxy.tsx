@@ -26,38 +26,42 @@ export default function Proxy({ loaderData }: Route.ComponentProps) {
       <h1 className="mb-6 flex items-center gap-2 text-2xl font-bold text-gray-900 dark:text-white">
         <Globe size={24} /> Proxy Playground
       </h1>
-      <div className="mb-4 flex flex-wrap items-center gap-3">
-        <ModelSelector
-          models={models}
-          value={model}
-          onChange={setModel}
-        />
-        <label className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
-          <input
-            type="checkbox"
-            checked={stream}
-            onChange={(e) => setStream(e.target.checked)}
-            className="h-4 w-4"
+      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
+        <div className="w-full sm:w-auto">
+          <ModelSelector
+            models={models}
+            value={model}
+            onChange={setModel}
           />
-          Stream
-        </label>
-        <button
-          type="button"
-          disabled={streaming || !model}
-          onClick={() => send(model, prompt, stream)}
-          className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
-        >
-          Send
-        </button>
-        {streaming ? (
+        </div>
+        <div className="flex flex-wrap items-center gap-3">
+          <label className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+            <input
+              type="checkbox"
+              checked={stream}
+              onChange={(e) => setStream(e.target.checked)}
+              className="h-4 w-4"
+            />
+            Stream
+          </label>
           <button
             type="button"
-            onClick={stop}
-            className="rounded-lg border border-red-300 px-4 py-2 text-sm text-red-600 hover:bg-red-50 dark:border-red-900 dark:text-red-400 dark:hover:bg-red-950/40"
+            disabled={streaming || !model}
+            onClick={() => send(model, prompt, stream)}
+            className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
           >
-            Stop
+            Send
           </button>
-        ) : null}
+          {streaming ? (
+            <button
+              type="button"
+              onClick={stop}
+              className="rounded-lg border border-red-300 px-4 py-2 text-sm text-red-600 hover:bg-red-50 dark:border-red-900 dark:text-red-400 dark:hover:bg-red-950/40"
+            >
+              Stop
+            </button>
+          ) : null}
+        </div>
       </div>
       <MessageInput value={prompt} onChange={setPrompt} />
       <div className="mt-4">

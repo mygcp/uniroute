@@ -38,11 +38,6 @@ function linkClass({ isActive }: { isActive: boolean }): string {
 function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
   return (
     <>
-      <div className="border-b border-gray-200 px-4 py-4 dark:border-gray-800">
-        <h1 className="text-lg font-bold text-gray-900 dark:text-white">UniRoute</h1>
-        <p className="text-xs text-gray-500 dark:text-gray-400">AI Gateway Admin</p>
-      </div>
-
       <nav className="flex-1 space-y-1 overflow-y-auto p-3">
         {NAV_ITEMS.map((item) => {
           const Icon = item.icon;
@@ -100,21 +95,31 @@ export function Sidebar({ open, onClose }: SidebarProps) {
   return (
     <>
       <aside className="hidden w-64 shrink-0 flex-col border-r border-gray-200 bg-white dark:border-gray-800 dark:bg-gray-900 md:flex">
+        <div className="border-b border-gray-200 px-4 py-4 dark:border-gray-800">
+          <h1 className="text-lg font-bold text-gray-900 dark:text-white">UniRoute</h1>
+          <p className="text-xs text-gray-500 dark:text-gray-400">AI Gateway Admin</p>
+        </div>
         <SidebarContent />
       </aside>
 
       {open ? (
         <div className="fixed inset-0 z-50 md:hidden">
           <div className="absolute inset-0 bg-gray-950/50" onClick={onClose} />
-          <aside className="absolute inset-y-0 left-0 flex w-64 max-w-[80%] flex-col border-r border-gray-200 bg-white shadow-xl dark:border-gray-800 dark:bg-gray-900">
-            <button
-              type="button"
-              onClick={onClose}
-              aria-label="Close menu"
-              className="absolute right-3 top-3 rounded-lg p-1.5 text-gray-500 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-800"
-            >
-              <X size={18} />
-            </button>
+          <aside className="absolute inset-y-0 left-0 flex w-72 max-w-[85vw] flex-col border-r border-gray-200 bg-white shadow-xl dark:border-gray-800 dark:bg-gray-900">
+            <div className="flex items-center justify-between border-b border-gray-200 px-4 py-4 dark:border-gray-800">
+              <div>
+                <h1 className="text-lg font-bold text-gray-900 dark:text-white">UniRoute</h1>
+                <p className="text-xs text-gray-500 dark:text-gray-400">AI Gateway Admin</p>
+              </div>
+              <button
+                type="button"
+                onClick={onClose}
+                aria-label="Close menu"
+                className="rounded-lg p-1.5 text-gray-500 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-800"
+              >
+                <X size={20} />
+              </button>
+            </div>
             <SidebarContent onNavigate={onClose} />
           </aside>
         </div>

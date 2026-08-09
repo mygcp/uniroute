@@ -155,11 +155,11 @@ export default function Api({ loaderData, actionData }: Route.ComponentProps) {
       <h1 className="mb-6 flex items-center gap-2 text-2xl font-bold text-gray-900 dark:text-white">
         <KeyRound size={24} /> API Management
       </h1>
-      <div className="mb-6 flex flex-wrap gap-2">
+      <div className="tabs-scroll mb-6">
         <button
           type="button"
           onClick={() => setTab("keys")}
-          className={`rounded-lg px-4 py-2 text-sm font-medium ${
+          className={`shrink-0 rounded-lg px-4 py-2 text-sm font-medium ${
             tab === "keys"
               ? "bg-blue-600 text-white"
               : "bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700"
@@ -170,7 +170,7 @@ export default function Api({ loaderData, actionData }: Route.ComponentProps) {
         <button
           type="button"
           onClick={() => setTab("allowlist")}
-          className={`rounded-lg px-4 py-2 text-sm font-medium ${
+          className={`shrink-0 rounded-lg px-4 py-2 text-sm font-medium ${
             tab === "allowlist"
               ? "bg-blue-600 text-white"
               : "bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700"
@@ -181,7 +181,7 @@ export default function Api({ loaderData, actionData }: Route.ComponentProps) {
         <button
           type="button"
           onClick={() => setTab("rules")}
-          className={`rounded-lg px-4 py-2 text-sm font-medium ${
+          className={`shrink-0 rounded-lg px-4 py-2 text-sm font-medium ${
             tab === "rules"
               ? "bg-blue-600 text-white"
               : "bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700"
@@ -221,6 +221,7 @@ export default function Api({ loaderData, actionData }: Route.ComponentProps) {
               Add
             </button>
           </Form>
+          <div className="table-wrap">
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b text-left text-xs uppercase text-gray-400 dark:border-gray-700">
@@ -258,6 +259,7 @@ export default function Api({ loaderData, actionData }: Route.ComponentProps) {
               ))}
             </tbody>
           </table>
+          </div>
         </div>
       ) : (
         <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-gray-900">
@@ -299,6 +301,7 @@ export default function Api({ loaderData, actionData }: Route.ComponentProps) {
             </button>
           </Form>
 
+          <div className="table-wrap">
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b text-left text-xs uppercase text-gray-400 dark:border-gray-700">
@@ -361,6 +364,7 @@ export default function Api({ loaderData, actionData }: Route.ComponentProps) {
               ) : null}
             </tbody>
           </table>
+          </div>
         </div>
       )}
     </div>
@@ -417,21 +421,21 @@ function ApiKeysTab({
         </div>
       ) : null}
 
-      <Form method="post" className="mb-4 flex items-center gap-3 rounded-lg border border-gray-200 p-3 dark:border-gray-700">
+      <Form method="post" className="mb-4 flex flex-wrap items-center gap-3 rounded-lg border border-gray-200 p-3 dark:border-gray-700">
         <input type="hidden" name="section" value="client-key" />
         <input type="hidden" name="intent" value="require" />
         <input type="hidden" name="enabled" value={requireApiKey ? 0 : 1} />
-        <span className="text-sm text-gray-700 dark:text-gray-300">Wajib API key</span>
+        <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Wajib API key</span>
         <button
           type="submit"
-          className={`relative h-5 w-9 rounded-full transition-colors after:absolute after:left-0.5 after:top-0.5 after:h-4 after:w-4 after:rounded-full after:bg-white after:shadow after:transition-transform ${
+          className={`relative h-5 w-9 shrink-0 rounded-full transition-colors after:absolute after:left-0.5 after:top-0.5 after:h-4 after:w-4 after:rounded-full after:bg-white after:shadow after:transition-transform ${
             requireApiKey
               ? "bg-green-600 after:translate-x-4"
               : "bg-gray-300 after:translate-x-0 dark:bg-gray-600"
           }`}
           title={requireApiKey ? "Matikan" : "Aktifkan"}
         />
-        <span className="text-xs text-gray-500 dark:text-gray-400">
+        <span className="w-full text-xs text-gray-500 dark:text-gray-400 sm:w-auto">
           {requireApiKey
             ? "Request tanpa key akan ditolak (401)"
             : "Request tanpa key masih diizinkan"}
@@ -470,7 +474,7 @@ function ApiKeysTab({
       {keys.length === 0 ? (
         <p className="py-8 text-center text-sm text-gray-400">Belum ada API key.</p>
       ) : (
-        <div className="overflow-x-auto">
+        <div className="table-wrap">
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b text-left text-xs uppercase text-gray-400 dark:border-gray-700">
@@ -569,7 +573,7 @@ function EditKeyForm({
   onDone: () => void;
 }) {
   return (
-    <Form method="post" className="mx-5 rounded-lg border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-gray-900">
+    <Form method="post" className="mx-2 rounded-lg border border-gray-200 bg-white p-3 shadow-sm dark:border-gray-700 dark:bg-gray-900 sm:mx-5 sm:p-4">
       <input type="hidden" name="section" value="client-key" />
       <input type="hidden" name="intent" value="edit" />
       <input type="hidden" name="id" value={row.id} />
