@@ -91,6 +91,31 @@ describe("registry", () => {
     db.query("DELETE FROM models WHERE model_name = 'hy3-free'").run();
   });
 
+  test("dahl is seeded as a Bearer provider and maps its models", () => {
+    db.seed();
+    db.ensureDahlProvider();
+    db.query("UPDATE providers SET is_active = 1 WHERE id = 'dahl'").run();
+    reg.reload();
+    expect(reg.getProviders("moonshotai/Kimi-K2.6").length).toBe(1);
+    const direct = reg.getProviders("MiniMaxAI/MiniMax-M2.7");
+    expect(direct.length).toBe(1);
+    expect(direct[0].id).toBe("dahl");
+    expect(direct[0].base_url).toBe("https://inference.dahl.global/v1");
+    expect(direct[0].auth_type).toBe("bearer");
+    db.query("UPDATE providers SET is_active = 0 WHERE id = 'dahl'").run();
+    reg.reload();
+  });
+
+  test("dahl model list matches live models", () => {
+    const rows = db.query(
+      "SELECT model_name FROM models WHERE provider_id = 'dahl' ORDER BY model_name",
+    ).all() as unknown as { model_name: string }[];
+    expect(rows.map((r) => r.model_name)).toEqual([
+      "MiniMaxAI/MiniMax-M2.7",
+      "moonshotai/Kimi-K2.6",
+    ]);
+  });
+
   test("inactive provider is filtered out after reload", () => {
     reg.reload();
     const testProvider = "__reg_test_inactive__";

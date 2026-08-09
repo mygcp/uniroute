@@ -77,10 +77,28 @@ describe("transformRequest", () => {
     setApiKey("test-provider", "sk-test");
   });
 
+  test("dahl bearer provider uses urlSuffix and Authorization Bearer", () => {
+    setApiKey("dahl", "dahl-key");
+    const { url, headers } = transformRequest(
+      { model: "moonshotai/Kimi-K2.6" },
+      {
+        ...TEST_PROVIDER,
+        id: "dahl",
+        base_url: "https://inference.dahl.global/v1",
+        auth_type: "bearer",
+      },
+    );
+    expect(url).toBe("https://inference.dahl.global/v1/chat/completions");
+    expect(headers.get("Authorization")).toBe("Bearer dahl-key");
+    expect(headers.get("x-goog-api-key")).toBeNull();
+    deleteApiKey("dahl");
+  });
+
   afterAll(() => {
     deleteApiKey("test-provider");
     deleteApiKey("test-apikey");
-    exec("DELETE FROM provider_credentials WHERE provider_id IN ('test-provider', 'test-apikey')");
+    deleteApiKey("dahl");
+    exec("DELETE FROM provider_credentials WHERE provider_id IN ('test-provider', 'test-apikey', 'dahl')");
   });
 });
 
