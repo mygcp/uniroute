@@ -164,6 +164,25 @@ db.exec(`CREATE TABLE IF NOT EXISTS provider_credentials (
   updated_at INTEGER DEFAULT (unixepoch())
 );`);
 
+db.exec(`CREATE TABLE IF NOT EXISTS proxies (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  protocol TEXT NOT NULL DEFAULT 'http',
+  host TEXT NOT NULL,
+  port INTEGER NOT NULL,
+  username TEXT,
+  password TEXT,
+  is_active INTEGER NOT NULL DEFAULT 1,
+  last_used_at INTEGER DEFAULT 0,
+  created_at INTEGER DEFAULT (unixepoch()),
+  UNIQUE(host, port, protocol)
+);`);
+
+db.exec(`CREATE TABLE IF NOT EXISTS provider_proxies (
+  provider_id TEXT NOT NULL REFERENCES providers(id),
+  proxy_id INTEGER NOT NULL REFERENCES proxies(id),
+  PRIMARY KEY(provider_id, proxy_id)
+);`);
+
 db.exec(`CREATE TABLE IF NOT EXISTS client_api_keys (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL,
@@ -203,6 +222,17 @@ db.exec(`CREATE TABLE IF NOT EXISTS settings (
     db.exec(`INSERT INTO provider_credentials (provider_id, api_key, is_routing, updated_at)
              SELECT provider_id, api_key, 1, updated_at FROM provider_credentials_legacy;`);
     db.exec("DROP TABLE provider_credentials_legacy;");
+  }
+}
+
+{
+  const credCols = (
+    query("PRAGMA table_info(provider_credentials)").all() as {
+      name: string;
+    }[]
+  ).map((c) => c.name);
+  if (credCols.length > 0 && !credCols.includes("proxy_id")) {
+    db.exec("ALTER TABLE provider_credentials ADD COLUMN proxy_id INTEGER");
   }
 }
 
