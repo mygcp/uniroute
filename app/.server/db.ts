@@ -154,10 +154,57 @@ db.exec(`CREATE TABLE IF NOT EXISTS proxy_logs (
 );`);
 
 db.exec(`CREATE TABLE IF NOT EXISTS provider_credentials (
-  provider_id TEXT PRIMARY KEY,
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  provider_id TEXT NOT NULL,
+  label TEXT,
   api_key TEXT NOT NULL,
+  is_active INTEGER NOT NULL DEFAULT 1,
+  is_routing INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER DEFAULT (unixepoch()),
   updated_at INTEGER DEFAULT (unixepoch())
 );`);
+
+db.exec(`CREATE TABLE IF NOT EXISTS client_api_keys (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  key_hash TEXT UNIQUE NOT NULL,
+  key_prefix TEXT NOT NULL,
+  allowed_models TEXT,
+  model_override TEXT,
+  pinned_provider_id TEXT,
+  is_active INTEGER NOT NULL DEFAULT 1,
+  created_at INTEGER DEFAULT (unixepoch())
+);`);
+
+db.exec(`CREATE TABLE IF NOT EXISTS settings (
+  key TEXT PRIMARY KEY,
+  value TEXT
+);`);
+
+// Migrate legacy single-key table (provider_id PRIMARY KEY) to multi-key schema.
+{
+  const cols = (
+    query("PRAGMA table_info(provider_credentials)").all() as {
+      name: string;
+    }[]
+  ).map((c) => c.name);
+  if (cols.length > 0 && !cols.includes("id")) {
+    db.exec("ALTER TABLE provider_credentials RENAME TO provider_credentials_legacy;");
+    db.exec(`CREATE TABLE provider_credentials (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      provider_id TEXT NOT NULL,
+      label TEXT,
+      api_key TEXT NOT NULL,
+      is_active INTEGER NOT NULL DEFAULT 1,
+      is_routing INTEGER NOT NULL DEFAULT 0,
+      created_at INTEGER DEFAULT (unixepoch()),
+      updated_at INTEGER DEFAULT (unixepoch())
+    );`);
+    db.exec(`INSERT INTO provider_credentials (provider_id, api_key, is_routing, updated_at)
+             SELECT provider_id, api_key, 1, updated_at FROM provider_credentials_legacy;`);
+    db.exec("DROP TABLE provider_credentials_legacy;");
+  }
+}
 
 export function seed() {
   const count = (
@@ -183,7 +230,7 @@ export function seed() {
       "OpenAI",
       "https://api.openai.com",
       "bearer",
-      1,
+      0,
       3,
       2,
     );
@@ -192,7 +239,7 @@ export function seed() {
       "Anthropic",
       "https://api.anthropic.com",
       "bearer",
-      1,
+      0,
       1,
       1,
     );
@@ -201,17 +248,17 @@ export function seed() {
       "Google",
       "https://generativelanguage.googleapis.com",
       "apikey",
-      1,
+      0,
       1,
       0,
     );
-    insertProvider.run("groq", "Groq", "https://api.groq.com", "bearer", 1, 1, 1);
+    insertProvider.run("groq", "Groq", "https://api.groq.com", "bearer", 0, 1, 1);
     insertProvider.run(
       "openrouter",
       "OpenRouter",
       "https://openrouter.ai",
       "bearer",
-      1,
+      0,
       2,
       0,
     );
@@ -220,7 +267,7 @@ export function seed() {
       "Mistral",
       "https://api.mistral.ai",
       "bearer",
-      1,
+      0,
       1,
       0,
     );
@@ -229,7 +276,7 @@ export function seed() {
       "Cohere",
       "https://api.cohere.ai",
       "bearer",
-      1,
+      0,
       1,
       0,
     );
@@ -238,7 +285,16 @@ export function seed() {
       "DeepSeek",
       "https://api.deepseek.com",
       "bearer",
+      0,
       1,
+      0,
+    );
+    insertProvider.run(
+      "opencode",
+      "OpenCode",
+      "https://opencode.ai/zen/v1",
+      "apikey",
+      0,
       1,
       0,
     );
@@ -251,6 +307,12 @@ export function seed() {
       ["gemini-1.5-pro", "google", 1000000, 1, 1],
       ["llama-3.1-8b", "groq", 131072, 1, 1],
       ["mistral-large", "mistral", 128000, 1, 1],
+      ["big-pickle", "opencode", 200000, 1, 1],
+      ["deepseek-v4-flash-free", "opencode", 200000, 1, 0],
+      ["mimo-v2.5-free", "opencode", 131000, 1, 0],
+      ["hy3-free", "opencode", 131000, 1, 0],
+      ["nemotron-3-ultra-free", "opencode", 1000000, 1, 0],
+      ["north-mini-code-free", "opencode", 131000, 1, 0],
     ];
     for (const [name, provider, ctx, active, primary] of models) {
       insertModel.run(name, provider, ctx, active, primary);
@@ -286,4 +348,28 @@ export function seed() {
   ).run();
 }
 
+export function ensureOpenCodeProvider() {
+  query(
+    `INSERT OR IGNORE INTO providers (id, name, base_url, auth_type, is_active, weight, priority)
+     VALUES ('opencode', 'OpenCode', 'https://opencode.ai/zen/v1', 'apikey', 0, 1, 0)`,
+  ).run();
+  const opencodeModels: [string, number][] = [
+    ["big-pickle", 200000],
+    ["deepseek-v4-flash-free", 200000],
+    ["mimo-v2.5-free", 131000],
+    ["hy3-free", 131000],
+    ["nemotron-3-ultra-free", 1000000],
+    ["north-mini-code-free", 131000],
+  ];
+  for (const [name, ctx] of opencodeModels) {
+    query(
+      `INSERT OR IGNORE INTO models (model_name, provider_id, context_length, is_active, is_primary)
+       VALUES (?, 'opencode', ?, 1, CASE WHEN NOT EXISTS
+         (SELECT 1 FROM models WHERE provider_id = 'opencode' AND is_primary = 1) THEN 1 ELSE 0 END)`,
+    ).run(name, ctx);
+  }
+}
+
 seed();
+
+ensureOpenCodeProvider();

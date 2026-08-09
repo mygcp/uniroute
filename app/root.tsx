@@ -8,7 +8,9 @@ import {
   ScrollRestoration,
   useLocation,
 } from "react-router";
+import { useState } from "react";
 import type { Route } from "./+types/root";
+import { Header } from "./components/header";
 import { Sidebar } from "./components/sidebar";
 import { getSessionToken, isValid } from "./.server/auth";
 import "./app.css";
@@ -42,6 +44,11 @@ export function Layout({ children }: { children: React.ReactNode }) {
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <Meta />
         <Links />
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `(function(){try{var t=localStorage.getItem("uniroute-theme");if(t==="dark"||(!t&&window.matchMedia("(prefers-color-scheme: dark)").matches)){document.documentElement.classList.add("dark")}}catch(e){}})();`,
+          }}
+        />
       </head>
       <body>
         {children}
@@ -54,15 +61,20 @@ export function Layout({ children }: { children: React.ReactNode }) {
 
 export default function App() {
   const { pathname } = useLocation();
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+
   if (pathname === "/login") {
     return <Outlet />;
   }
   return (
-    <div className="flex min-h-screen bg-gray-50">
-      <Sidebar />
-      <main className="flex-1 overflow-x-hidden p-6">
-        <Outlet />
-      </main>
+    <div className="flex min-h-screen bg-gray-50 dark:bg-gray-950">
+      <Sidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
+      <div className="flex min-w-0 flex-1 flex-col">
+        <Header onMenuClick={() => setSidebarOpen(true)} />
+        <main className="flex-1 overflow-x-hidden p-4 md:p-6">
+          <Outlet />
+        </main>
+      </div>
     </div>
   );
 }

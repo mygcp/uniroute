@@ -106,10 +106,11 @@ git commit -m "feat: make OpenCode Zen entry free with no API key"
 
 - [ ] **Step 1: Write the failing tests**
 
-Append to the `transformRequest` describe block in `app/.server/adapter.test.ts` (keep the existing `afterAll` as is). The `model` in the body is a passthrough string; use `"deepseek-v4-flash-free"`.
+In `app/.server/adapter.test.ts`, **replace** the existing test `"opencode entry uses Authorization Bearer via authHeader"` (currently lines 44-53, which sets a key on `opencode` and expects `Authorization: Bearer`) — it will no longer be valid because the entry now has `authType: "none"` and no `authHeader`. Replace it with the two tests below, inserted inside the `transformRequest` describe block (keep the existing `afterAll` as is). The `model` in the body is a passthrough string; use `"deepseek-v4-flash-free"`.
 
 ```ts
   test("opencode uses urlSuffix to keep the /zen path and sends no auth header", () => {
+    deleteApiKey("opencode");
     deleteApiKey("opencode");
     const { url, headers } = transformRequest(
       { model: "deepseek-v4-flash-free" },

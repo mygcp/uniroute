@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { Route } from "./+types/combo";
 import { Form } from "react-router";
+import { Link2 } from "lucide-react";
 import { query } from "../.server/db";
 import { reload } from "../.server/registry";
 
@@ -134,7 +135,7 @@ const STRATEGIES = [
 ];
 
 function inputClass() {
-  return "rounded-lg border border-gray-300 px-3 py-1.5 text-sm";
+  return "rounded-lg border border-gray-300 px-3 py-1.5 text-sm text-gray-900 dark:border-gray-600 dark:bg-gray-800 dark:text-white";
 }
 
 export default function Combo({ loaderData }: Route.ComponentProps) {
@@ -145,8 +146,10 @@ export default function Combo({ loaderData }: Route.ComponentProps) {
     <button
       type="button"
       onClick={() => setTab(id)}
-      className={`rounded-lg px-4 py-2 text-sm font-medium ${
-        tab === id ? "bg-blue-600 text-white" : "bg-gray-100 text-gray-700"
+      className={`flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium ${
+        tab === id
+          ? "bg-blue-600 text-white"
+          : "bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700"
       }`}
     >
       {label}
@@ -155,7 +158,9 @@ export default function Combo({ loaderData }: Route.ComponentProps) {
 
   return (
     <div>
-      <h1 className="mb-6 text-2xl font-bold">🔗 Combo</h1>
+      <h1 className="mb-6 flex items-center gap-2 text-2xl font-bold text-gray-900 dark:text-white">
+        <Link2 size={24} /> Combo
+      </h1>
       <div className="mb-6 flex gap-2">
         {nthTab("Model Mapping", "mapping")}
         {nthTab("Load Balancing", "balancing")}
@@ -163,15 +168,15 @@ export default function Combo({ loaderData }: Route.ComponentProps) {
       </div>
 
       {tab === "mapping" ? (
-        <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+        <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-gray-900">
           <Form method="post" className="mb-4 flex flex-wrap items-end gap-3">
             <input type="hidden" name="section" value="mapping" />
             <div>
-              <label className="mb-1 block text-xs text-gray-500">Model</label>
+              <label className="mb-1 block text-xs text-gray-500 dark:text-gray-400">Model</label>
               <input name="model_name" required placeholder="gpt-4o" className={inputClass()} />
             </div>
             <div>
-              <label className="mb-1 block text-xs text-gray-500">Provider</label>
+              <label className="mb-1 block text-xs text-gray-500 dark:text-gray-400">Provider</label>
               <select name="provider_id" className={inputClass()}>
                 {providers.map((p) => (
                   <option key={p.id} value={p.id}>
@@ -181,10 +186,10 @@ export default function Combo({ loaderData }: Route.ComponentProps) {
               </select>
             </div>
             <div>
-              <label className="mb-1 block text-xs text-gray-500">Context</label>
+              <label className="mb-1 block text-xs text-gray-500 dark:text-gray-400">Context</label>
               <input name="context_length" type="number" placeholder="128000" className={`${inputClass()} w-32`} />
             </div>
-            <label className="flex items-center gap-2 pb-2 text-sm">
+            <label className="flex items-center gap-2 pb-2 text-sm text-gray-700 dark:text-gray-300">
               <input name="is_primary" type="checkbox" value="1" className="h-4 w-4" />
               primary
             </label>
@@ -192,7 +197,7 @@ export default function Combo({ loaderData }: Route.ComponentProps) {
           </Form>
           <table className="w-full text-sm">
             <thead>
-              <tr className="border-b text-left text-xs uppercase text-gray-400">
+              <tr className="border-b text-left text-xs uppercase text-gray-400 dark:border-gray-700">
                 <th className="py-3 pr-4">Model</th>
                 <th className="py-3 pr-4">Provider</th>
                 <th className="py-3 pr-4">Context</th>
@@ -202,13 +207,13 @@ export default function Combo({ loaderData }: Route.ComponentProps) {
             </thead>
             <tbody>
               {models.map((m) => (
-                <tr key={m.id} className="border-b border-gray-100">
-                  <td className="py-2 pr-4 font-medium">{m.model_name}</td>
-                  <td className="py-2 pr-4">{m.provider_id}</td>
-                  <td className="py-2 pr-4">{m.context_length ?? "-"}</td>
+                <tr key={m.id} className="border-b border-gray-100 dark:border-gray-800">
+                  <td className="py-2 pr-4 font-medium text-gray-900 dark:text-white">{m.model_name}</td>
+                  <td className="py-2 pr-4 text-gray-800 dark:text-gray-200">{m.provider_id}</td>
+                  <td className="py-2 pr-4 text-gray-800 dark:text-gray-200">{m.context_length ?? "-"}</td>
                   <td className="py-2 pr-4">
                     {m.is_primary ? (
-                      <span className="rounded bg-blue-100 px-2 py-0.5 text-xs text-blue-700">primary</span>
+                      <span className="rounded bg-blue-100 px-2 py-0.5 text-xs text-blue-700 dark:bg-blue-900/50 dark:text-blue-300">primary</span>
                     ) : null}
                   </td>
                   <td className="py-2">
@@ -216,7 +221,7 @@ export default function Combo({ loaderData }: Route.ComponentProps) {
                       <input type="hidden" name="section" value="mapping" />
                       <input type="hidden" name="intent" value="delete" />
                       <input type="hidden" name="id" value={m.id} />
-                      <button className="text-red-500 hover:underline">Delete</button>
+                      <button className="text-red-500 hover:underline dark:text-red-400">Delete</button>
                     </Form>
                   </td>
                 </tr>
@@ -225,10 +230,10 @@ export default function Combo({ loaderData }: Route.ComponentProps) {
           </table>
         </div>
       ) : tab === "balancing" ? (
-        <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+        <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-gray-900">
           <table className="w-full text-sm">
             <thead>
-              <tr className="border-b text-left text-xs uppercase text-gray-400">
+              <tr className="border-b text-left text-xs uppercase text-gray-400 dark:border-gray-700">
                 <th className="py-3 pr-4">Model</th>
                 <th className="py-3 pr-4">Strategy</th>
                 <th className="py-3 pr-4">Fallback</th>
@@ -238,12 +243,12 @@ export default function Combo({ loaderData }: Route.ComponentProps) {
             </thead>
             <tbody>
               {lb.map((row) => (
-                <tr key={row.model_name} className="border-b border-gray-100">
+                <tr key={row.model_name} className="border-b border-gray-100 dark:border-gray-800">
                   <td colSpan={5}>
                     <Form method="post" className="flex flex-wrap items-center gap-3 py-1">
                       <input type="hidden" name="section" value="balancing" />
                       <input type="hidden" name="model" value={row.model_name} />
-                      <span className="w-32 font-medium">{row.model_name}</span>
+                      <span className="w-32 font-medium text-gray-900 dark:text-white">{row.model_name}</span>
                       <select name="strategy" defaultValue={row.strategy} className={inputClass()}>
                         {STRATEGIES.map((s) => (
                           <option key={s} value={s}>
@@ -251,7 +256,7 @@ export default function Combo({ loaderData }: Route.ComponentProps) {
                           </option>
                         ))}
                       </select>
-                      <label className="flex items-center gap-2 text-sm">
+                      <label className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
                         <input
                           type="checkbox"
                           name="fallback_enabled"
@@ -261,7 +266,7 @@ export default function Combo({ loaderData }: Route.ComponentProps) {
                         />
                         fallback
                       </label>
-                      <label className="flex items-center gap-2 text-sm">
+                      <label className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
                         <input
                           type="checkbox"
                           name="health_check_enabled"
@@ -297,16 +302,16 @@ export default function Combo({ loaderData }: Route.ComponentProps) {
           </table>
         </div>
       ) : (
-        <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+        <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-gray-900">
           <Form method="post" className="mb-4 flex flex-wrap items-end gap-3">
             <input type="hidden" name="section" value="pool" />
             <input type="hidden" name="intent" value="add" />
             <div>
-              <label className="mb-1 block text-xs text-gray-500">Model</label>
+              <label className="mb-1 block text-xs text-gray-500 dark:text-gray-400">Model</label>
               <input name="model_name" required className={inputClass()} />
             </div>
             <div>
-              <label className="mb-1 block text-xs text-gray-500">Provider</label>
+              <label className="mb-1 block text-xs text-gray-500 dark:text-gray-400">Provider</label>
               <select name="provider_id" className={inputClass()}>
                 {providers.map((p) => (
                   <option key={p.id} value={p.id}>
@@ -316,7 +321,7 @@ export default function Combo({ loaderData }: Route.ComponentProps) {
               </select>
             </div>
             <div>
-              <label className="mb-1 block text-xs text-gray-500">Context</label>
+              <label className="mb-1 block text-xs text-gray-500 dark:text-gray-400">Context</label>
               <input name="context_length" type="number" className={`${inputClass()} w-32`} />
             </div>
             <button type="submit" className="rounded-lg bg-blue-600 px-4 py-2 text-sm text-white">
@@ -325,7 +330,7 @@ export default function Combo({ loaderData }: Route.ComponentProps) {
           </Form>
           <table className="w-full text-sm">
             <thead>
-              <tr className="border-b text-left text-xs uppercase text-gray-400">
+              <tr className="border-b text-left text-xs uppercase text-gray-400 dark:border-gray-700">
                 <th className="py-3 pr-4">Model</th>
                 <th className="py-3 pr-4">Provider</th>
                 <th className="py-3 pr-4">Weight</th>
@@ -336,9 +341,9 @@ export default function Combo({ loaderData }: Route.ComponentProps) {
             </thead>
             <tbody>
               {pool.map((row) => (
-                <tr key={`${row.model_name}-${row.provider_id}`} className="border-b border-gray-100">
-                  <td className="py-2 pr-4 font-medium">{row.model_name}</td>
-                  <td className="py-2 pr-4">{row.provider_id}</td>
+                <tr key={`${row.model_name}-${row.provider_id}`} className="border-b border-gray-100 dark:border-gray-800">
+                  <td className="py-2 pr-4 font-medium text-gray-900 dark:text-white">{row.model_name}</td>
+                  <td className="py-2 pr-4 text-gray-800 dark:text-gray-200">{row.provider_id}</td>
                   <td className="py-2 pr-4" colSpan={4}>
                     <Form method="post" className="flex items-center gap-3">
                       <input type="hidden" name="section" value="pool" />
@@ -356,10 +361,10 @@ export default function Combo({ loaderData }: Route.ComponentProps) {
                         defaultValue={row.priority}
                         className={`${inputClass()} w-20`}
                       />
-                      <span className="text-xs text-gray-400">{row.current_connections} conn</span>
+                      <span className="text-xs text-gray-400 dark:text-gray-500">{row.current_connections} conn</span>
                       <button
                         type="submit"
-                        className="rounded-lg border border-gray-300 px-3 py-1.5 text-xs hover:bg-gray-50"
+                        className="rounded-lg border border-gray-300 px-3 py-1.5 text-xs text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-800"
                       >
                         Save
                       </button>

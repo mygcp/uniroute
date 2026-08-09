@@ -10,10 +10,10 @@ export function UsageChart({ data }: Props) {
   const barWidth = (width - barGap * (data.length - 1)) / data.length;
 
   return (
-    <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-      <h3 className="mb-4 text-sm font-semibold text-gray-700">Usage — 7 hari terakhir</h3>
+    <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-gray-900">
+      <h3 className="mb-4 text-sm font-semibold text-gray-700 dark:text-gray-200">Usage — 7 hari terakhir</h3>
       <svg viewBox={`0 0 ${width} ${height}`} className="w-full" role="img" aria-label="Usage bar chart">
-        <line x1="0" y1={height - 20} x2={width} y2={height - 20} stroke="#e5e7eb" />
+        <line x1="0" y1={height - 20} x2={width} y2={height - 20} stroke="#4b5563" />
         {data.map((d, i) => {
           const x = i * (barWidth + barGap);
           const h = (d.count / max) * (height - 40);
@@ -25,7 +25,7 @@ export function UsageChart({ data }: Props) {
                 width={barWidth}
                 height={h}
                 rx={3}
-                fill={d.count > 0 ? "#2563eb" : "#e5e7eb"}
+                fill={d.count > 0 ? "#3b82f6" : "#4b5563"}
               >
                 <title>{`${d.day}: ${d.count}`}</title>
               </rect>

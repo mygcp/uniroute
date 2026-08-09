@@ -1,65 +1,124 @@
 import { Form, NavLink } from "react-router";
+import {
+  Home,
+  Plug,
+  FileArchive,
+  KeyRound,
+  Link2,
+  Globe,
+  FolderOpen,
+  LogOut,
+  ScrollText,
+  X,
+} from "lucide-react";
 
 const NAV_ITEMS = [
-  { to: "/home", label: "🏠 Home" },
-  { to: "/providers", label: "🔌 Provider" },
-  { to: "/compression", label: "🗜️ Compression" },
-  { to: "/api", label: "🔑 API" },
-  { to: "/combo", label: "🔗 Combo" },
-  { to: "/proxy", label: "🌐 Proxy" },
+  { to: "/home", label: "Home", icon: Home },
+  { to: "/providers", label: "Provider", icon: Plug },
+  { to: "/compression", label: "Compression", icon: FileArchive },
+  { to: "/api", label: "API", icon: KeyRound },
+  { to: "/combo", label: "Combo", icon: Link2 },
+  { to: "/proxy", label: "Proxy", icon: Globe },
 ];
 
 const LOGS_ITEMS = [
-  { to: "/logs/requests", label: "Request Logs" },
-  { to: "/logs/proxy", label: "Proxy Logs" },
+  { to: "/logs/requests", label: "Request Logs", icon: ScrollText },
+  { to: "/logs/proxy", label: "Proxy Logs", icon: FolderOpen },
 ];
 
 function linkClass({ isActive }: { isActive: boolean }): string {
   return [
-    "block rounded-lg px-3 py-2 text-sm font-medium transition-colors",
+    "flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
     isActive
       ? "bg-blue-600 text-white"
-      : "text-gray-700 hover:bg-gray-100",
+      : "text-gray-700 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-800",
   ].join(" ");
 }
 
-export function Sidebar() {
+function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
   return (
-    <aside className="flex w-64 shrink-0 flex-col border-r border-gray-200 bg-white">
-      <div className="border-b border-gray-200 px-4 py-4">
-        <h1 className="text-lg font-bold text-gray-900">UniRoute</h1>
-        <p className="text-xs text-gray-500">AI Gateway Admin</p>
+    <>
+      <div className="border-b border-gray-200 px-4 py-4 dark:border-gray-800">
+        <h1 className="text-lg font-bold text-gray-900 dark:text-white">UniRoute</h1>
+        <p className="text-xs text-gray-500 dark:text-gray-400">AI Gateway Admin</p>
       </div>
 
       <nav className="flex-1 space-y-1 overflow-y-auto p-3">
-        {NAV_ITEMS.map((item) => (
-          <NavLink key={item.to} to={item.to} className={linkClass} end={item.to === "/home"}>
-            {item.label}
-          </NavLink>
-        ))}
-
-        <div className="pt-3">
-          <p className="px-3 pb-1 text-xs font-semibold uppercase tracking-wide text-gray-400">
-            📋 Logs
-          </p>
-          {LOGS_ITEMS.map((item) => (
-            <NavLink key={item.to} to={item.to} className={linkClass}>
+        {NAV_ITEMS.map((item) => {
+          const Icon = item.icon;
+          return (
+            <NavLink
+              key={item.to}
+              to={item.to}
+              className={linkClass}
+              end={item.to === "/home"}
+              onClick={onNavigate}
+            >
+              <Icon size={16} />
               {item.label}
             </NavLink>
-          ))}
+          );
+        })}
+
+        <div className="pt-3">
+          <p className="px-3 pb-1 text-xs font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500">
+            Logs
+          </p>
+          {LOGS_ITEMS.map((item) => {
+            const Icon = item.icon;
+            return (
+              <NavLink key={item.to} to={item.to} className={linkClass} onClick={onNavigate}>
+                <Icon size={16} />
+                {item.label}
+              </NavLink>
+            );
+          })}
         </div>
       </nav>
 
-      <div className="border-t border-gray-200 p-3">
+      <div className="border-t border-gray-200 p-3 dark:border-gray-800">
         <Form method="post" action="/logout">
           <button
             type="submit"
-            className="w-full rounded-lg bg-gray-100 px-3 py-2 text-sm font-medium text-gray-700 hover:bg-red-50 hover:text-red-600"
+            className="flex w-full items-center justify-center gap-2 rounded-lg bg-gray-100 px-3 py-2 text-sm font-medium text-gray-700 hover:bg-red-50 hover:text-red-600 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-red-950 dark:hover:text-red-400"
           >
-            🚪 Logout
+            <LogOut size={16} />
+            Logout
           </button>
         </Form>
       </div>
-    </aside>
+    </>
+  );
+}
+
+type SidebarProps = {
+  open: boolean;
+  onClose: () => void;
+};
+
+export function Sidebar({ open, onClose }: SidebarProps) {
+  return (
+    <>
+      <aside className="hidden w-64 shrink-0 flex-col border-r border-gray-200 bg-white dark:border-gray-800 dark:bg-gray-900 md:flex">
+        <SidebarContent />
+      </aside>
+
+      {open ? (
+        <div className="fixed inset-0 z-50 md:hidden">
+          <div className="absolute inset-0 bg-gray-950/50" onClick={onClose} />
+          <aside className="absolute inset-y-0 left-0 flex w-64 max-w-[80%] flex-col border-r border-gray-200 bg-white shadow-xl dark:border-gray-800 dark:bg-gray-900">
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="Close menu"
+              className="absolute right-3 top-3 rounded-lg p-1.5 text-gray-500 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-800"
+            >
+              <X size={18} />
+            </button>
+            <SidebarContent onNavigate={onClose} />
+          </aside>
+        </div>
+      ) : null}
+    </>
   );
 }

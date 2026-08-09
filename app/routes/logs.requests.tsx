@@ -50,23 +50,23 @@ export default function LogsRequests({ loaderData }: Route.ComponentProps) {
   return (
     <div>
       <div className="mb-4 flex flex-wrap items-center gap-3">
-        <h2 className="text-xl font-bold">Request Logs</h2>
+        <h2 className="text-xl font-bold text-gray-900 dark:text-white">Request Logs</h2>
         <input
           value={model}
           onChange={(e) => setModel(e.target.value)}
           placeholder="Model"
-          className="rounded-lg border border-gray-300 px-3 py-1.5 text-sm"
+          className="rounded-lg border border-gray-300 px-3 py-1.5 text-sm text-gray-900 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
         />
         <input
           value={provider}
           onChange={(e) => setProvider(e.target.value)}
           placeholder="Provider"
-          className="rounded-lg border border-gray-300 px-3 py-1.5 text-sm"
+          className="rounded-lg border border-gray-300 px-3 py-1.5 text-sm text-gray-900 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
         />
         <select
           value={status}
           onChange={(e) => setStatus(e.target.value)}
-          className="rounded-lg border border-gray-300 px-3 py-1.5 text-sm"
+          className="rounded-lg border border-gray-300 px-3 py-1.5 text-sm text-gray-900 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
         >
           <option value="">Status</option>
           <option value="success">success</option>
@@ -82,15 +82,15 @@ export default function LogsRequests({ loaderData }: Route.ComponentProps) {
         setPaused={setPaused}
         scrollRef={scrollRef}
         renderRow={(e) => (
-          <div className="flex items-center gap-3 border-b border-gray-100 py-2 text-sm">
+          <div className="flex items-center gap-3 border-b border-gray-100 py-2 text-sm dark:border-gray-800">
             <span className="w-20 shrink-0 text-xs text-gray-400">
               {fmtTs(e.created_at)}
             </span>
-            <span className="w-40 truncate font-medium" title={String(e.model)}>
+            <span className="w-40 truncate font-medium text-gray-900 dark:text-white" title={String(e.model)}>
               {String(e.model ?? "-")}
             </span>
-            <span className="w-28 truncate text-gray-600">{String(e.provider_id ?? "-")}</span>
-            <span className="w-24 truncate text-xs text-gray-500">
+            <span className="w-28 truncate text-gray-600 dark:text-gray-300">{String(e.provider_id ?? "-")}</span>
+            <span className="w-24 truncate text-xs text-gray-500 dark:text-gray-400">
               {String(e.strategy_used ?? "")}
             </span>
             <span
@@ -106,7 +106,7 @@ export default function LogsRequests({ loaderData }: Route.ComponentProps) {
                 : ""}
             </span>
             {e.error_message ? (
-              <span className="truncate text-xs text-red-500">
+              <span className="truncate text-xs text-red-500 dark:text-red-400">
                 {String(e.error_message)}
               </span>
             ) : null}

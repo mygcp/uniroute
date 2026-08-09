@@ -47,11 +47,11 @@ export default function LogsProxy({ loaderData }: Route.ComponentProps) {
   return (
     <div>
       <div className="mb-4 flex flex-wrap items-center gap-3">
-        <h2 className="text-xl font-bold">Proxy Logs</h2>
+        <h2 className="text-xl font-bold text-gray-900 dark:text-white">Proxy Logs</h2>
         <select
           value={level}
           onChange={(e) => setLevel(e.target.value)}
-          className="rounded-lg border border-gray-300 px-3 py-1.5 text-sm"
+          className="rounded-lg border border-gray-300 px-3 py-1.5 text-sm text-gray-900 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
         >
           <option value="">Level</option>
           <option value="info">info</option>
@@ -63,7 +63,7 @@ export default function LogsProxy({ loaderData }: Route.ComponentProps) {
           value={source}
           onChange={(e) => setSource(e.target.value)}
           placeholder="Source"
-          className="rounded-lg border border-gray-300 px-3 py-1.5 text-sm"
+          className="rounded-lg border border-gray-300 px-3 py-1.5 text-sm text-gray-900 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
         />
       </div>
 
@@ -73,7 +73,7 @@ export default function LogsProxy({ loaderData }: Route.ComponentProps) {
         setPaused={setPaused}
         scrollRef={scrollRef}
         renderRow={(e) => (
-          <div className="flex items-center gap-3 border-b border-gray-100 py-2 text-sm">
+          <div className="flex items-center gap-3 border-b border-gray-100 py-2 text-sm dark:border-gray-800">
             <span className="w-20 shrink-0 text-xs text-gray-400">
               {fmtTs(e.created_at)}
             </span>
@@ -84,10 +84,10 @@ export default function LogsProxy({ loaderData }: Route.ComponentProps) {
             >
               {String(e.level)}
             </span>
-            <span className="w-28 shrink-0 rounded bg-gray-100 px-2 py-0.5 text-xs text-gray-600">
+            <span className="w-28 shrink-0 rounded bg-gray-100 px-2 py-0.5 text-xs text-gray-600 dark:bg-gray-800 dark:text-gray-300">
               {String(e.source)}
             </span>
-            <span className="truncate">{String(e.message)}</span>
+            <span className="truncate text-gray-800 dark:text-gray-200">{String(e.message)}</span>
             {e.metadata ? (
               <span className="ml-auto shrink-0 text-xs text-gray-400">
                 {String(e.metadata)}

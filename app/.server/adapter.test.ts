@@ -1,3 +1,4 @@
+import "./test-env";
 import { afterAll, describe, expect, test } from "bun:test";
 import { createStreamTransformer, transformRequest } from "./adapter";
 import { deleteApiKey, setApiKey } from "./credential";
@@ -38,6 +39,17 @@ describe("transformRequest", () => {
     expect(headers.get("x-goog-api-key")).toBe("google-key");
     expect(headers.get("Authorization")).toBeNull();
     deleteApiKey("test-apikey");
+  });
+
+  test("opencode entry uses Authorization Bearer via authHeader", () => {
+    setApiKey("opencode", "zen-key");
+    const { headers } = transformRequest(
+      { model: "hy3-free" },
+      { ...TEST_PROVIDER, id: "opencode", auth_type: "apikey" },
+    );
+    expect(headers.get("Authorization")).toBe("Bearer zen-key");
+    expect(headers.get("x-goog-api-key")).toBeNull();
+    deleteApiKey("opencode");
   });
 
   test("provider without key has no auth header", () => {

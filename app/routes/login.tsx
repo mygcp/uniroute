@@ -37,10 +37,10 @@ export default function Login({ loaderData, actionData }: Route.ComponentProps) 
     actionData && "error" in actionData ? String(actionData.error) : null;
 
   return (
-    <main className="flex min-h-screen items-center justify-center bg-gray-50">
-      <div className="w-full max-w-sm rounded-2xl border border-gray-200 bg-white p-8 shadow-sm">
-        <h1 className="mb-1 text-2xl font-bold text-gray-900">UniRoute</h1>
-        <p className="mb-6 text-sm text-gray-500">
+    <main className="flex min-h-screen items-center justify-center bg-gray-50 dark:bg-gray-950">
+      <div className="w-full max-w-sm rounded-2xl border border-gray-200 bg-white p-8 shadow-sm dark:border-gray-800 dark:bg-gray-900">
+        <h1 className="mb-1 text-2xl font-bold text-gray-900 dark:text-white">UniRoute</h1>
+        <p className="mb-6 text-sm text-gray-500 dark:text-gray-400">
           AI Gateway Admin — masuk dengan password.
         </p>
         <Form method="post" className="flex flex-col gap-4">
@@ -48,7 +48,7 @@ export default function Login({ loaderData, actionData }: Route.ComponentProps) 
           <div>
             <label
               htmlFor="password"
-              className="mb-1 block text-sm font-medium text-gray-700"
+              className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300"
             >
               Password
             </label>
@@ -58,10 +58,10 @@ export default function Login({ loaderData, actionData }: Route.ComponentProps) 
               type="password"
               required
               autoFocus
-              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 dark:border-gray-600 dark:bg-gray-800 dark:text-white focus:border-blue-500 focus:outline-none"
             />
           </div>
-          {error ? <p className="text-sm text-red-600">{error}</p> : null}
+          {error ? <p className="text-sm text-red-600 dark:text-red-400">{error}</p> : null}
           <button
             type="submit"
             className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"

@@ -1,4 +1,5 @@
 import type { Route } from "./+types/v1.chat.completions";
+import { getSessionToken, isValid } from "../.server/auth";
 import { transformRequest } from "../.server/adapter";
 import {
   beginConnection,
@@ -7,6 +8,12 @@ import {
   markUsed,
   selectProvider,
 } from "../.server/balancer";
+import {
+  isRequireApiKey,
+  modelAllowed,
+  resolveClientKey,
+  type ClientKey,
+} from "../.server/client-key";
 import { compress, isEnabled } from "../.server/compressor";
 import { executeStreaming } from "../.server/executor";
 import { checkAllowlist } from "../.server/guard";
@@ -21,6 +28,32 @@ function json(payload: unknown, status = 200): Response {
   });
 }
 
+type AuthorizeResult =
+  | { ok: true; rule: ClientKey | null }
+  | { ok: false; status: number; error: string };
+
+function authorize(request: Request): AuthorizeResult {
+  if (isValid(getSessionToken(request))) {
+    return { ok: true, rule: null };
+  }
+  const header = request.headers.get("authorization") ?? "";
+  const match = header.match(/^Bearer\s+(.+)$/i);
+  const token = match ? match[1].trim() : null;
+
+  if (!token) {
+    if (isRequireApiKey()) {
+      return { ok: false, status: 401, error: "api key required" };
+    }
+    return { ok: true, rule: null };
+  }
+
+  const resolved = resolveClientKey(token);
+  if (!resolved.ok) {
+    return { ok: false, status: resolved.status, error: resolved.message };
+  }
+  return { ok: true, rule: resolved.key };
+}
+
 type ChatRequestBody = {
   model?: unknown;
   messages?: unknown;
@@ -32,11 +65,13 @@ function orderCandidates(
   pool: Provider[],
   selected: Provider,
   fallbackId: string | null | undefined,
+  pinnedId: string | null | undefined,
 ): Provider[] {
   const list: Provider[] = [];
   const push = (p?: Provider) => {
     if (p && !list.includes(p)) list.push(p);
   };
+  push(pool.find((p) => p.id === pinnedId));
   push(selected);
   if (fallbackId) push(pool.find((p) => p.id === fallbackId));
   for (const p of pool) push(p);
@@ -57,8 +92,31 @@ export async function action({ request }: Route.ActionArgs) {
       ? body.model.trim()
       : null;
 
+  const clientKey = authorize(request);
+  if (!clientKey.ok) {
+    return json({ error: { message: clientKey.error } }, clientKey.status);
+  }
+
   if (!model) {
     return json({ error: { message: "model is required" } }, 400);
+  }
+
+  if (clientKey.rule && !modelAllowed(clientKey.rule, model)) {
+    recordRequestLog({
+      model,
+      provider_id: "guard",
+      status: "denied",
+      rule_applied: "client-key allowlist",
+      error_message: "model not allowed by api key",
+    });
+    return json(
+      { error: { message: "model not allowed by api key", type: "model_forbidden" } },
+      403,
+    );
+  }
+
+  if (clientKey.rule?.model_override) {
+    body.model = clientKey.rule.model_override;
   }
 
   const guard = checkAllowlist(model);
@@ -146,7 +204,12 @@ export async function action({ request }: Route.ActionArgs) {
 
   const cfg = getStrategy(effectiveModel);
   const selected = selectProvider(pool, effectiveModel) ?? pool[0];
-  const candidates = orderCandidates(pool, selected, fallbackId);
+  const candidates = orderCandidates(
+    pool,
+    selected,
+    fallbackId,
+    clientKey.rule?.pinned_provider_id,
+  );
   markUsed(selected);
   reload();
 

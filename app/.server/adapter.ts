@@ -1,4 +1,5 @@
 import { getApiKey } from "./credential";
+import { getRegistryEntry } from "~/registry";
 import type { Provider } from "./registry";
 
 export type TransformResult = {
@@ -14,7 +15,13 @@ export function transformRequest(
   const url = new URL("/v1/chat/completions", provider.base_url).toString();
   const headers = new Headers({ "Content-Type": "application/json" });
 
-  if (provider.auth_type === "bearer") {
+  const entry = getRegistryEntry(provider.id);
+  if (entry?.authHeader) {
+    const key = getApiKey(provider.id);
+    if (key) {
+      headers.set(entry.authHeader, `${entry.authPrefix ?? ""} ${key}`.trim());
+    }
+  } else if (provider.auth_type === "bearer") {
     const key = getApiKey(provider.id);
     if (key) headers.set("Authorization", `Bearer ${key}`);
   } else if (provider.auth_type === "apikey") {

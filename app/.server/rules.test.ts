@@ -1,3 +1,4 @@
+import "./test-env";
 import { afterAll, describe, expect, test } from "bun:test";
 import { query } from "./db";
 import { evaluateRules } from "./rules";

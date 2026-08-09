@@ -1,5 +1,6 @@
 import { Form } from "react-router";
 import type { Route } from "./+types/compression";
+import { FileArchive } from "lucide-react";
 import { getSettings } from "../.server/compressor";
 import { query } from "../.server/db";
 import { testCompression } from "../.server/compressor";
@@ -49,15 +50,17 @@ export default function Compression({ loaderData, actionData }: Route.ComponentP
   const test = actionData && "pending" in actionData ? actionData : null;
   return (
     <div>
-      <h1 className="mb-6 text-2xl font-bold">🗜️ Compression</h1>
+      <h1 className="mb-6 flex items-center gap-2 text-2xl font-bold text-gray-900 dark:text-white">
+        <FileArchive size={24} /> Compression
+      </h1>
 
-      <div className="mb-8 rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-        <h2 className="mb-1 text-sm font-semibold text-gray-600">Settings</h2>
+      <div className="mb-8 rounded-xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-gray-900">
+        <h2 className="mb-1 text-sm font-semibold text-gray-600 dark:text-gray-300">Settings</h2>
         <Form method="post" className="mt-4 space-y-4">
           <input type="hidden" name="intent" value="save" />
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <div className="space-y-2 rounded-lg border border-gray-100 p-4">
-              <label className="flex items-center gap-2 text-sm font-medium">
+            <div className="space-y-2 rounded-lg border border-gray-100 p-4 dark:border-gray-800">
+              <label className="flex items-center gap-2 text-sm font-medium text-gray-700 dark:text-gray-300">
                 <input
                   type="checkbox"
                   name="rtk_enabled"
@@ -70,11 +73,11 @@ export default function Compression({ loaderData, actionData }: Route.ComponentP
               <input
                 name="rtk_binary_path"
                 defaultValue={settings.rtk_binary_path}
-                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
               />
             </div>
-            <div className="space-y-4 rounded-lg border border-gray-100 p-4">
-              <label className="flex items-center gap-2 text-sm font-medium">
+            <div className="space-y-4 rounded-lg border border-gray-100 p-4 dark:border-gray-800">
+              <label className="flex items-center gap-2 text-sm font-medium text-gray-800 dark:text-gray-300">
                 <input
                   type="checkbox"
                   name="caveman_enabled"
@@ -87,12 +90,12 @@ export default function Compression({ loaderData, actionData }: Route.ComponentP
               <input
                 name="caveman_binary_path"
                 defaultValue={settings.caveman_binary_path}
-                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
               />
             </div>
           </div>
           {actionData && "saved" in actionData ? (
-            <p className="text-sm text-green-600">Settings tersimpan.</p>
+            <p className="text-sm text-green-600 dark:text-green-400">Settings tersimpan.</p>
           ) : null}
           <button
             type="submit"
@@ -103,25 +106,25 @@ export default function Compression({ loaderData, actionData }: Route.ComponentP
         </Form>
       </div>
 
-      <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-        <h2 className="text-sm font-semibold text-gray-600">Test kompresi</h2>
+      <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-gray-900">
+        <h2 className="text-sm font-semibold text-gray-600 dark:text-gray-300">Test kompresi</h2>
         <Form method="post" className="mt-4">
           <input type="hidden" name="intent" value="test" />
           <textarea
             name="sample"
             rows={3}
             defaultValue="Contoh prompt test kompresi RTK & Caveman."
-            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
           />
           <button
             type="submit"
-            className="mt-3 rounded-lg bg-gray-800 px-4 py-2 text-sm font-medium text-white hover:bg-gray-900"
+            className="mt-3 rounded-lg bg-gray-800 px-4 py-2 text-sm font-medium text-white hover:bg-gray-900 dark:bg-gray-700 dark:hover:bg-gray-600"
           >
             Run test
           </button>
         </Form>
         {test ? (
-          <pre className="mt-4 rounded-lg bg-gray-50 p-4 text-xs">
+          <pre className="mt-4 rounded-lg bg-gray-50 p-4 text-xs text-gray-800 dark:bg-gray-800 dark:text-gray-200">
             {JSON.stringify(
               {
                 output: test.output,
