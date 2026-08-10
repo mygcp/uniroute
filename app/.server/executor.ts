@@ -1,11 +1,13 @@
 import { createStreamTransformer } from "./adapter";
 import type { RequestLog } from "./logger";
+import { fetchUpstream, type ProxyConfig } from "./proxy-resolver";
 
 export type ExecutorOptions = {
   url: string;
   headers: Headers;
   body: string;
   signal?: AbortSignal;
+  proxies?: ProxyConfig[];
   onComplete: (
     log: Partial<RequestLog> & Pick<RequestLog, "status">,
   ) => void;
@@ -18,22 +20,29 @@ type AttemptResult =
 const EXECUTE_TIMEOUT_MS = 120_000;
 const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
 
-async function attempt(options: ExecutorOptions): Promise<AttemptResult> {
+async function attempt(
+  options: ExecutorOptions,
+  proxy?: ProxyConfig,
+): Promise<AttemptResult> {
   const { url, headers, body, signal } = options;
   const controller = new AbortController();
   const abortFromCaller = (): void => controller.abort();
   signal?.addEventListener("abort", abortFromCaller);
 
   try {
-    const upstream = await fetch(url, {
-      method: "POST",
-      headers,
-      body,
-      signal: AbortSignal.any([
-        AbortSignal.timeout(EXECUTE_TIMEOUT_MS),
-        controller.signal,
-      ]),
-    });
+    const upstream = await fetchUpstream(
+      url,
+      {
+        method: "POST",
+        headers,
+        body,
+        signal: AbortSignal.any([
+          AbortSignal.timeout(EXECUTE_TIMEOUT_MS),
+          controller.signal,
+        ]),
+      },
+      proxy ?? null,
+    );
 
     if (!upstream.ok) {
       const detailText = await upstream.text();
@@ -58,7 +67,9 @@ async function attempt(options: ExecutorOptions): Promise<AttemptResult> {
     return { ok: true, response: buildStreamResponse(upstream, controller, options) };
   } catch (err) {
     controller.abort();
-    const message = err instanceof Error ? err.message : String(err);
+    const raw = err instanceof Error ? err.message : String(err);
+    const context = proxy ? `proxy connect failed: ${proxy.host}:${proxy.port}` : "";
+    const message = context ? `${context} (${raw})` : raw;
     return {
       ok: false,
       status: 502,
@@ -157,9 +168,19 @@ export async function executeStreaming(
   options: ExecutorOptions,
 ): Promise<Response> {
   const started = Date.now();
-  let result = await attempt(options);
-  if (!result.ok && result.retryable) {
+  const proxies = options.proxies ?? [];
+
+  let result: AttemptResult;
+  if (proxies.length > 0) {
+    result = await attempt(options, proxies[0]);
+    for (let i = 1; i < proxies.length && !result.ok && result.retryable; i++) {
+      result = await attempt(options, proxies[i]);
+    }
+  } else {
     result = await attempt(options);
+    if (!result.ok && result.retryable) {
+      result = await attempt(options);
+    }
   }
 
   if (!result.ok) {
