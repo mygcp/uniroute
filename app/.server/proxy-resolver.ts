@@ -1,4 +1,5 @@
 import { query } from "./db";
+import { getRoutingCredential } from "./credential";
 
 export type ProxyProtocol = "http" | "socks5";
 
@@ -252,4 +253,96 @@ export function parseBulkProxies(
     push(l.includes("://") ? parseUrlLine(l) : parsePlainLine(l), `line ${i + 1}`);
   });
   return { imported, skipped };
+}
+
+export function formatProxy(
+  proxy: ProxyConfig,
+): { proxy: string } | { socks: string } {
+  const cred = proxy.username
+    ? `${encodeURIComponent(proxy.username)}:${encodeURIComponent(proxy.password ?? "")}@`
+    : "";
+  const host =
+    proxy.host.includes(":") && !proxy.host.startsWith("[")
+      ? `[${proxy.host}]`
+      : proxy.host;
+  const url = `${proxy.protocol}://${cred}${host}:${proxy.port}`;
+  return proxy.protocol === "http" ? { proxy: url } : { socks: url };
+}
+
+export function touchProxy(id: number): void {
+  query("UPDATE proxies SET last_used_at = ? WHERE id = ?").run(Date.now(), id);
+}
+
+export function getActivePool(providerId: string): ProxyConfig[] {
+  const rows = query(
+    `SELECT px.id, px.protocol, px.host, px.port, px.username, px.password, px.last_used_at
+     FROM provider_proxies pp
+     JOIN proxies px ON px.id = pp.proxy_id
+     WHERE pp.provider_id = ? AND px.is_active = 1
+     ORDER BY px.last_used_at, px.id`,
+  ).all(providerId) as unknown as (ProxyConfig & { last_used_at: number })[];
+  return rows.map(({ last_used_at: _omit, ...rest }) => rest);
+}
+
+export function roundRobinPick(pool: ProxyConfig[]): ProxyConfig | undefined {
+  if (pool.length === 0) return undefined;
+  const picked = pool[0];
+  touchProxy(picked.id);
+  return picked;
+}
+
+function getKeyProxy(providerId: string): ProxyConfig | null {
+  const cred = getRoutingCredential(providerId);
+  if (!cred?.proxy_id) return null;
+  const row = query(
+    "SELECT id, protocol, host, port, username, password FROM proxies WHERE id = ? AND is_active = 1",
+  ).get(cred.proxy_id) as ProxyConfig | undefined;
+  return row ?? null;
+}
+
+export function resolveProxy(providerId: string): ProxyConfig | null {
+  const keyProxy = getKeyProxy(providerId);
+  if (keyProxy) return keyProxy;
+  const pool = getActivePool(providerId);
+  if (pool.length === 0) return null;
+  return roundRobinPick(pool) ?? null;
+}
+
+export function resolveProxyCandidates(providerId: string): ProxyConfig[] {
+  const keyProxy = getKeyProxy(providerId);
+  if (keyProxy) return [keyProxy];
+  const pool = getActivePool(providerId);
+  if (pool.length === 0) return [];
+  const picked = roundRobinPick(pool);
+  return [picked!, ...pool.filter((p) => p.id !== picked!.id)];
+}
+
+export function fetchUpstream(
+  url: string,
+  init: RequestInit & { proxy?: string; socks?: string },
+  proxy: ProxyConfig | null,
+): Promise<Response> {
+  return fetch(url, proxy ? { ...init, ...formatProxy(proxy) } : init);
+}
+
+export async function testProxyConnection(
+  proxy: ProxyConfig,
+): Promise<{ ok: boolean; message: string }> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 5000);
+  try {
+    const res = await fetchUpstream(
+      "https://www.gstatic.com/generate_204",
+      { method: "GET", signal: controller.signal },
+      proxy,
+    );
+    return { ok: true, message: `HTTP ${res.status}` };
+  } catch (err) {
+    return {
+      ok: false,
+      message: err instanceof Error ? err.message : String(err),
+    };
+  } finally {
+    clearTimeout(timer);
+  }
 }

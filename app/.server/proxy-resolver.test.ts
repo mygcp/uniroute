@@ -3,15 +3,23 @@ import { describe, expect, test } from "bun:test";
 import {
   assignProxies,
   deleteProxy,
+  fetchUpstream,
+  formatProxy,
+  getActivePool,
   getProxy,
   listAssignments,
   listProxies,
   parseBulkProxies,
   removeProxyAssignment,
+  resolveProxy,
+  resolveProxyCandidates,
+  roundRobinPick,
   setProxyActive,
+  touchProxy,
   updateProxy,
   upsertProxy,
 } from "./proxy-resolver";
+import { getRoutingCredential } from "./credential";
 import { query } from "./db";
 
 describe("proxy CRUD", () => {
@@ -139,5 +147,100 @@ describe("parseBulkProxies", () => {
 
   test("empty input returns nothing", () => {
     expect(parseBulkProxies("  \n")).toEqual({ imported: [], skipped: [] });
+  });
+});
+
+describe("getActivePool & roundRobinPick", () => {
+  test("returns only active proxies, most-recently-used last", () => {
+    const a = upsertProxy({ protocol: "http", host: "p1.example", port: 1080, username: null, password: null });
+    const b = upsertProxy({ protocol: "http", host: "p2.example", port: 1081, username: null, password: null });
+    const d = upsertProxy({ protocol: "http", host: "dead.example", port: 1082, username: null, password: null });
+    setProxyActive(d.id, false);
+    assignProxies("openai", [a.id, b.id, d.id]);
+    touchProxy(a.id);
+    const pool = getActivePool("openai");
+    expect(pool.map((p) => p.host)).toEqual(["p2.example", "p1.example"]);
+  });
+
+  test("roundRobinPick rotates through pool", () => {
+    const a = upsertProxy({ protocol: "http", host: "r1.example", port: 1080, username: null, password: null });
+    const b = upsertProxy({ protocol: "http", host: "r2.example", port: 1081, username: null, password: null });
+    assignProxies("anthropic", [a.id, b.id]);
+    const first = roundRobinPick(getActivePool("anthropic"));
+    expect(first?.host).toBe("r1.example");
+    const second = roundRobinPick(getActivePool("anthropic"));
+    expect(second?.host).toBe("r2.example");
+    expect(roundRobinPick([])).toBeUndefined();
+  });
+});
+
+describe("resolveProxy hierarchy", () => {
+  test("touches last_used_at via pick", () => {
+    const a = upsertProxy({ protocol: "http", host: "t1.example", port: 1080, username: null, password: null });
+    const before = getProxy(a.id)!.last_used_at;
+    touchProxy(a.id);
+    expect(getProxy(a.id)!.last_used_at).toBeGreaterThanOrEqual(before);
+  });
+});
+
+describe("resolveProxy candidates", () => {
+  test("key proxy wins over pool", () => {
+    const key = upsertProxy({ protocol: "http", host: "key.example", port: 1080, username: null, password: null });
+    const pool = upsertProxy({ protocol: "http", host: "pool.example", port: 1081, username: null, password: null });
+    assignProxies("groq", [pool.id]);
+    query(
+      "INSERT INTO provider_credentials (provider_id, label, api_key, is_active, is_routing, proxy_id, updated_at) VALUES ('groq', 't', 'k', 1, 1, ?, unixepoch())",
+    ).run(key.id);
+    expect(resolveProxy("groq")?.host).toBe("key.example");
+    expect(resolveProxyCandidates("groq").map((p) => p.host)).toEqual(["key.example"]);
+  });
+
+  test("pool only when no key proxy", () => {
+    const a = upsertProxy({ protocol: "http", host: "c1.example", port: 1080, username: null, password: null });
+    assignProxies("google", [a.id]);
+    const hosts = resolveProxyCandidates("google").map((p) => p.host);
+    expect(hosts).toContain("c1.example");
+  });
+
+  test("null when no proxy configured", () => {
+    expect(resolveProxy("mistral")).toBeNull();
+    expect(resolveProxyCandidates("mistral")).toEqual([]);
+  });
+});
+
+describe("credential proxy helpers", () => {
+  test("getRoutingCredential returns proxy_id of routing key", () => {
+    const key = upsertProxy({ protocol: "http", host: "cred.example", port: 1080, username: null, password: null });
+    query(
+      "INSERT INTO provider_credentials (provider_id, label, api_key, is_active, is_routing, proxy_id, updated_at) VALUES ('openrouter', 't', 'k', 1, 1, ?, unixepoch())",
+    ).run(key.id);
+    expect(getRoutingCredential("openrouter")?.proxy_id).toBe(key.id);
+  });
+});
+
+describe("formatProxy", () => {
+  test("http and socks5 output", () => {
+    expect(formatProxy({ id: 1, protocol: "http", host: "h", port: 80, username: "u", password: "p" })).toEqual({ proxy: "http://u:p@h:80" });
+    expect(formatProxy({ id: 2, protocol: "socks5", host: "h", port: 1080, username: null, password: null })).toEqual({ socks: "socks5://h:1080" });
+  });
+});
+
+describe("fetchUpstream", () => {
+  test("injects proxy/socks option and passes through without proxy", async () => {
+    let captured: { url: string; init: unknown } | null = null;
+    const original = globalThis.fetch;
+    globalThis.fetch = (async (url: unknown, init: unknown) => {
+      captured = { url: String(url), init };
+      return new Response("ok");
+    }) as unknown as typeof fetch;
+    try {
+      await fetchUpstream("http://up.example/v1", { method: "POST" }, { id: 1, protocol: "http", host: "px", port: 8080, username: "u", password: "p" });
+      expect(captured!.init).toMatchObject({ proxy: "http://u:p@px:8080" });
+      await fetchUpstream("http://up.example/v1", { method: "POST" }, null);
+      expect((captured!.init as Record<string, unknown>).proxy).toBeUndefined();
+      expect((captured!.init as Record<string, unknown>).method).toBe("POST");
+    } finally {
+      globalThis.fetch = original;
+    }
   });
 });
