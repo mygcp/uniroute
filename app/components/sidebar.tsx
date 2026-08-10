@@ -6,6 +6,7 @@ import {
   KeyRound,
   Link2,
   Globe,
+  Network,
   FolderOpen,
   LogOut,
   ScrollText,
@@ -19,6 +20,7 @@ const NAV_ITEMS = [
   { to: "/api", label: "API", icon: KeyRound },
   { to: "/combo", label: "Combo", icon: Link2 },
   { to: "/proxy", label: "Proxy", icon: Globe },
+  { to: "/proxies", label: "Proxies", icon: Network },
 ];
 
 const LOGS_ITEMS = [
