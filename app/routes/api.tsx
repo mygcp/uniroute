@@ -13,6 +13,8 @@ import {
   updateClientKeyRules,
 } from "../.server/client-key";
 import { isModelsPublic, setModelsPublic } from "../.server/model-public";
+import { getModelSuggestions, getProviderSuggestions } from "../.server/suggest";
+import { Combobox } from "../components/combobox";
 
 type AllowlistRow = {
   id: number;
@@ -42,7 +44,17 @@ export function loader() {
   const clientKeys = listClientKeys();
   const requireApiKey = isRequireApiKey();
   const modelsPublic = isModelsPublic();
-  return { allowlist, rules, clientKeys, requireApiKey, modelsPublic };
+  const modelSuggestions = getModelSuggestions();
+  const providerSuggestions = getProviderSuggestions();
+  return {
+    allowlist,
+    rules,
+    clientKeys,
+    requireApiKey,
+    modelsPublic,
+    modelSuggestions,
+    providerSuggestions,
+  };
 }
 
 export async function action({ request }: Route.ActionArgs) {
@@ -149,7 +161,15 @@ function inputClass() {
 }
 
 export default function Api({ loaderData, actionData }: Route.ComponentProps) {
-  const { allowlist, rules, clientKeys, requireApiKey, modelsPublic } = loaderData;
+  const {
+    allowlist,
+    rules,
+    clientKeys,
+    requireApiKey,
+    modelsPublic,
+    modelSuggestions,
+    providerSuggestions,
+  } = loaderData;
 
   const newKey = actionData
     ? (actionData as { newlyCreatedKey?: string; createName?: string }).newlyCreatedKey
@@ -166,7 +186,13 @@ export default function Api({ loaderData, actionData }: Route.ComponentProps) {
         <KeyRound size={24} /> API Management
       </h1>
 
-      <ApiKeysTab requireApiKey={requireApiKey} keys={clientKeys} newKey={newKey} />
+      <ApiKeysTab
+        requireApiKey={requireApiKey}
+        keys={clientKeys}
+        newKey={newKey}
+        modelSuggestions={modelSuggestions}
+        providerSuggestions={providerSuggestions}
+      />
 
       <div className="mt-4 rounded-xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-gray-900">
         <Form method="post" className="flex items-center justify-between gap-4">
@@ -197,30 +223,7 @@ export default function Api({ loaderData, actionData }: Route.ComponentProps) {
         <h2 className="mb-3 text-lg font-semibold text-gray-900 dark:text-white">
           Model Allowlist ({allowlist.length})
         </h2>
-        <Form method="post" className="mb-4 flex flex-wrap items-end gap-3">
-          <input type="hidden" name="section" value="allowlist" />
-            <div>
-              <label className="mb-1 block text-xs text-gray-500 dark:text-gray-400">Model</label>
-              <input name="model_name" required placeholder="gpt-4o" className={inputClass()} />
-            </div>
-            <div>
-              <label className="mb-1 block text-xs text-gray-500 dark:text-gray-400">Action</label>
-              <select name="action" className={inputClass()}>
-                <option value="allow">allow</option>
-                <option value="deny">deny</option>
-              </select>
-            </div>
-            <div>
-              <label className="mb-1 block text-xs text-gray-500 dark:text-gray-400">Reason</label>
-              <input name="reason" className={inputClass()} />
-            </div>
-            <button
-              type="submit"
-              className="rounded-lg bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-700"
-            >
-              Add
-            </button>
-          </Form>
+        <AllowlistForm modelSuggestions={modelSuggestions} />
           <div className="table-wrap">
           <table className="w-full text-sm">
             <thead>
@@ -263,47 +266,13 @@ export default function Api({ loaderData, actionData }: Route.ComponentProps) {
         </div>
 
       <div className="mt-4 rounded-xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-gray-900">
-        <h2 className="mb-3 text-lg font-semibold text-gray-900 dark:text-white">
+<h2 className="mb-3 text-lg font-semibold text-gray-900 dark:text-white">
           Routing Rules ({rules.length})
         </h2>
-        <Form method="post" className="mb-4 grid grid-cols-1 items-end gap-3 sm:grid-cols-4">
-          <input type="hidden" name="section" value="rules" />
-            <div>
-              <label className="mb-1 block text-xs text-gray-500 dark:text-gray-400">Name</label>
-              <input name="name" required className={inputClass()} />
-            </div>
-            <div>
-              <label className="mb-1 block text-xs text-gray-500 dark:text-gray-400">Source Model</label>
-              <input name="source_model" required className={inputClass()} />
-            </div>
-            <div>
-              <label className="mb-1 block text-xs text-gray-500 dark:text-gray-400">Type</label>
-              <select name="rule_type" className={inputClass()}>
-                <option value="rewrite">rewrite</option>
-                <option value="deny">deny</option>
-                <option value="fallback">fallback</option>
-              </select>
-            </div>
-            <div>
-              <label className="mb-1 block text-xs text-gray-500 dark:text-gray-400">Priority</label>
-              <input name="priority" type="number" defaultValue={0} className={inputClass()} />
-            </div>
-            <div>
-              <label className="mb-1 block text-xs text-gray-500 dark:text-gray-400">Target Model</label>
-              <input name="target_model" className={inputClass()} />
-            </div>
-            <div>
-              <label className="mb-1 block text-xs text-gray-500 dark:text-gray-400">Target Provider</label>
-              <input name="target_provider_id" className={inputClass()} />
-            </div>
-            <button
-              type="submit"
-              className="rounded-lg bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-700"
-            >
-              Add
-            </button>
-          </Form>
-
+        <RulesForm
+          modelSuggestions={modelSuggestions}
+          providerSuggestions={providerSuggestions}
+        />
           <div className="table-wrap">
           <table className="w-full text-sm">
             <thead>
@@ -373,6 +342,142 @@ export default function Api({ loaderData, actionData }: Route.ComponentProps) {
   );
 }
 
+function AllowlistForm({ modelSuggestions }: { modelSuggestions: string[] }) {
+  const [model, setModel] = useState("");
+  return (
+    <Form method="post" className="mb-4 flex flex-wrap items-end gap-3">
+      <input type="hidden" name="section" value="allowlist" />
+      <div>
+        <label className="mb-1 block text-xs text-gray-500 dark:text-gray-400">Model</label>
+        <Combobox
+          name="model_name"
+          value={model}
+          onChange={setModel}
+          options={modelSuggestions}
+          required
+          placeholder="e.g. gpt-4o"
+          className={inputClass()}
+        />
+      </div>
+      <div>
+        <label className="mb-1 block text-xs text-gray-500 dark:text-gray-400">Action</label>
+        <select name="action" className={inputClass()}>
+          <option value="allow">allow</option>
+          <option value="deny">deny</option>
+        </select>
+      </div>
+      <div>
+        <label className="mb-1 block text-xs text-gray-500 dark:text-gray-400">Reason</label>
+        <input name="reason" className={inputClass()} />
+      </div>
+      <button
+        type="submit"
+        className="rounded-lg bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-700"
+      >
+        Add
+      </button>
+    </Form>
+  );
+}
+
+function RulesForm({
+  modelSuggestions,
+  providerSuggestions,
+}: {
+  modelSuggestions: string[];
+  providerSuggestions: string[];
+}) {
+  const [ruleType, setRuleType] = useState("rewrite");
+  const [sourceModel, setSourceModel] = useState("");
+  const [targetModel, setTargetModel] = useState("");
+  const [targetProvider, setTargetProvider] = useState("");
+
+  return (
+    <>
+      <p className="mb-3 text-xs text-gray-500 dark:text-gray-400">
+        Routing rules are evaluated per request for the requested source model, in priority
+        order:
+        <span className="mt-1 block">
+          <code>rewrite</code> — replace the requested model with <code>target model</code>
+          {" · "}
+          <code>deny</code> — block the model
+          {" · "}
+          <code>fallback</code> — reroute to <code>target provider</code> when the primary
+          route fails
+        </span>
+      </p>
+      <Form method="post" className="mb-4 grid grid-cols-1 items-end gap-3 sm:grid-cols-4">
+        <input type="hidden" name="section" value="rules" />
+        <div>
+          <label className="mb-1 block text-xs text-gray-500 dark:text-gray-400">Name</label>
+          <input name="name" required className={inputClass()} />
+        </div>
+        <div>
+          <label className="mb-1 block text-xs text-gray-500 dark:text-gray-400">Source Model</label>
+          <Combobox
+            name="source_model"
+            value={sourceModel}
+            onChange={setSourceModel}
+            options={modelSuggestions}
+            required
+            placeholder="e.g. gpt-4o"
+            className={inputClass()}
+          />
+        </div>
+        <div>
+          <label className="mb-1 block text-xs text-gray-500 dark:text-gray-400">Type</label>
+          <select
+            name="rule_type"
+            value={ruleType}
+            onChange={(e) => setRuleType(e.target.value)}
+            className={inputClass()}
+          >
+            <option value="rewrite">rewrite</option>
+            <option value="deny">deny</option>
+            <option value="fallback">fallback</option>
+          </select>
+        </div>
+        <div>
+          <label className="mb-1 block text-xs text-gray-500 dark:text-gray-400">Priority</label>
+          <input name="priority" type="number" defaultValue={0} className={inputClass()} />
+        </div>
+        {ruleType === "rewrite" ? (
+          <div>
+            <label className="mb-1 block text-xs text-gray-500 dark:text-gray-400">Target Model</label>
+            <Combobox
+              name="target_model"
+              value={targetModel}
+              onChange={setTargetModel}
+              options={modelSuggestions}
+              placeholder="e.g. gpt-4o-mini"
+              className={inputClass()}
+            />
+          </div>
+        ) : null}
+        {ruleType === "fallback" ? (
+          <div>
+            <label className="mb-1 block text-xs text-gray-500 dark:text-gray-400">Target Provider</label>
+            <Combobox
+              name="target_provider_id"
+              value={targetProvider}
+              onChange={setTargetProvider}
+              options={providerSuggestions}
+              placeholder="e.g. openai"
+              className={inputClass()}
+            />
+          </div>
+        ) : null}
+        <button
+          type="submit"
+          className="rounded-lg bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-700"
+        >
+          Add
+        </button>
+      </Form>
+    </>
+  );
+}
+
 type ClientKeyRow = {
   id: number;
   name: string;
@@ -387,10 +492,14 @@ function ApiKeysTab({
   requireApiKey,
   keys,
   newKey,
+  modelSuggestions,
+  providerSuggestions,
 }: {
   requireApiKey: boolean;
   keys: ClientKeyRow[];
   newKey?: { key: string; name: string };
+  modelSuggestions: string[];
+  providerSuggestions: string[];
 }) {
   const [showCreate, setShowCreate] = useState(false);
   const [name, setName] = useState("");
@@ -566,7 +675,12 @@ function ApiKeysTab({
                 {editingId === k.id ? (
                   <tr>
                     <td colSpan={5} className="bg-gray-50 py-4 dark:bg-gray-900/50">
-                      <EditKeyForm row={k} onDone={() => setEditingId(null)} />
+                      <EditKeyForm
+                      row={k}
+                      onDone={() => setEditingId(null)}
+                      modelSuggestions={modelSuggestions}
+                      providerSuggestions={providerSuggestions}
+                    />
                     </td>
                   </tr>
                 ) : null}
@@ -583,10 +697,16 @@ function ApiKeysTab({
 function EditKeyForm({
   row,
   onDone,
+  modelSuggestions,
+  providerSuggestions,
 }: {
   row: ClientKeyRow;
   onDone: () => void;
+  modelSuggestions: string[];
+  providerSuggestions: string[];
 }) {
+  const [modelOverride, setModelOverride] = useState(row.model_override ?? "");
+  const [pinnedProvider, setPinnedProvider] = useState(row.pinned_provider_id ?? "");
   return (
     <Form method="post" className="mx-2 rounded-lg border border-gray-200 bg-white p-3 shadow-sm dark:border-gray-700 dark:bg-gray-900 sm:mx-5 sm:p-4">
       <input type="hidden" name="section" value="client-key" />
@@ -620,10 +740,12 @@ function EditKeyForm({
           <label className="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-300">
             Model override (kosongkan untuk menonaktifkan)
           </label>
-          <input
+          <Combobox
             name="model_override"
-            defaultValue={row.model_override ?? ""}
-            placeholder="mis. gpt-4o-mini"
+            value={modelOverride}
+            onChange={setModelOverride}
+            options={modelSuggestions}
+            placeholder="e.g. gpt-4o-mini"
             className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 placeholder-gray-400 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
           />
         </div>
@@ -631,10 +753,12 @@ function EditKeyForm({
           <label className="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-300">
             Pinned provider (kosong = ikut routing)
           </label>
-          <input
+          <Combobox
             name="pinned_provider_id"
-            defaultValue={row.pinned_provider_id ?? ""}
-            placeholder="mis. local"
+            value={pinnedProvider}
+            onChange={setPinnedProvider}
+            options={providerSuggestions}
+            placeholder="e.g. local"
             className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 placeholder-gray-400 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
           />
         </div>
