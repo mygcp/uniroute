@@ -13,6 +13,7 @@ import {
   removeProxyAssignment,
   resolveProxy,
   resolveProxyCandidates,
+  resolveProxyForKey,
   roundRobinPick,
   setProxyActive,
   touchProxy,
@@ -242,5 +243,22 @@ describe("fetchUpstream", () => {
     } finally {
       globalThis.fetch = original;
     }
+  });
+});
+
+describe("resolveProxyForKey", () => {
+  test("uses key proxy when active", () => {
+    const key = upsertProxy({ protocol: "http", host: "kf.example", port: 1080, username: null, password: null });
+    expect(resolveProxyForKey("cohere", key.id)?.host).toBe("kf.example");
+  });
+
+  test("falls back to pool when key not found", () => {
+    const p = upsertProxy({ protocol: "socks5", host: "fp.example", port: 1080, username: null, password: null });
+    assignProxies("opencode", [p.id]);
+    expect(resolveProxyForKey("opencode", 99999)?.host).toBe("fp.example");
+  });
+
+  test("null keys return null", () => {
+    expect(resolveProxyForKey("mistral", null)).toBeNull();
   });
 });

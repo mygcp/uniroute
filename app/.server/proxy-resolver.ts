@@ -346,3 +346,18 @@ export async function testProxyConnection(
     clearTimeout(timer);
   }
 }
+
+export function resolveProxyForKey(
+  providerId: string,
+  keyProxyId: number | null,
+): ProxyConfig | null {
+  if (keyProxyId) {
+    const row = query(
+      "SELECT id, protocol, host, port, username, password FROM proxies WHERE id = ? AND is_active = 1",
+    ).get(keyProxyId) as ProxyConfig | undefined;
+    if (row) return row;
+  }
+  const pool = getActivePool(providerId);
+  if (pool.length === 0) return null;
+  return roundRobinPick(pool) ?? null;
+}

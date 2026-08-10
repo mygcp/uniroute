@@ -9,10 +9,12 @@ import {
   deleteApiKeyById,
   listApiKeys,
   setApiKeyActive,
+  setKeyProxy,
   setRoutingKey,
   type ApiKeyRow,
 } from "../.server/credential";
 import { reload } from "../.server/registry";
+import { fetchUpstream, listProxies, resolveProxyForKey } from "../.server/proxy-resolver";
 import { useStreaming } from "../hooks/use-streaming";
 import { MessageInput } from "../components/message-input";
 import { StreamingResponse } from "../components/streaming-response";
@@ -78,12 +80,15 @@ export async function loader({ params }: Route.LoaderArgs) {
       )
     : [];
 
+  const proxies = listProxies();
+
 return {
     provider: provider ?? null,
     keys,
     models,
     missingModels,
     entry: entry ?? null,
+    proxies,
   };
 }
 
@@ -121,10 +126,12 @@ export async function action({ request, params }: Route.ActionArgs) {
     try {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), 5000);
-      const res = await fetch(modelsUrl, {
-        headers,
-        signal: controller.signal,
-      });
+      const proxy = resolveProxyForKey(id, key.proxy_id ?? null);
+      const res = await fetchUpstream(
+        modelsUrl,
+        { headers, signal: controller.signal },
+        proxy,
+      );
       clearTimeout(timer);
       if (res.ok) {
         return { test: { ok: true, okId: keyId, message: "Terhubung" } };
@@ -171,6 +178,13 @@ export async function action({ request, params }: Route.ActionArgs) {
     return null;
   }
 
+  if (intent === "set-key-proxy") {
+    const keyId = Number(form.get("key_id"));
+    const proxyIdRaw = String(form.get("proxy_id") ?? "").trim();
+    setKeyProxy(keyId, proxyIdRaw === "" ? null : Number(proxyIdRaw));
+    return null;
+  }
+
   if (intent === "active-key") {
     setApiKeyActive(Number(form.get("key_id")), form.get("is_active") === "1");
     return null;
@@ -186,9 +200,10 @@ export async function action({ request, params }: Route.ActionArgs) {
   }
 
   if (intent === "delete-provider") {
-    query("DELETE FROM providers WHERE id = ?").run(id);
-    query("DELETE FROM models WHERE provider_id = ?").run(id);
+    query("DELETE FROM provider_proxies WHERE provider_id = ?").run(id);
     query("DELETE FROM provider_credentials WHERE provider_id = ?").run(id);
+    query("DELETE FROM models WHERE provider_id = ?").run(id);
+    query("DELETE FROM providers WHERE id = ?").run(id);
     reload();
     return { deleted: true };
   }
@@ -233,7 +248,7 @@ function TabButton({
 }
 
 export default function ProviderDetail({ loaderData }: Route.ComponentProps) {
-  const { provider, keys, models, missingModels, entry } = loaderData;
+  const { provider, keys, models, missingModels, entry, proxies } = loaderData;
   const [tab, setTab] = useState<"keys" | "models" | "chat">("keys");
   const [addOpen, setAddOpen] = useState(false);
   const [label, setLabel] = useState("");
@@ -421,6 +436,26 @@ export default function ProviderDetail({ loaderData }: Route.ComponentProps) {
                   </div>
 
                   <div className="flex flex-wrap items-center gap-2">
+                    <Form method="post">
+                      <input type="hidden" name="intent" value="set-key-proxy" />
+                      <input type="hidden" name="key_id" value={key.id} />
+                      <div className="flex items-center gap-1">
+                        <select
+                          name="proxy_id"
+                          defaultValue={key.proxy_id ?? ""}
+                          onChange={(e) => e.target.form?.requestSubmit()}
+                          className="rounded-lg border border-gray-300 px-2 py-1.5 text-xs text-gray-700 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300"
+                        >
+                          <option value="">direct</option>
+                          {proxies.map((p) => (
+                            <option key={p.id} value={p.id}>
+                              {p.protocol}://{p.host}:{p.port}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    </Form>
+
                     <KeyTestButton
                       fetcher={fetcher}
                       keyId={key.id}
