@@ -20,6 +20,7 @@ import { checkAllowlist } from "../.server/guard";
 import { recordProxyLog, recordRequestLog } from "../.server/logger";
 import { getProviders, reload, type Provider } from "../.server/registry";
 import { evaluateRules } from "../.server/rules";
+import { resolveProxyCandidates } from "../.server/proxy-resolver";
 
 function json(payload: unknown, status = 200): Response {
   return new Response(JSON.stringify(payload), {
@@ -243,6 +244,7 @@ export async function action({ request }: Route.ActionArgs) {
       headers: transformed.headers,
       body: transformed.body,
       signal: request.signal,
+      proxies: resolveProxyCandidates(provider.id),
       onComplete: (log) => {
         recordRequestLog({
           model: effectiveModel,
