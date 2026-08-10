@@ -49,23 +49,32 @@ export function hashKey(raw: string): string {
   return createHash("sha256").update(raw).digest("hex");
 }
 
-export function generateKey(): string {
+export function generateKey(prefix = "sk-"): string {
+  const normalized = normalizePrefix(prefix);
   const bytes = crypto.getRandomValues(new Uint8Array(20));
   const hex = Array.from(bytes)
     .map((b) => b.toString(16).padStart(2, "0"))
     .join("");
-  return `sk-${hex}`;
+  return `${normalized}${hex}`;
+}
+
+export function normalizePrefix(prefix: string | null | undefined): string {
+  const trimmed = (prefix ?? "sk-").trim();
+  if (!trimmed) return "sk-";
+  return /^[A-Za-z0-9_-]+$/.test(trimmed) ? trimmed : "sk-";
 }
 
 export type CreateClientKeyInput = {
   name: string;
+  prefix?: string | null;
   allowedModels?: string[] | null;
   modelOverride?: string | null;
   pinnedProviderId?: string | null;
 };
 
 export function createClientKey(input: CreateClientKeyInput): { key: string; id: number } {
-  const key = generateKey();
+  const prefix = normalizePrefix(input.prefix);
+  const key = generateKey(prefix);
   const allowed = Array.isArray(input.allowedModels) && input.allowedModels.length > 0
     ? JSON.stringify(input.allowedModels)
     : null;
@@ -75,7 +84,7 @@ export function createClientKey(input: CreateClientKeyInput): { key: string; id:
   ).run(
     input.name,
     hashKey(key),
-    key.slice(0, 8),
+    prefix,
     allowed,
     input.modelOverride?.trim() ? input.modelOverride.trim() : null,
     input.pinnedProviderId?.trim() ? input.pinnedProviderId.trim() : null,

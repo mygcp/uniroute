@@ -1,5 +1,14 @@
 import "./test-env";
-import { afterAll, describe, expect, test } from "bun:test";
+import { randomUUID } from "node:crypto";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { resetTestDb } from "./test-db";
+
+process.env.DATABASE_URL = `/tmp/uniroute-compressor-test-${randomUUID()}.db`;
+
+beforeAll(async () => {
+  await resetTestDb();
+});
+
 import {
   compress,
   getSettings,

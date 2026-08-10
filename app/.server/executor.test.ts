@@ -1,6 +1,15 @@
 import "./test-env";
-import { describe, expect, test } from "bun:test";
-import { executeStreaming } from "./executor";
+import { randomUUID } from "node:crypto";
+import { beforeAll, describe, expect, test } from "bun:test";
+import { resetTestDb } from "./test-db";
+
+process.env.DATABASE_URL = `/tmp/uniroute-executor-test-${randomUUID()}.db`;
+
+beforeAll(async () => {
+  await resetTestDb();
+});
+
+import { executeJson, executeStreaming } from "./executor";
 import type { ExecutorOptions } from "./executor";
 
 type Calls = { url: string; init: Record<string, unknown> }[];
@@ -79,5 +88,40 @@ describe("executeStreaming proxy failover", () => {
     const res = await executeStreaming(options(undefined));
     expect(res.status).toBe(200);
     expect(calls.length).toBe(1);
+  });
+});
+
+describe("executeJson", () => {
+  test("returns parsed upstream json on success", async () => {
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify({ choices: [{ message: { content: "hi" } }] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      })) as unknown as typeof fetch;
+    const result = await executeJson(options(undefined));
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.status).toBe(200);
+      expect(result.json).toMatchObject({ choices: [{ message: { content: "hi" } }] });
+    }
+  });
+
+  test("returns error for invalid upstream json", async () => {
+    globalThis.fetch = (async () => new Response("not json", { status: 200 })) as unknown as typeof fetch;
+    const result = await executeJson(options(undefined));
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.status).toBe(502);
+    }
+  });
+
+  test("forwards upstream error status", async () => {
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify({ error: { message: "bad" } }), { status: 400 })) as unknown as typeof fetch;
+    const result = await executeJson(options(undefined));
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.status).toBe(400);
+    }
   });
 });

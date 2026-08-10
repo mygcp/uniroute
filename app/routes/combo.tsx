@@ -12,6 +12,7 @@ type ModelRow = {
   context_length: number | null;
   is_primary: number;
   is_active: number;
+  is_public: number;
 };
 
 type LbRow = {
@@ -37,7 +38,7 @@ export function loader() {
     "SELECT id, name FROM providers ORDER BY id",
   ).all() as unknown as { id: string; name: string }[];
   const models = query(
-    "SELECT id, model_name, provider_id, context_length, is_primary, is_active FROM models ORDER BY id",
+    "SELECT id, model_name, provider_id, context_length, is_primary, is_active, is_public FROM models ORDER BY id",
   ).all() as unknown as ModelRow[];
   const lb = query(
     "SELECT model_name, strategy, fallback_enabled, health_check_enabled, health_check_url, health_check_interval FROM load_balancing ORDER BY model_name",
@@ -58,6 +59,15 @@ export async function action({ request }: Route.ActionArgs) {
     const intent = String(form.get("intent"));
     if (intent === "delete") {
       query("DELETE FROM models WHERE id = ?").run(Number(form.get("id")));
+      reload();
+      return null;
+    }
+    if (intent === "public") {
+      const modelId = Number(form.get("id"));
+      const current = query("SELECT is_public FROM models WHERE id = ?").get(modelId) as { is_public: number } | undefined;
+      if (current !== undefined) {
+        query("UPDATE models SET is_public = ? WHERE id = ?").run(current.is_public === 1 ? 0 : 1, modelId);
+      }
       reload();
       return null;
     }
@@ -203,6 +213,7 @@ export default function Combo({ loaderData }: Route.ComponentProps) {
                   <th className="py-3 pr-4">Provider</th>
                   <th className="py-3 pr-4">Context</th>
                   <th className="py-3 pr-4">Primary</th>
+                  <th className="py-3 pr-4">Public</th>
                   <th className="py-3">Actions</th>
                 </tr>
               </thead>
@@ -216,6 +227,22 @@ export default function Combo({ loaderData }: Route.ComponentProps) {
                       {m.is_primary ? (
                         <span className="rounded bg-blue-100 px-2 py-0.5 text-xs text-blue-700 dark:bg-blue-900/50 dark:text-blue-300">primary</span>
                       ) : null}
+                    </td>
+                    <td className="py-2 pr-4">
+                      <Form method="post">
+                        <input type="hidden" name="section" value="mapping" />
+                        <input type="hidden" name="intent" value="public" />
+                        <input type="hidden" name="id" value={m.id} />
+                        <button
+                          className={`rounded px-2 py-0.5 text-xs font-medium transition ${
+                            m.is_public
+                              ? "bg-green-100 text-green-700 hover:bg-green-200 dark:bg-green-900/50 dark:text-green-300"
+                              : "bg-gray-100 text-gray-500 hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-400 dark:hover:bg-gray-700"
+                          }`}
+                        >
+                          {m.is_public ? "ON" : "OFF"}
+                        </button>
+                      </Form>
                     </td>
                     <td className="py-2">
                       <Form method="post">

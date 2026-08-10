@@ -10,6 +10,7 @@ let createSession: () => string;
 
 beforeAll(async () => {
   const db = await import("./db");
+  db.resetDb();
   const ck = await import("./client-key");
   const auth = await import("./auth");
   const route = await import("../routes/v1.chat.completions");

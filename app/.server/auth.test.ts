@@ -1,14 +1,39 @@
-import { afterAll, beforeEach, describe, expect, test } from "bun:test";
-import {
-  SESSION_COOKIE,
-  clearSessionCookie,
-  createSession,
-  destroySession,
-  getSessionToken,
-  isValid,
-  setSessionCookie,
-  verifyPassword,
-} from "./auth";
+import { randomUUID } from "node:crypto";
+
+process.env.DATABASE_URL = `/tmp/uniroute-auth-test-${randomUUID()}.db`;
+
+import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import { resetTestDb } from "./test-db";
+
+let SESSION_COOKIE: string;
+let clearSessionCookie: (res: Response) => void;
+let createSession: () => string;
+let destroySession: (token: string) => void;
+let getSessionToken: (req: Request) => string | null;
+let isValid: (token: string | null | undefined) => boolean;
+let setSessionCookie: (res: Response, token: string) => void;
+let verifyPassword: (pw: string) => boolean;
+
+beforeAll(async () => {
+  await resetTestDb();
+  const auth = await import("./auth");
+  SESSION_COOKIE = auth.SESSION_COOKIE;
+  clearSessionCookie = auth.clearSessionCookie;
+  createSession = auth.createSession;
+  destroySession = auth.destroySession;
+  getSessionToken = auth.getSessionToken;
+  isValid = auth.isValid;
+  setSessionCookie = auth.setSessionCookie;
+  verifyPassword = auth.verifyPassword;
+});
+
+afterAll(() => {
+  try {
+    Bun.spawnSync(["rm", "-f", `${process.env.DATABASE_URL!}*`]);
+  } catch {
+    /* ignore */
+  }
+});
 
 describe("auth sessions", () => {
   test("created sessions are valid until destroyed", () => {

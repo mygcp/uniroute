@@ -1,5 +1,14 @@
 import "./test-env";
-import { afterAll, describe, expect, test } from "bun:test";
+import { randomUUID } from "node:crypto";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { resetTestDb } from "./test-db";
+
+process.env.DATABASE_URL = `/tmp/uniroute-adapter-test-${randomUUID()}.db`;
+
+beforeAll(async () => {
+  await resetTestDb();
+});
+
 import { createStreamTransformer, transformRequest } from "./adapter";
 import { deleteApiKey, setApiKey } from "./credential";
 import { exec } from "./db";
@@ -94,11 +103,47 @@ describe("transformRequest", () => {
     deleteApiKey("dahl");
   });
 
+  test("anthropic provider resolves to /v1/messages", () => {
+    setApiKey("anthropic", "anthropic-key");
+    const { url, headers } = transformRequest(
+      { model: "claude-sonnet-4", max_tokens: 100 },
+      {
+        ...TEST_PROVIDER,
+        id: "anthropic",
+        base_url: "https://api.anthropic.com",
+        auth_type: "bearer",
+      },
+    );
+    expect(url).toBe("https://api.anthropic.com/v1/messages");
+    expect(headers.get("Authorization")).toBe("Bearer anthropic-key");
+    deleteApiKey("anthropic");
+  });
+
+  test("gemini provider resolves to /v1beta/models/{model}:generateContent", () => {
+    setApiKey("gemini", "gemini-key");
+    const { url } = transformRequest(
+      { contents: [] },
+      {
+        ...TEST_PROVIDER,
+        id: "gemini",
+        base_url: "https://generativelanguage.googleapis.com",
+        auth_type: "apikey",
+      },
+      { model: "gemini-2.0-flash" },
+    );
+    expect(url).toBe(
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent",
+    );
+    deleteApiKey("gemini");
+  });
+
   afterAll(() => {
     deleteApiKey("test-provider");
     deleteApiKey("test-apikey");
     deleteApiKey("dahl");
-    exec("DELETE FROM provider_credentials WHERE provider_id IN ('test-provider', 'test-apikey', 'dahl')");
+    deleteApiKey("anthropic");
+    deleteApiKey("gemini");
+    exec("DELETE FROM provider_credentials WHERE provider_id IN ('test-provider', 'test-apikey', 'dahl', 'anthropic', 'gemini')");
   });
 });
 

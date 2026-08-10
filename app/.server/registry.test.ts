@@ -10,6 +10,7 @@ let db: DbModule;
 
 beforeAll(async () => {
   db = await import("./db");
+  db.resetDb();
   reg = await import("./registry");
   db.seed();
   for (const id of ["openai", "groq", "openrouter", "anthropic"]) {

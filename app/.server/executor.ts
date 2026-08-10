@@ -1,6 +1,7 @@
 import { createStreamTransformer } from "./adapter";
 import type { RequestLog } from "./logger";
 import { fetchUpstream, type ProxyConfig } from "./proxy-resolver";
+import type { StreamTransformer } from "./translate/canonical";
 
 export type ExecutorOptions = {
   url: string;
@@ -8,6 +9,7 @@ export type ExecutorOptions = {
   body: string;
   signal?: AbortSignal;
   proxies?: ProxyConfig[];
+  streamTransformer?: StreamTransformer;
   onComplete: (
     log: Partial<RequestLog> & Pick<RequestLog, "status">,
   ) => void;
@@ -64,7 +66,7 @@ async function attempt(
       };
     }
 
-    return { ok: true, response: buildStreamResponse(upstream, controller, options) };
+    return { ok: true, response: upstream };
   } catch (err) {
     controller.abort();
     const raw = err instanceof Error ? err.message : String(err);
@@ -81,6 +83,22 @@ async function attempt(
   }
 }
 
+async function runWithRetry(options: ExecutorOptions): Promise<AttemptResult> {
+  const proxies = options.proxies ?? [];
+  if (proxies.length > 0) {
+    let result = await attempt(options, proxies[0]);
+    for (let i = 1; i < proxies.length && !result.ok && result.retryable; i++) {
+      result = await attempt(options, proxies[i]);
+    }
+    return result;
+  }
+  let result = await attempt(options);
+  if (!result.ok && result.retryable) {
+    result = await attempt(options);
+  }
+  return result;
+}
+
 function countDeltaContent(text: string): number {
   const re = /"delta":\{"content":"((?:[^"\\]|\\.)*)"/g;
   let tokens = 0;
@@ -93,13 +111,14 @@ function countDeltaContent(text: string): number {
 
 function buildStreamResponse(
   upstream: Response,
-  controller: AbortController,
   options: ExecutorOptions,
+  transformer: StreamTransformer,
 ): Response {
+  const controller = new AbortController();
+  const abortFromCaller = (): void => controller.abort();
+  options.signal?.addEventListener("abort", abortFromCaller);
   const started = Date.now();
   const reader = upstream.body!.getReader();
-  const transformer = createStreamTransformer();
-  let doneSaw = false;
   let completionTokens = 0;
   let finalized = false;
 
@@ -124,15 +143,14 @@ function buildStreamResponse(
           const output = transformer.transform(value);
           if (output.byteLength === 0) continue;
           const text = new TextDecoder().decode(output);
-          if (text.includes("[DONE]")) doneSaw = true;
-          completionTokens += countDeltaContent(text);
+          completionTokens +=
+            transformer.countTokens?.(text) ?? countDeltaContent(text);
           wsController.enqueue(output);
         }
         const rest = transformer.flush();
         if (rest.byteLength > 0) wsController.enqueue(rest);
-        if (!doneSaw) {
-          wsController.enqueue(new TextEncoder().encode("data: [DONE]\n\n"));
-        }
+        const term = transformer.terminate?.() ?? new Uint8Array(0);
+        if (term.byteLength > 0) wsController.enqueue(term);
         wsController.close();
         finalize({ status: "success" });
       } catch (err) {
@@ -146,11 +164,13 @@ function buildStreamResponse(
       } finally {
         reader.releaseLock();
         controller.abort();
+        options.signal?.removeEventListener("abort", abortFromCaller);
       }
     },
     cancel() {
       finalize({ status: "error", error_message: "client disconnected" });
       controller.abort();
+      options.signal?.removeEventListener("abort", abortFromCaller);
     },
   });
 
@@ -168,20 +188,8 @@ export async function executeStreaming(
   options: ExecutorOptions,
 ): Promise<Response> {
   const started = Date.now();
-  const proxies = options.proxies ?? [];
-
-  let result: AttemptResult;
-  if (proxies.length > 0) {
-    result = await attempt(options, proxies[0]);
-    for (let i = 1; i < proxies.length && !result.ok && result.retryable; i++) {
-      result = await attempt(options, proxies[i]);
-    }
-  } else {
-    result = await attempt(options);
-    if (!result.ok && result.retryable) {
-      result = await attempt(options);
-    }
-  }
+  const transformer = options.streamTransformer ?? createStreamTransformer();
+  const result = await runWithRetry(options);
 
   if (!result.ok) {
     options.onComplete({
@@ -195,5 +203,43 @@ export async function executeStreaming(
     });
   }
 
-  return result.response;
+  return buildStreamResponse(result.response, options, transformer);
+}
+
+export type JsonExecutorResult =
+  | { ok: true; status: number; json: unknown }
+  | { ok: false; status: number; error: string };
+
+export async function executeJson(
+  options: ExecutorOptions,
+): Promise<JsonExecutorResult> {
+  const started = Date.now();
+  const result = await runWithRetry(options);
+
+  if (!result.ok) {
+    options.onComplete({
+      status: "error",
+      error_message: result.detailText,
+      duration_ms: Date.now() - started,
+    });
+    return { ok: false, status: result.status, error: result.detailText };
+  }
+
+  const text = await result.response.text();
+  let json: unknown;
+  try {
+    json = JSON.parse(text);
+  } catch {
+    options.onComplete({
+      status: "error",
+      error_message: "invalid upstream json",
+      duration_ms: Date.now() - started,
+    });
+    return { ok: false, status: 502, error: "invalid upstream json" };
+  }
+  options.onComplete({
+    status: "success",
+    duration_ms: Date.now() - started,
+  });
+  return { ok: true, status: result.response.status, json };
 }

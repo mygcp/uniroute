@@ -12,6 +12,7 @@ import {
   setRequireApiKey,
   updateClientKeyRules,
 } from "../.server/client-key";
+import { isModelsPublic, setModelsPublic } from "../.server/model-public";
 
 type AllowlistRow = {
   id: number;
@@ -40,18 +41,28 @@ export function loader() {
   ).all() as unknown as RuleRow[];
   const clientKeys = listClientKeys();
   const requireApiKey = isRequireApiKey();
-  return { allowlist, rules, clientKeys, requireApiKey };
+  const modelsPublic = isModelsPublic();
+  return { allowlist, rules, clientKeys, requireApiKey, modelsPublic };
 }
 
 export async function action({ request }: Route.ActionArgs) {
   const form = await request.formData();
   const section = String(form.get("section"));
 
+  if (section === "settings") {
+    const intent = String(form.get("intent"));
+    if (intent === "models_public") {
+      setModelsPublic(form.get("enabled") === "1");
+      return null;
+    }
+  }
+
   if (section === "client-key") {
     const intent = String(form.get("intent"));
     if (intent === "create") {
       const { key } = createClientKey({
         name: String(form.get("name") ?? "").trim() || "Untitled",
+        prefix: String(form.get("prefix") ?? "sk-").trim() || "sk-",
       });
       return { newlyCreatedKey: key, createName: String(form.get("name") ?? "") };
     }
@@ -138,7 +149,7 @@ function inputClass() {
 }
 
 export default function Api({ loaderData, actionData }: Route.ComponentProps) {
-  const { allowlist, rules, clientKeys, requireApiKey } = loaderData;
+  const { allowlist, rules, clientKeys, requireApiKey, modelsPublic } = loaderData;
   const [tab, setTab] = useState<"keys" | "allowlist" | "rules">("keys");
 
   const newKey = actionData
@@ -193,6 +204,33 @@ export default function Api({ loaderData, actionData }: Route.ComponentProps) {
 
       {tab === "keys" ? (
         <ApiKeysTab requireApiKey={requireApiKey} keys={clientKeys} newKey={newKey} />
+      ) : null}
+
+      {tab === "keys" ? (
+        <div className="mt-4 rounded-xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-gray-900">
+          <Form method="post" className="flex items-center justify-between gap-4">
+            <input type="hidden" name="section" value="settings" />
+            <input type="hidden" name="intent" value="models_public" />
+            <div>
+              <h3 className="text-sm font-semibold text-gray-900 dark:text-white">Public Models</h3>
+              <p className="text-xs text-gray-500 dark:text-gray-400">
+                Jika aktif, <code>/v1/models</code> bisa diakses tanpa auth dan hanya menampilkan model bertanda <em>public</em>.
+              </p>
+            </div>
+            <button
+              name="enabled"
+              value={modelsPublic ? "0" : "1"}
+              type="submit"
+              className={`rounded-lg px-4 py-2 text-sm font-medium transition ${
+                modelsPublic
+                  ? "bg-green-600 text-white hover:bg-green-700"
+                  : "bg-gray-200 text-gray-700 hover:bg-gray-300 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600"
+              }`}
+            >
+              {modelsPublic ? "ON" : "OFF"}
+            </button>
+          </Form>
+        </div>
       ) : null}
 
       {tab === "allowlist" ? (
@@ -449,25 +487,38 @@ function ApiKeysTab({
         >
           <input type="hidden" name="section" value="client-key" />
           <input type="hidden" name="intent" value="create" />
-          <label className="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-300">
-            Label
-          </label>
-          <div className="flex gap-2">
-            <input
-              name="name"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              required
-              placeholder="mis. Frontend Web"
-              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 placeholder-gray-400 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
-            />
-            <button
-              type="submit"
-              className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
-            >
-              Buat
-            </button>
+          <div className="mb-2 grid grid-cols-2 gap-2">
+            <div>
+              <label className="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-300">
+                Label
+              </label>
+              <input
+                name="name"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                required
+                placeholder="mis. Frontend Web"
+                className={inputClass()}
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-300">
+                Prefix key
+              </label>
+              <input
+                name="prefix"
+                defaultValue="sk-"
+                placeholder="sk-"
+                className={inputClass()}
+              />
+            </div>
           </div>
+          <button
+            type="submit"
+            className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+          >
+            Buat
+          </button>
         </Form>
       ) : null}
 

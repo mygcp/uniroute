@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
+import { resetTestDb } from "./test-db";
 
 process.env.DATABASE_URL = `/tmp/uniroute-client-key-test-${randomUUID()}.db`;
 
@@ -7,6 +8,7 @@ type ClientKeyModule = typeof import("./client-key");
 let ck: ClientKeyModule;
 
 beforeAll(async () => {
+  await resetTestDb();
   ck = await import("./client-key");
 });
 
@@ -27,6 +29,19 @@ describe("client key generation & hashing", () => {
     expect(a.length).toBeGreaterThan(10);
   });
 
+  test("generateKey honors a custom prefix", () => {
+    const k = ck.generateKey("ur-");
+    expect(k.startsWith("ur-")).toBe(true);
+    expect(k).not.toContain("sk-");
+  });
+
+  test("generateKey falls back to sk- for invalid prefixes", () => {
+    expect(ck.generateKey("").startsWith("sk-")).toBe(true);
+    expect(ck.generateKey("  ").startsWith("sk-")).toBe(true);
+    expect(ck.generateKey("has space").startsWith("sk-")).toBe(true);
+    expect(ck.generateKey("bad.prefix!").startsWith("sk-")).toBe(true);
+  });
+
   test("hashKey produces 64-char hex and differs per input", () => {
     const h = ck.hashKey("secret-1");
     expect(h).toMatch(/^[0-9a-f]{64}$/);
@@ -43,7 +58,15 @@ describe("create & resolve client key", () => {
     expect(stored).toBeDefined();
     expect(stored!.key_hash).toBe(ck.hashKey(key));
     expect(stored!.key_hash).not.toContain(key);
-    expect(stored!.key_prefix).toBe(key.slice(0, 8));
+    expect(stored!.key_prefix).toBe("sk-");
+  });
+
+  test("createClientKey persists a custom prefix", () => {
+    const { key, id } = ck.createClientKey({ name: "Frontend", prefix: "ur-" });
+    expect(key.startsWith("ur-")).toBe(true);
+    const stored = ck.getClientKeyById(id);
+    expect(stored?.key_prefix).toBe("ur-");
+    ck.deleteClientKey(id);
   });
 
   test("resolveClientKey returns the key row for a valid token", () => {

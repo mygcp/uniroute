@@ -13,57 +13,80 @@ type StatementApi = {
   all(...params: unknown[]): Record<string, unknown>[];
 };
 
-const dbPath = process.env.DATABASE_URL ?? "./data/uniroute.db";
-mkdirSync(path.dirname(dbPath), { recursive: true });
-
 const require = createRequire(import.meta.url);
 
-let db: SqliteApi;
+let db!: SqliteApi;
+let opened = false;
 
-try {
-  // Bun runtime
-  const { Database } = require("bun:sqlite") as {
-    Database: new (p: string, opts: { create: boolean }) => SqliteApi;
-  };
-  db = new Database(dbPath, { create: true });
-} catch {
-  // Node runtime (dev server / vite SSR)
-  const { DatabaseSync } = require("node:sqlite") as {
-    DatabaseSync: new (p: string) => SqliteApi;
-  };
-  db = new DatabaseSync(dbPath);
+function openDb(): void {
+  const dbPath = process.env.DATABASE_URL ?? "./data/uniroute.db";
+  mkdirSync(path.dirname(dbPath), { recursive: true });
+  try {
+    // Bun runtime
+    const { Database } = require("bun:sqlite") as {
+      Database: new (p: string, opts: { create: boolean }) => SqliteApi;
+    };
+    db = new Database(dbPath, { create: true });
+  } catch {
+    // Node runtime (dev server / vite SSR)
+    const { DatabaseSync } = require("node:sqlite") as {
+      DatabaseSync: new (p: string) => SqliteApi;
+    };
+    db = new DatabaseSync(dbPath);
+  }
+  db.exec("PRAGMA journal_mode = WAL;");
+  db.exec("PRAGMA foreign_keys = ON;");
+  opened = true;
+  try {
+    initSchema();
+  } catch (err) {
+    opened = false;
+    throw err;
+  }
 }
 
-db.exec("PRAGMA journal_mode = WAL;");
-db.exec("PRAGMA foreign_keys = ON;");
+function ensureDb(): SqliteApi {
+  if (!opened) {
+    openDb();
+  }
+  return db;
+}
 
 /**
  * Statement factory compatible with bun:sqlite (`.query`) and node:sqlite
  * (`.prepare`). Statement results are normalized to `Record<string, unknown>[]`.
  */
 export function query(sql: string): StatementApi {
-  const q = (db as { query?: (sql: string) => unknown }).query;
+  const conn = ensureDb();
+  const q = (conn as { query?: (sql: string) => unknown }).query;
   if (typeof q === "function") {
-    return q.call(db, sql) as StatementApi;
+    return q.call(conn, sql) as StatementApi;
   }
-  const prepare = (db as { prepare?: (sql: string) => unknown }).prepare;
+  const prepare = (conn as { prepare?: (sql: string) => unknown }).prepare;
   if (typeof prepare === "function") {
-    return prepare.call(db, sql) as StatementApi;
+    return prepare.call(conn, sql) as StatementApi;
   }
   throw new Error("sqlite API not available");
 }
 
-export const exec = (sql: string): void => db.exec(sql);
+export const exec = (sql: string): void => ensureDb().exec(sql);
 
 /** Tutup koneksi SQLite — dipanggil saat graceful shutdown. */
 export function closeDb(): void {
   try {
-    db.close();
+    if (opened) db.close();
   } catch {
     /* already closed */
   }
+  opened = false;
 }
 
+/** Re-open the connection from the current DATABASE_URL on next use. */
+export function resetDb(): void {
+  closeDb();
+}
+
+function initSchema(): void {
 db.exec(`CREATE TABLE IF NOT EXISTS providers (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
@@ -234,6 +257,18 @@ db.exec(`CREATE TABLE IF NOT EXISTS settings (
   if (credCols.length > 0 && !credCols.includes("proxy_id")) {
     db.exec("ALTER TABLE provider_credentials ADD COLUMN proxy_id INTEGER");
   }
+}
+
+{
+  const modelCols = (
+    query("PRAGMA table_info(models)").all() as {
+      name: string;
+    }[]
+  ).map((c) => c.name);
+  if (modelCols.length > 0 && !modelCols.includes("is_public")) {
+    db.exec("ALTER TABLE models ADD COLUMN is_public INTEGER NOT NULL DEFAULT 0");
+  }
+}
 }
 
 export function seed() {

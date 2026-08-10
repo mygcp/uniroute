@@ -1,5 +1,16 @@
 import "./test-env";
-import { describe, expect, test } from "bun:test";
+import { randomUUID } from "node:crypto";
+import { beforeAll, describe, expect, test } from "bun:test";
+import { resetTestDb } from "./test-db";
+
+process.env.DATABASE_URL = `/tmp/uniroute-balancer-test-${randomUUID()}.db`;
+
+beforeAll(async () => {
+  await resetTestDb();
+  const db = await import("./db");
+  db.seed();
+});
+
 import {
   beginConnection,
   endConnection,

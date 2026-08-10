@@ -8,14 +8,32 @@ export type TransformResult = {
   body: string;
 };
 
+function resolveUrl(
+  provider: Provider,
+  entry: ReturnType<typeof getRegistryEntry>,
+  model?: string,
+): string {
+  if (entry?.urlSuffix) {
+    return `${provider.base_url.replace(/\/+$/, "")}/${entry.urlSuffix}`;
+  }
+  const base = provider.base_url.replace(/\/+$/, "");
+  const format = entry?.format ?? "openai";
+  if (format === "anthropic") {
+    return `${base}/v1/messages`;
+  }
+  if (format === "gemini") {
+    return `${base}/v1beta/models/${encodeURIComponent(model ?? "")}:generateContent`;
+  }
+  return new URL("/v1/chat/completions", provider.base_url).toString();
+}
+
 export function transformRequest(
   body: Record<string, unknown>,
   provider: Provider,
+  opts?: { model?: string },
 ): TransformResult {
   const entry = getRegistryEntry(provider.id);
-  const url = entry?.urlSuffix
-    ? `${provider.base_url.replace(/\/+$/, "")}/${entry.urlSuffix}`
-    : new URL("/v1/chat/completions", provider.base_url).toString();
+  const url = resolveUrl(provider, entry, opts?.model);
   const headers = new Headers({ "Content-Type": "application/json" });
 
   if (entry?.authHeader) {
