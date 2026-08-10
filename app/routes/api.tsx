@@ -150,7 +150,6 @@ function inputClass() {
 
 export default function Api({ loaderData, actionData }: Route.ComponentProps) {
   const { allowlist, rules, clientKeys, requireApiKey, modelsPublic } = loaderData;
-  const [tab, setTab] = useState<"keys" | "allowlist" | "rules">("keys");
 
   const newKey = actionData
     ? (actionData as { newlyCreatedKey?: string; createName?: string }).newlyCreatedKey
@@ -166,77 +165,40 @@ export default function Api({ loaderData, actionData }: Route.ComponentProps) {
       <h1 className="mb-6 flex items-center gap-2 text-2xl font-bold text-gray-900 dark:text-white">
         <KeyRound size={24} /> API Management
       </h1>
-      <div className="tabs-scroll mb-6">
-        <button
-          type="button"
-          onClick={() => setTab("keys")}
-          className={`shrink-0 rounded-lg px-4 py-2 text-sm font-medium ${
-            tab === "keys"
-              ? "bg-blue-600 text-white"
-              : "bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700"
-          }`}
-        >
-          API Keys
-        </button>
-        <button
-          type="button"
-          onClick={() => setTab("allowlist")}
-          className={`shrink-0 rounded-lg px-4 py-2 text-sm font-medium ${
-            tab === "allowlist"
-              ? "bg-blue-600 text-white"
-              : "bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700"
-          }`}
-        >
-          Model Allowlist
-        </button>
-        <button
-          type="button"
-          onClick={() => setTab("rules")}
-          className={`shrink-0 rounded-lg px-4 py-2 text-sm font-medium ${
-            tab === "rules"
-              ? "bg-blue-600 text-white"
-              : "bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700"
-          }`}
-        >
-          Routing Rules
-        </button>
+
+      <ApiKeysTab requireApiKey={requireApiKey} keys={clientKeys} newKey={newKey} />
+
+      <div className="mt-4 rounded-xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-gray-900">
+        <Form method="post" className="flex items-center justify-between gap-4">
+          <input type="hidden" name="section" value="settings" />
+          <input type="hidden" name="intent" value="models_public" />
+          <div>
+            <h3 className="text-sm font-semibold text-gray-900 dark:text-white">Public Models</h3>
+            <p className="text-xs text-gray-500 dark:text-gray-400">
+              Jika aktif, <code>/v1/models</code> bisa diakses tanpa auth dan hanya menampilkan model bertanda <em>public</em>.
+            </p>
+          </div>
+          <button
+            name="enabled"
+            value={modelsPublic ? "0" : "1"}
+            type="submit"
+            className={`rounded-lg px-4 py-2 text-sm font-medium transition ${
+              modelsPublic
+                ? "bg-green-600 text-white hover:bg-green-700"
+                : "bg-gray-200 text-gray-700 hover:bg-gray-300 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600"
+            }`}
+          >
+            {modelsPublic ? "ON" : "OFF"}
+          </button>
+        </Form>
       </div>
 
-      {tab === "keys" ? (
-        <ApiKeysTab requireApiKey={requireApiKey} keys={clientKeys} newKey={newKey} />
-      ) : null}
-
-      {tab === "keys" ? (
-        <div className="mt-4 rounded-xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-gray-900">
-          <Form method="post" className="flex items-center justify-between gap-4">
-            <input type="hidden" name="section" value="settings" />
-            <input type="hidden" name="intent" value="models_public" />
-            <div>
-              <h3 className="text-sm font-semibold text-gray-900 dark:text-white">Public Models</h3>
-              <p className="text-xs text-gray-500 dark:text-gray-400">
-                Jika aktif, <code>/v1/models</code> bisa diakses tanpa auth dan hanya menampilkan model bertanda <em>public</em>.
-              </p>
-            </div>
-            <button
-              name="enabled"
-              value={modelsPublic ? "0" : "1"}
-              type="submit"
-              className={`rounded-lg px-4 py-2 text-sm font-medium transition ${
-                modelsPublic
-                  ? "bg-green-600 text-white hover:bg-green-700"
-                  : "bg-gray-200 text-gray-700 hover:bg-gray-300 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600"
-              }`}
-            >
-              {modelsPublic ? "ON" : "OFF"}
-            </button>
-          </Form>
-        </div>
-      ) : null}
-
-      {tab === "allowlist" ? (
-        <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-gray-900">
-          <Form method="post" className="mb-4 flex flex-wrap items-end gap-3">
-            <input type="hidden" name="section" value="allowlist" />
+      <div className="mt-4 rounded-xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-gray-900">
+        <h2 className="mb-3 text-lg font-semibold text-gray-900 dark:text-white">
+          Model Allowlist ({allowlist.length})
+        </h2>
+        <Form method="post" className="mb-4 flex flex-wrap items-end gap-3">
+          <input type="hidden" name="section" value="allowlist" />
             <div>
               <label className="mb-1 block text-xs text-gray-500 dark:text-gray-400">Model</label>
               <input name="model_name" required placeholder="gpt-4o" className={inputClass()} />
@@ -299,10 +261,13 @@ export default function Api({ loaderData, actionData }: Route.ComponentProps) {
           </table>
           </div>
         </div>
-      ) : (
-        <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-gray-900">
-          <Form method="post" className="mb-4 grid grid-cols-1 items-end gap-3 sm:grid-cols-4">
-            <input type="hidden" name="section" value="rules" />
+
+      <div className="mt-4 rounded-xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-gray-900">
+        <h2 className="mb-3 text-lg font-semibold text-gray-900 dark:text-white">
+          Routing Rules ({rules.length})
+        </h2>
+        <Form method="post" className="mb-4 grid grid-cols-1 items-end gap-3 sm:grid-cols-4">
+          <input type="hidden" name="section" value="rules" />
             <div>
               <label className="mb-1 block text-xs text-gray-500 dark:text-gray-400">Name</label>
               <input name="name" required className={inputClass()} />
@@ -404,7 +369,6 @@ export default function Api({ loaderData, actionData }: Route.ComponentProps) {
           </table>
           </div>
         </div>
-      )}
     </div>
   );
 }
