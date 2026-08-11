@@ -16,6 +16,8 @@ import {
 import { compress, isEnabled } from "./compressor";
 import { executeJson, executeStreaming } from "./executor";
 import { checkAllowlist } from "./guard";
+import { resolveCombo } from "./combo";
+import { runComboEngine } from "./combo-runner";
 import { recordProxyLog, recordRequestLog, type RequestLog } from "./logger";
 import { getProviders, reload, type Provider } from "./registry";
 import { evaluateRules } from "./rules";
@@ -191,7 +193,7 @@ export async function handleProxy(
   }
 
   try {
-  if (clientKey.rule && !modelAllowed(clientKey.rule, canonical.model)) {
+  if (clientKey.rule && !modelAllowed(clientKey.rule, canonical.model) && !resolveCombo(canonical.model)) {
     recordRequestLog({
       model: canonical.model,
       provider_id: "guard",
@@ -269,6 +271,21 @@ export async function handleProxy(
     ruleApplied = rule.ruleApplied;
   }
   const fallbackId = rule.action === "fallback" ? rule.targetProviderId : null;
+
+  // Combo Engine (MVP: priority chain & pipeline sequential). Model reference
+  // dari client: `combo:<nama>`. Step-level checks (allowlist key, dsb.)
+  // ditangani di combo-runner.
+  if (resolveCombo(effectiveModel)) {
+    const combo = resolveCombo(effectiveModel)!;
+    return runComboEngine({
+      combo,
+      canonical,
+      rule: clientKey.rule,
+      ruleApplied,
+      request,
+      clientFormat: config.clientFormat,
+    });
+  }
 
   const pool = getProviders(effectiveModel);
   if (pool.length === 0) {

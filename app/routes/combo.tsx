@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { Route } from "./+types/combo";
 import { Form } from "react-router";
-import { Link2 } from "lucide-react";
+import { Link2, GitBranch } from "lucide-react";
 import { query } from "../.server/db";
 import { reload } from "../.server/registry";
 
@@ -175,6 +175,12 @@ export default function Combo({ loaderData }: Route.ComponentProps) {
         {nthTab("Model Mapping", "mapping")}
         {nthTab("Load Balancing", "balancing")}
         {nthTab("Provider Pool", "pool")}
+        <a
+          href="/combo/chains"
+          className="flex items-center gap-2 rounded-lg border border-blue-300 px-4 py-2 text-sm font-medium text-blue-700 hover:bg-blue-50 dark:border-blue-700 dark:text-blue-300 dark:hover:bg-blue-950/40"
+        >
+          <GitBranch size={14} /> Combo Chains
+        </a>
       </div>
 
       {tab === "mapping" ? (

@@ -358,6 +358,40 @@ db.exec(`CREATE TABLE IF NOT EXISTS webhook_events (
   created_at INTEGER DEFAULT (unixepoch())
 );`);
 
+db.exec(`CREATE TABLE IF NOT EXISTS combos (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL UNIQUE,
+  strategy TEXT NOT NULL DEFAULT 'priority',
+  config TEXT NOT NULL DEFAULT '{}',
+  created_at INTEGER DEFAULT (unixepoch()),
+  updated_at INTEGER DEFAULT (unixepoch())
+);`);
+db.exec(`CREATE TABLE IF NOT EXISTS combo_steps (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  combo_id INTEGER NOT NULL REFERENCES combos(id) ON DELETE CASCADE,
+  step_order INTEGER NOT NULL,
+  provider_id TEXT,
+  model_id TEXT NOT NULL,
+  weight REAL NOT NULL DEFAULT 1.0,
+  prompt TEXT,
+  created_at INTEGER DEFAULT (unixepoch())
+);`);
+db.exec(`CREATE TABLE IF NOT EXISTS combo_metrics (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  combo_id INTEGER NOT NULL REFERENCES combos(id) ON DELETE CASCADE,
+  combo_name TEXT,
+  strategy TEXT,
+  step_index INTEGER,
+  model_id TEXT,
+  provider_id TEXT,
+  timestamp INTEGER DEFAULT (unixepoch()),
+  latency_ms INTEGER,
+  cost REAL,
+  success INTEGER NOT NULL DEFAULT 0,
+  tokens_used INTEGER,
+  error TEXT
+);`);
+
 // Migrate legacy single-key table (provider_id PRIMARY KEY) to multi-key schema.
 {
   const cols = (
