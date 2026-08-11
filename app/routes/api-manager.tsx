@@ -3,15 +3,14 @@ import { useState, type ReactNode } from "react";
 import type { Route } from "./+types/api-manager";
 import {
   Copy,
+  Download,
   KeyRound,
   Lock,
   LockOpen,
   Plus,
-  RefreshCw,
   RotateCw,
   Trash2,
-  Download,
-  FileJson,
+  Settings,
 } from "lucide-react";
 import { listClientKeys, isRequireApiKey, setRequireApiKey } from "../.server/client-key";
 import { computeStatus, type KeyStatus } from "../.server/key-enforce";
@@ -26,7 +25,7 @@ import {
   rotateKey,
   suspendKey,
 } from "../.server/key-ops";
-import { applyBulk, exportKeysCsv, type BulkAction } from "../.server/key-bulk";
+import { applyBulk, type BulkAction } from "../.server/key-bulk";
 import { decryptKey } from "../.server/key-crypto";
 
 export function loader() {
@@ -109,24 +108,12 @@ export async function action({ request }: Route.ActionArgs) {
       {},
       selected.length > 0 ? selected : undefined,
     );
-    if (action === "export") {
-      const format = String(form.get("format") ?? "csv");
-      const body = format === "json" ? JSON.stringify(res.exported ?? [], null, 2) : exportKeysCsv(res.exported ?? []);
-      const ext = format === "json" ? "json" : "csv";
-      return new Response(body, {
-        headers: {
-          "content-type": format === "json" ? "application/json" : "text/csv",
-          "content-disposition": `attachment; filename="api-keys.${ext}"`,
-        },
-      });
-    }
     if (action === "rotate") {
       return { newlyRotated: res.rotated ?? [] } satisfies Result;
     }
     return null;
   }
 
-  void has;
   return null;
 }
 
@@ -387,10 +374,10 @@ export default function ApiManager({ loaderData, actionData }: Route.ComponentPr
                       <RowAction intent="delete" id={r.key.id} title="Delete" icon={<Trash2 size={14} />} danger />
                       <a
                         href={`/api-manager/${r.key.id}`}
-                        title="Detail"
+                        title="Manage / Edit"
                         className="rounded border border-gray-300 p-1 text-gray-600 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-300"
                       >
-                        <RefreshCw size={14} />
+                        <Settings size={14} />
                       </a>
                     </div>
                   </td>
@@ -422,14 +409,31 @@ function StatCard({ label, value }: { label: string; value: string | number }) {
 
 function CopyButton({ value, label, small }: { value: string; label?: string; small?: boolean }) {
   const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    try {
+      await navigator.clipboard?.writeText(value);
+    } catch {
+      // Fallback untuk konteks non-HTTPS (LAN).
+      const ta = document.createElement("textarea");
+      ta.value = value;
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      try {
+        document.execCommand("copy");
+      } catch {
+        /* ignore */
+      }
+      document.body.removeChild(ta);
+    }
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  };
   return (
     <button
       type="button"
-      onClick={() => {
-        navigator.clipboard?.writeText(value);
-        setCopied(true);
-        setTimeout(() => setCopied(false), 1500);
-      }}
+      onClick={copy}
       className={`flex items-center gap-1 rounded border border-gray-300 text-gray-600 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-300 ${
         small ? "p-1" : "px-2 py-1 text-xs"
       }`}
@@ -454,8 +458,26 @@ function RowAction({
   icon: ReactNode;
   danger?: boolean;
 }) {
+  const confirmMsg =
+    intent === "delete"
+      ? "Hapus API key ini? Tindakan tidak bisa dibatalkan."
+      : intent === "rotate"
+        ? "Rotasi key ini? Key lama tetap valid selama grace period."
+        : intent === "suspend"
+          ? "Suspend API key ini? Request dengan key ini akan ditolak."
+          : null;
   return (
-    <Form method="post" className="contents">
+    <Form
+      method="post"
+      className="contents"
+      onSubmit={
+        confirmMsg
+          ? (e) => {
+              if (!window.confirm(confirmMsg)) e.preventDefault();
+            }
+          : undefined
+      }
+    >
       <input type="hidden" name="intent" value={intent} />
       <input type="hidden" name="id" value={id} />
       <button
@@ -480,8 +502,25 @@ function BulkRow({
   ids: Set<number>;
   setSelected: (s: Set<number>) => void;
 }) {
+  const confirmFor = (action: string): string | null => {
+    if (action === "delete") return `Hapus ${ids.size} API key? Tindakan tidak bisa dibatalkan.`;
+    if (action === "suspend") return `Suspend ${ids.size} API key?`;
+    if (action === "rotate") return `Rotasi ${ids.size} API key?`;
+    return null;
+  };
   return (
-    <Form method="post" className="inline-flex flex-wrap items-center gap-2">
+    <Form
+      method="post"
+      className="inline-flex flex-wrap items-center gap-2"
+      onSubmit={(e) => {
+        const target = (e.target as HTMLFormElement).elements.namedItem(
+          "bulk_action",
+        ) as HTMLButtonElement | null;
+        const action = target?.value ?? "";
+        const msg = confirmFor(action);
+        if (msg && !window.confirm(msg)) e.preventDefault();
+      }}
+    >
       <input type="hidden" name="intent" value="bulk" />
       <input type="hidden" name="selected_ids" value={Array.from(ids).join(",")} />
       {["suspend", "reactivate", "rotate", "delete", "export"].map((a) => (
@@ -508,11 +547,13 @@ function BulkRow({
 
 function ExportBar() {
   return (
-    <Form method="post" className="mb-4 flex flex-wrap items-center gap-2 rounded-xl border border-gray-200 bg-white p-3 text-sm shadow-sm dark:border-gray-800 dark:bg-gray-900">
-      <input type="hidden" name="intent" value="bulk" />
-      <input type="hidden" name="bulk_action" value="export" />
+    <Form
+      method="get"
+      action="/api-manager/export"
+      className="mb-4 flex flex-wrap items-center gap-2 rounded-xl border border-gray-200 bg-white p-3 text-sm shadow-sm dark:border-gray-800 dark:bg-gray-900"
+    >
       <select
-        name="status_filter"
+        name="status"
         className="rounded-lg border border-gray-300 px-2 py-1.5 text-sm dark:border-gray-600 dark:bg-gray-800 dark:text-white"
       >
         <option value="any">All status</option>
@@ -539,9 +580,7 @@ function ExportBar() {
       >
         <Download size={14} /> Export
       </button>
-      <span className="flex items-center gap-1 text-xs text-gray-400">
-        <FileJson size={12} /> filter-based bulk/export
-      </span>
+      <span className="text-xs text-gray-400">download CSV/JSON by filter</span>
     </Form>
   );
 }

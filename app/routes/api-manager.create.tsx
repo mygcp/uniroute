@@ -3,6 +3,7 @@ import { useRef, type ReactNode } from "react";
 import type { Route } from "./+types/api-manager.create";
 import { KeyRound, Copy } from "lucide-react";
 import { createClientKey, type CreateClientKeyInput } from "../.server/client-key";
+import { enqueueWebhook } from "../.server/webhook";
 import { getModelSuggestions, getProviderSuggestions } from "../.server/suggest";
 import { listTemplates, type KeyTemplate } from "../.server/key-templates";
 
@@ -96,6 +97,14 @@ export async function action({ request }: Route.ActionArgs) {
   };
 
   const { key, id } = createClientKey(input);
+  if (input.webhookUrl) {
+    enqueueWebhook({
+      keyId: id,
+      event: "created",
+      url: input.webhookUrl,
+      payload: { event: "created", key_id: id, key_prefix: input.prefix ?? "sk-", at: Date.now() },
+    });
+  }
   return { newlyCreatedKey: key, id, name: input.name };
 }
 

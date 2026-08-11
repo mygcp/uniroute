@@ -42,6 +42,7 @@ import {
   type CanonicalRequest,
 } from "./translate";
 import type { StreamTransformer } from "./translate/canonical";
+import { enqueueWebhook } from "./webhook";
 
 function json(payload: unknown, status = 200): Response {
   return new Response(JSON.stringify(payload), {
@@ -110,6 +111,20 @@ function authorize(request: Request, canonical: CanonicalRequest): AuthorizeResu
 
   const rateCheck = checkRate(key, estimatePromptTokens(canonical));
   if (!rateCheck.allowed) {
+    if (key.webhook_url) {
+      enqueueWebhook({
+        keyId: key.id,
+        event: "rate_limit",
+        url: key.webhook_url,
+        payload: {
+          event: "rate_limit",
+          key_id: key.id,
+          key_prefix: key.key_prefix,
+          limit: rateCheck.limit ?? "rpm",
+          at: Date.now(),
+        },
+      });
+    }
     return { ok: false, status: 429, error: "rate limit exceeded" };
   }
 

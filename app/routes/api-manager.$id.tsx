@@ -1,7 +1,25 @@
 import { Form, Link } from "react-router";
+import { useState } from "react";
 import type { Route } from "./+types/api-manager.$id";
-import { KeyRound, Copy, RotateCw, Trash2, Lock, LockOpen, ArrowLeft } from "lucide-react";
-import { getClientKeyById } from "../.server/client-key";
+import {
+  ArrowLeft,
+  Copy,
+  Download,
+  KeyRound,
+  Pencil,
+  RotateCw,
+  Trash2,
+  Lock,
+  LockOpen,
+} from "lucide-react";
+import {
+  getClientKeyById,
+  updateClientKey,
+  type AccessHoursConfig,
+  type BudgetConfig,
+  type ClientKey,
+  type QuotaConfig,
+} from "../.server/client-key";
 import { computeStatus, type KeyStatus } from "../.server/key-enforce";
 import { usageThisMonth, usageToday, usageByDay } from "../.server/key-usage";
 import { listAudit, type AuditEntry } from "../.server/key-audit";
@@ -31,6 +49,30 @@ export function loader({ params }: Route.LoaderArgs) {
   return { key, month, today, status, audit, byDay, groups, health, budget };
 }
 
+function parseList(form: FormData, name: string): string[] | null {
+  const raw = String(form.get(name) ?? "").trim();
+  if (!raw) return null;
+  const items = raw
+    .split(/[\n,]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return items.length > 0 ? items : null;
+}
+
+function parseNum(form: FormData, name: string): number | undefined {
+  const raw = String(form.get(name) ?? "").trim();
+  if (!raw) return undefined;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : undefined;
+}
+
+function parseDate(form: FormData, name: string): number | undefined {
+  const raw = String(form.get(name) ?? "").trim();
+  if (!raw) return undefined;
+  const t = new Date(raw).getTime();
+  return Number.isFinite(t) ? Math.floor(t / 1000) : undefined;
+}
+
 export async function action({ request, params }: Route.ActionArgs) {
   const form = await request.formData();
   const intent = String(form.get("intent"));
@@ -43,6 +85,56 @@ export async function action({ request, params }: Route.ActionArgs) {
   if (intent === "delete") {
     deleteKey(id);
     return { deleted: true };
+  }
+  if (intent === "update") {
+    const accessHoursEnabled = form.get("access_enabled") === "1";
+    const accessHours: AccessHoursConfig | undefined =
+      accessHoursEnabled ||
+      form.get("access_timezone") ||
+      form.get("access_days") ||
+      form.get("access_start") ||
+      form.get("access_end")
+        ? {
+            enabled: accessHoursEnabled,
+            timezone: String(form.get("access_timezone") ?? "").trim() || undefined,
+            allowed_days: parseList(form, "access_days") ?? undefined,
+            start_time: String(form.get("access_start") ?? "").trim() || undefined,
+            end_time: String(form.get("access_end") ?? "").trim() || undefined,
+          }
+        : undefined;
+    const budget: BudgetConfig | undefined = {
+      monthly: parseNum(form, "budget_monthly"),
+      daily: parseNum(form, "budget_daily"),
+      per_request: parseNum(form, "budget_per_request"),
+    };
+    const quota: QuotaConfig | undefined = {
+      tokens_per_month: parseNum(form, "quota_tokens"),
+      requests_per_day: parseNum(form, "quota_req_day"),
+      concurrent_requests: parseNum(form, "quota_concurrent"),
+      rpm: parseNum(form, "quota_rpm"),
+      tpm: parseNum(form, "quota_tpm"),
+    };
+    updateClientKey(id, {
+      name: String(form.get("name") ?? "").trim(),
+      description: String(form.get("description") ?? "").trim() || null,
+      allowedModels: parseList(form, "allowed_models"),
+      blockedModels: parseList(form, "blocked_models"),
+      allowedProviders: parseList(form, "allowed_providers"),
+      blockedProviders: parseList(form, "blocked_providers"),
+      budget,
+      quota,
+      alertThreshold: parseNum(form, "alert_threshold"),
+      autoBlock: form.get("auto_block") === "1",
+      ipWhitelist: parseList(form, "ip_whitelist"),
+      ipBlacklist: parseList(form, "ip_blacklist"),
+      strictIp: form.get("strict_ip") === "1",
+      accessHours,
+      expiresAt: parseDate(form, "expires_at"),
+      rotationIntervalDays: parseNum(form, "rotation_interval_days"),
+      gracePeriodDays: parseNum(form, "grace_period_days"),
+      webhookUrl: String(form.get("webhook_url") ?? "").trim() || null,
+    });
+    return { updated: true };
   }
   return null;
 }
@@ -70,8 +162,10 @@ function shortAction(a: AuditEntry): string {
 
 export default function KeyDetail({ loaderData, actionData }: Route.ComponentProps) {
   const { key, month, today, status, audit, byDay, groups, health, budget } = loaderData;
+  const [editing, setEditing] = useState(false);
   const rotated = (actionData as { newlyRotated?: { key: string } } | undefined)?.newlyRotated;
   const deleted = (actionData as { deleted?: boolean } | undefined)?.deleted;
+  const updated = (actionData as { updated?: boolean } | undefined)?.updated;
   const st = STATUS_STYLE[status];
   const usagePct = budget && budget > 0 ? pct(month.cost, budget) : null;
   const success = audit.filter((a) => a.action === "REQUEST").length;
@@ -110,8 +204,26 @@ export default function KeyDetail({ loaderData, actionData }: Route.ComponentPro
             <p className="mt-1 text-sm text-gray-600 dark:text-gray-300">{key.description}</p>
           ) : null}
         </div>
-        <div className="flex items-center gap-2">
-          <Form method="post">
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setEditing((v) => !v)}
+            className="flex items-center gap-1 rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-800"
+          >
+            <Pencil size={14} /> {editing ? "Close Edit" : "Edit"}
+          </button>
+          <a
+            href={`/api-manager/${key.id}/export`}
+            className="flex items-center gap-1 rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-800"
+          >
+            <Download size={14} /> Download Logs
+          </a>
+          <Form
+            method="post"
+            onSubmit={(e) => {
+              if (!window.confirm("Rotasi key ini? Key lama tetap valid selama grace period.")) e.preventDefault();
+            }}
+          >
             <input type="hidden" name="intent" value="rotate" />
             <button className="flex items-center gap-1 rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-800">
               <RotateCw size={14} /> Rotate
@@ -125,14 +237,24 @@ export default function KeyDetail({ loaderData, actionData }: Route.ComponentPro
               </button>
             </Form>
           ) : (
-            <Form method="post">
+            <Form
+              method="post"
+              onSubmit={(e) => {
+                if (!window.confirm("Suspend API key ini? Request dengan key ini akan ditolak.")) e.preventDefault();
+              }}
+            >
               <input type="hidden" name="intent" value="suspend" />
               <button className="flex items-center gap-1 rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-800">
                 <Lock size={14} /> Suspend
               </button>
             </Form>
           )}
-          <Form method="post">
+          <Form
+            method="post"
+            onSubmit={(e) => {
+              if (!window.confirm("Hapus API key ini? Tindakan tidak bisa dibatalkan.")) e.preventDefault();
+            }}
+          >
             <input type="hidden" name="intent" value="delete" />
             <button className="flex items-center gap-1 rounded-lg bg-red-600 px-3 py-2 text-sm text-white hover:bg-red-700">
               <Trash2 size={14} /> Delete
@@ -140,6 +262,14 @@ export default function KeyDetail({ loaderData, actionData }: Route.ComponentPro
           </Form>
         </div>
       </div>
+
+      {updated ? (
+        <div className="mb-4 rounded-lg border border-green-300 bg-green-50 p-3 text-sm text-green-800 dark:border-green-700 dark:bg-green-950/40 dark:text-green-200">
+          API key diperbarui.
+        </div>
+      ) : null}
+
+      {editing ? <EditKeyForm data={key} /> : null}
 
       {rotated ? (
         <div className="mb-4 rounded-lg border border-yellow-300 bg-yellow-50 p-4 text-sm dark:border-yellow-700 dark:bg-yellow-950/40">
@@ -283,29 +413,152 @@ function Row({ label, value }: { label: string; value: string }) {
 }
 
 function DailyBar({ data }: { data: Array<{ date: string; requests: number; cost: number }> }) {
-  const max = Math.max(1, ...data.map((d) => d.requests));
-  const width = 560;
-  const height = 120;
-  const gap = 8;
-  const barWidth = (width - gap * (data.length - 1)) / Math.max(1, data.length);
   return (
     <div className="mt-4">
       <h3 className="mb-2 text-sm font-semibold text-gray-700 dark:text-gray-200">
         Requests — 30 hari terakhir
       </h3>
-      <svg viewBox={`0 0 ${width} ${height}`} className="w-full" role="img">
+      <svg viewBox="0 0 560 120" className="w-full" role="img">
         {data.map((d, i) => {
-          const x = i * (barWidth + gap);
-          const h = (d.requests / max) * (height - 24);
+          const max = Math.max(1, ...data.map((x) => x.requests));
+          const h = (d.requests / max) * 96;
           return (
             <g key={d.date}>
-              <rect x={x} y={height - 12 - h} width={barWidth} height={h} rx={2} fill="#3b82f6">
-                <title>{`${d.date}: ${d.requests} req$${d.cost.toFixed(4)}`}</title>
+              <rect x={i * 18} y={108 - h} width={12} height={h} rx={2} fill="#3b82f6">
+                <title>{`${d.date}: ${d.requests} req $${d.cost.toFixed(4)}`}</title>
               </rect>
             </g>
           );
         })}
       </svg>
     </div>
+  );
+}
+
+const editInput =
+  "w-full rounded-lg border border-gray-300 px-3 py-1.5 text-sm text-gray-900 dark:border-gray-600 dark:bg-gray-800 dark:text-white";
+const editLabel = "mb-1 block text-xs font-medium text-gray-600 dark:text-gray-300";
+
+/** Form kelola (edit) API key — prefill dari data existing. */
+function EditKeyForm({ data }: { data: ClientKey }) {
+  return (
+    <Form
+      method="post"
+      className="mb-6 grid grid-cols-1 gap-3 rounded-xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-gray-900 sm:grid-cols-2"
+    >
+      <input type="hidden" name="intent" value="update" />
+      <div>
+        <label className={editLabel}>Name</label>
+        <input name="name" className={editInput} defaultValue={data.name} />
+      </div>
+      <div>
+        <label className={editLabel}>Description</label>
+        <input name="description" className={editInput} defaultValue={data.description ?? ""} />
+      </div>
+      <div>
+        <label className={editLabel}>Allowed Models (empty = all)</label>
+        <textarea name="allowed_models" className={editInput} rows={2} defaultValue={data.allowed_models?.join(", ") ?? ""} />
+      </div>
+      <div>
+        <label className={editLabel}>Blocked Models</label>
+        <textarea name="blocked_models" className={editInput} rows={2} defaultValue={data.blocked_models?.join(", ") ?? ""} />
+      </div>
+      <div>
+        <label className={editLabel}>Allowed Providers</label>
+        <input name="allowed_providers" className={editInput} defaultValue={data.allowed_providers?.join(", ") ?? ""} />
+      </div>
+      <div>
+        <label className={editLabel}>Blocked Providers</label>
+        <input name="blocked_providers" className={editInput} defaultValue={data.blocked_providers?.join(", ") ?? ""} />
+      </div>
+      <div>
+        <label className={editLabel}>Monthly Budget (USD)</label>
+        <input name="budget_monthly" type="number" step="any" className={editInput} defaultValue={data.budget?.monthly ?? ""} />
+      </div>
+      <div>
+        <label className={editLabel}>Daily Budget (USD)</label>
+        <input name="budget_daily" type="number" step="any" className={editInput} defaultValue={data.budget?.daily ?? ""} />
+      </div>
+      <div>
+        <label className={editLabel}>Per-request (USD)</label>
+        <input name="budget_per_request" type="number" step="any" className={editInput} defaultValue={data.budget?.per_request ?? ""} />
+      </div>
+      <div>
+        <label className={editLabel}>Tokens/Month</label>
+        <input name="quota_tokens" type="number" className={editInput} defaultValue={data.quota?.tokens_per_month ?? ""} />
+      </div>
+      <div>
+        <label className={editLabel}>Requests/Day</label>
+        <input name="quota_req_day" type="number" className={editInput} defaultValue={data.quota?.requests_per_day ?? ""} />
+      </div>
+      <div>
+        <label className={editLabel}>Concurrent</label>
+        <input name="quota_concurrent" type="number" className={editInput} defaultValue={data.quota?.concurrent_requests ?? ""} />
+      </div>
+      <div>
+        <label className={editLabel}>Requests/Min</label>
+        <input name="quota_rpm" type="number" className={editInput} defaultValue={data.quota?.rpm ?? ""} />
+      </div>
+      <div>
+        <label className={editLabel}>Tokens/Min</label>
+        <input name="quota_tpm" type="number" className={editInput} defaultValue={data.quota?.tpm ?? ""} />
+      </div>
+      <div>
+        <label className={editLabel}>Alert at (0..1)</label>
+        <input name="alert_threshold" type="number" step="any" min="0" max="1" className={editInput} defaultValue={data.alert_threshold ?? ""} />
+      </div>
+      <div>
+        <label className={editLabel}>Expires</label>
+        <input name="expires_at" type="date" className={editInput} defaultValue={data.expires_at ? new Date(data.expires_at * 1000).toISOString().slice(0, 10) : ""} />
+      </div>
+      <div>
+        <label className={editLabel}>Rotation interval (days)</label>
+        <input name="rotation_interval_days" type="number" className={editInput} defaultValue={data.rotation_interval_days ?? ""} />
+      </div>
+      <div>
+        <label className={editLabel}>Grace period (days)</label>
+        <input name="grace_period_days" type="number" className={editInput} defaultValue={data.grace_period_days ?? ""} />
+      </div>
+      <div>
+        <label className={editLabel}>Webhook URL</label>
+        <input name="webhook_url" type="url" className={editInput} defaultValue={data.webhook_url ?? ""} />
+      </div>
+      <div>
+        <label className={editLabel}>IP Whitelist</label>
+        <input name="ip_whitelist" className={editInput} defaultValue={data.ip_whitelist?.join(", ") ?? ""} />
+      </div>
+      <div>
+        <label className={editLabel}>IP Blacklist</label>
+        <input name="ip_blacklist" className={editInput} defaultValue={data.ip_blacklist?.join(", ") ?? ""} />
+      </div>
+      <div className="sm:col-span-1">
+        <label className={editLabel}>Access hours (HH:mm / timezone / days)</label>
+        <div className="grid grid-cols-2 gap-2">
+          <input name="access_start" type="time" className={editInput} defaultValue={data.access_hours?.start_time ?? ""} />
+          <input name="access_end" type="time" className={editInput} defaultValue={data.access_hours?.end_time ?? ""} />
+          <input name="access_timezone" className={editInput} placeholder="Timezone" defaultValue={data.access_hours?.timezone ?? ""} />
+          <input name="access_days" className={editInput} placeholder="monday, tuesday, …" defaultValue={data.access_hours?.allowed_days?.join(", ") ?? ""} />
+        </div>
+      </div>
+      <div className="flex flex-col gap-2 justify-start sm:col-span-2 sm:flex-row">
+        <label className="flex items-center gap-2 text-sm">
+          <input type="checkbox" name="auto_block" value="1" defaultChecked={data.auto_block === 1} /> Auto-block when budget exceeded
+        </label>
+        <label className="flex items-center gap-2 text-sm">
+          <input type="checkbox" name="strict_ip" value="1" defaultChecked={data.strict_ip === 1} /> Strict IP
+        </label>
+        <label className="flex items-center gap-2 text-sm">
+          <input type="checkbox" name="access_enabled" value="1" defaultChecked={data.access_hours?.enabled === true} /> Enable access hours
+        </label>
+      </div>
+      <div className="sm:col-span-2 flex justify-end gap-2">
+        <button
+          type="submit"
+          className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+        >
+          Save Changes
+        </button>
+      </div>
+    </Form>
   );
 }
