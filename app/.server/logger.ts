@@ -11,6 +11,7 @@ export type RequestLog = {
   error_message?: string | null;
   prompt_tokens?: number | null;
   completion_tokens?: number | null;
+  api_key_id?: number | null;
 };
 
 export type ProxyLog = {
@@ -32,8 +33,8 @@ function flush() {
     try {
       const insertReq = query(
         `INSERT INTO request_logs
-           (model, provider_id, strategy_used, rule_applied, duration_ms, status, error_message, prompt_tokens, completion_tokens)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           (model, provider_id, strategy_used, rule_applied, duration_ms, status, error_message, prompt_tokens, completion_tokens, api_key_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       );
       for (const log of requestQueue.splice(0)) {
         insertReq.run(
@@ -46,6 +47,7 @@ function flush() {
           log.error_message ?? null,
           log.prompt_tokens ?? null,
           log.completion_tokens ?? null,
+          log.api_key_id ?? null,
         );
       }
 

@@ -22,6 +22,18 @@ import { evaluateRules } from "./rules";
 import { resolveProxyCandidates } from "./proxy-resolver";
 import { getRegistryEntry } from "~/registry";
 import {
+  acquireConcurrency,
+  checkAccessHours,
+  checkBudgetQuota,
+  checkGroups,
+  checkIp,
+  checkRate,
+  clientIpFromRequest,
+  isKeyExpired,
+  releaseConcurrency,
+} from "./key-enforce";
+import { autoBlockKey, maybeRotateForInterval, recordRequestUsage } from "./key-ops";
+import {
   composeStreamTransformer,
   messageText,
   toProvider,
@@ -42,7 +54,17 @@ type AuthorizeResult =
   | { ok: true; rule: ClientKey | null }
   | { ok: false; status: number; error: string };
 
-function authorize(request: Request): AuthorizeResult {
+/** Estimasi prompt tokens murah: total karakter / 4 (untuk rate limit TPM). */
+function estimatePromptTokens(canonical: CanonicalRequest): number {
+  let chars = 0;
+  for (const msg of canonical.messages) {
+    const text = messageText(msg);
+    if (text !== null) chars += text.length;
+  }
+  return Math.ceil(chars / 4);
+}
+
+function authorize(request: Request, canonical: CanonicalRequest): AuthorizeResult {
   if (isValid(getSessionToken(request))) {
     return { ok: true, rule: null };
   }
@@ -61,7 +83,37 @@ function authorize(request: Request): AuthorizeResult {
   if (!resolved.ok) {
     return { ok: false, status: resolved.status, error: resolved.message };
   }
-  return { ok: true, rule: resolved.key };
+  const key = resolved.key;
+
+  maybeRotateForInterval(key);
+
+  if (isKeyExpired(key)) {
+    return { ok: false, status: 403, error: "api key expired" };
+  }
+
+  const ipCheck = checkIp(key, clientIpFromRequest(request));
+  if (!ipCheck.ok) return ipCheck;
+
+  const hoursCheck = checkAccessHours(key);
+  if (!hoursCheck.ok) return hoursCheck;
+
+  const budgetCheck = checkBudgetQuota(key);
+  if (!budgetCheck.ok) {
+    if (key.auto_block === 1 && !key.blocked_at) {
+      autoBlockKey(key.id, budgetCheck.reason ?? "budget exceeded");
+    }
+    return { ok: false, status: 429, error: budgetCheck.reason ?? "budget exceeded" };
+  }
+
+  const groupCheck = checkGroups(key);
+  if (!groupCheck.ok) return groupCheck;
+
+  const rateCheck = checkRate(key, estimatePromptTokens(canonical));
+  if (!rateCheck.allowed) {
+    return { ok: false, status: 429, error: "rate limit exceeded" };
+  }
+
+  return { ok: true, rule: key };
 }
 
 function orderCandidates(
@@ -105,7 +157,7 @@ export async function handleProxy(
     return json({ error: { message: "model is required" } }, 400);
   }
 
-  const clientKey = authorize(request);
+  const clientKey = authorize(request, canonical);
   if (!clientKey.ok) {
     return json({ error: { message: clientKey.error } }, clientKey.status);
   }
@@ -114,6 +166,16 @@ export async function handleProxy(
     return json({ error: { message: "model is required" } }, 400);
   }
 
+  let concurrentScope: string | null = null;
+  if (clientKey.rule) {
+    const conc = acquireConcurrency(clientKey.rule);
+    if (!conc.ok) {
+      return json({ error: { message: "too many concurrent requests" } }, 429);
+    }
+    concurrentScope = conc.scope;
+  }
+
+  try {
   if (clientKey.rule && !modelAllowed(clientKey.rule, canonical.model)) {
     recordRequestLog({
       model: canonical.model,
@@ -272,7 +334,19 @@ export async function handleProxy(
         strategy_used: cfg.strategy,
         rule_applied: ruleApplied,
         ...log,
+        api_key_id: clientKey.rule?.id ?? null,
       } as never);
+      if (clientKey.rule) {
+        recordRequestUsage(clientKey.rule.id, {
+          model: effectiveModel,
+          providerId: provider.id,
+          status: log.status === "success" ? 200 : 500,
+          promptTokens: log.prompt_tokens ?? 0,
+          completionTokens: log.completion_tokens ?? 0,
+          ip: clientIpFromRequest(request),
+          userAgent: request.headers.get("user-agent"),
+        });
+      }
       endConnection(provider.id);
     };
 
@@ -307,4 +381,9 @@ export async function handleProxy(
   }
 
   return response ?? json({ error: { message: "no provider available" } }, 502);
+  } finally {
+    if (clientKey.rule && concurrentScope) {
+      releaseConcurrency(clientKey.rule, concurrentScope);
+    }
+  }
 }

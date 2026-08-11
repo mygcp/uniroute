@@ -3,6 +3,7 @@ import type { ServerBuild } from "react-router";
 import path from "node:path";
 import { closeDb } from "./app/.server/db";
 import { flushLogs } from "./app/.server/logger";
+import { startWebhookDeliverer, stopWebhookDeliverer } from "./app/.server/webhook";
 // @ts-expect-error — build artifact generated at build time
 import * as build from "./build/server/index.js";
 
@@ -32,6 +33,8 @@ const server = Bun.serve({
 
 console.log(`UniRoute listening on http://localhost:${server.port}`);
 
+startWebhookDeliverer();
+
 let shuttingDown = false;
 
 function shutdown(signal: string) {
@@ -46,6 +49,7 @@ function shutdown(signal: string) {
   }, 5000);
 
   Promise.resolve()
+    .then(() => stopWebhookDeliverer())
     .then(() => server.stop(true))
     .then(() => flushLogs())
     .then(() => closeDb())

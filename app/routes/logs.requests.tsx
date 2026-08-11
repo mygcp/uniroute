@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { Route } from "./+types/logs.requests";
 import { LogViewer } from "../components/log-viewer";
 import { query } from "../.server/db";
+import { listClientKeys } from "../.server/client-key";
 import {
   useRealtimeLogs,
   type LogEvent,
@@ -10,10 +11,10 @@ import {
 export function loader() {
   const rows = query(
     `SELECT id, model, provider_id, strategy_used, rule_applied, duration_ms,
-            status, error_message, prompt_tokens, completion_tokens, created_at
+            status, error_message, prompt_tokens, completion_tokens, api_key_id, created_at
      FROM request_logs ORDER BY id DESC LIMIT 100`,
   ).all() as Record<string, unknown>[];
-  return { initial: rows.reverse() };
+  return { initial: rows.reverse(), keys: listClientKeys() };
 }
 
 function fmtTs(ts: number): string {
@@ -32,12 +33,14 @@ export default function LogsRequests({ loaderData }: Route.ComponentProps) {
   const [model, setModel] = useState("");
   const [provider, setProvider] = useState("");
   const [status, setStatus] = useState("");
+  const [apiKeyId, setApiKeyId] = useState("");
 
   const filter = (e: LogEvent): boolean =>
     e.type === "request" &&
     (model === "" || String(e.model ?? "").includes(model)) &&
     (provider === "" || String(e.provider_id ?? "").includes(provider)) &&
-    (status === "" || e.status === status);
+    (status === "" || e.status === status) &&
+    (apiKeyId === "" || String((e as { api_key_id?: number | null }).api_key_id ?? "") === apiKeyId);
 
   const initial: LogEvent[] = loaderData.initial.map((r) => ({
     type: "request" as const,
@@ -73,6 +76,19 @@ export default function LogsRequests({ loaderData }: Route.ComponentProps) {
           <option value="error">error</option>
           <option value="timeout">timeout</option>
           <option value="denied">denied</option>
+        </select>
+        <select
+          value={apiKeyId}
+          onChange={(e) => setApiKeyId(e.target.value)}
+          className="w-full rounded-lg border border-gray-300 px-3 py-1.5 text-sm text-gray-900 dark:border-gray-600 dark:bg-gray-800 dark:text-white sm:w-auto"
+        >
+          <option value="">All API keys</option>
+          {loaderData.keys.map((k) => (
+            <option key={k.id} value={k.id}>
+              {k.name} ({k.key_prefix}…{k.key_hash.slice(0, 4)})
+            </option>
+          ))}
+          <option value="0">No key</option>
         </select>
       </div>
 

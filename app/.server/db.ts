@@ -86,6 +86,16 @@ export function resetDb(): void {
   closeDb();
 }
 
+/** Idempotent ALTER TABLE: tambah kolom hanya bila belum ada (migrasi DB lama). */
+function ensureColumn(table: string, column: string, ddl: string): void {
+  const cols = (
+    query(`PRAGMA table_info(${table})`).all() as { name: string }[]
+  ).map((c) => c.name);
+  if (!cols.includes(column)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl};`);
+  }
+}
+
 function initSchema(): void {
 db.exec(`CREATE TABLE IF NOT EXISTS providers (
   id TEXT PRIMARY KEY,
@@ -164,6 +174,7 @@ db.exec(`CREATE TABLE IF NOT EXISTS request_logs (
   error_message TEXT,
   prompt_tokens INTEGER,
   completion_tokens INTEGER,
+  api_key_id INTEGER,
   created_at INTEGER DEFAULT (unixepoch())
 );`);
 
@@ -215,12 +226,136 @@ db.exec(`CREATE TABLE IF NOT EXISTS client_api_keys (
   model_override TEXT,
   pinned_provider_id TEXT,
   is_active INTEGER NOT NULL DEFAULT 1,
-  created_at INTEGER DEFAULT (unixepoch())
+  created_at INTEGER DEFAULT (unixepoch()),
+  description TEXT,
+  key_enc TEXT,
+  previous_key_hash TEXT,
+  previous_key_enc TEXT,
+  previous_expires_at INTEGER,
+  blocked_models TEXT,
+  allowed_providers TEXT,
+  blocked_providers TEXT,
+  budget TEXT,
+  quota TEXT,
+  alert_threshold REAL,
+  auto_block INTEGER NOT NULL DEFAULT 0,
+  blocked_at INTEGER,
+  ip_whitelist TEXT,
+  ip_blacklist TEXT,
+  strict_ip INTEGER NOT NULL DEFAULT 0,
+  access_hours TEXT,
+  expires_at INTEGER,
+  rotation_interval_days INTEGER,
+  grace_period_days INTEGER,
+  webhook_url TEXT,
+  scopes TEXT
 );`);
 
 db.exec(`CREATE TABLE IF NOT EXISTS settings (
   key TEXT PRIMARY KEY,
   value TEXT
+);`);
+
+// Migrasi DB lama: tambah kolom API Manager bila tabel sudah ada tanpa kolom baru.
+{
+  const keyCols: Array<[string, string]> = [
+    ["description", "description TEXT"],
+    ["key_enc", "key_enc TEXT"],
+    ["previous_key_hash", "previous_key_hash TEXT"],
+    ["previous_key_enc", "previous_key_enc TEXT"],
+    ["previous_expires_at", "previous_expires_at INTEGER"],
+    ["blocked_models", "blocked_models TEXT"],
+    ["allowed_providers", "allowed_providers TEXT"],
+    ["blocked_providers", "blocked_providers TEXT"],
+    ["budget", "budget TEXT"],
+    ["quota", "quota TEXT"],
+    ["alert_threshold", "alert_threshold REAL"],
+    ["auto_block", "auto_block INTEGER NOT NULL DEFAULT 0"],
+    ["blocked_at", "blocked_at INTEGER"],
+    ["ip_whitelist", "ip_whitelist TEXT"],
+    ["ip_blacklist", "ip_blacklist TEXT"],
+    ["strict_ip", "strict_ip INTEGER NOT NULL DEFAULT 0"],
+    ["access_hours", "access_hours TEXT"],
+    ["expires_at", "expires_at INTEGER"],
+    ["rotation_interval_days", "rotation_interval_days INTEGER"],
+    ["grace_period_days", "grace_period_days INTEGER"],
+    ["webhook_url", "webhook_url TEXT"],
+    ["scopes", "scopes TEXT"],
+  ];
+  for (const [col, ddl] of keyCols) {
+    ensureColumn("client_api_keys", col, ddl);
+  }
+  ensureColumn("request_logs", "api_key_id", "api_key_id INTEGER");
+}
+
+db.exec(`CREATE TABLE IF NOT EXISTS key_usage_daily (
+  key_id INTEGER NOT NULL REFERENCES client_api_keys(id) ON DELETE CASCADE,
+  date TEXT NOT NULL,
+  requests INTEGER NOT NULL DEFAULT 0,
+  prompt_tokens INTEGER NOT NULL DEFAULT 0,
+  completion_tokens INTEGER NOT NULL DEFAULT 0,
+  cost REAL NOT NULL DEFAULT 0,
+  PRIMARY KEY (key_id, date)
+);`);
+
+db.exec(`CREATE TABLE IF NOT EXISTS key_audit_logs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  key_id INTEGER NOT NULL,
+  action TEXT NOT NULL,
+  model TEXT,
+  provider_id TEXT,
+  status INTEGER,
+  tokens INTEGER,
+  cost REAL,
+  details TEXT,
+  ip TEXT,
+  user_agent TEXT,
+  created_at INTEGER DEFAULT (unixepoch())
+);
+CREATE INDEX IF NOT EXISTS idx_audit_key ON key_audit_logs (key_id, created_at);`);
+
+db.exec(`CREATE TABLE IF NOT EXISTS model_pricing (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  model TEXT NOT NULL,
+  provider_id TEXT NOT NULL,
+  input_per_mtok REAL NOT NULL DEFAULT 0,
+  output_per_mtok REAL NOT NULL DEFAULT 0,
+  updated_at INTEGER DEFAULT (unixepoch()),
+  UNIQUE (model, provider_id)
+);`);
+
+db.exec(`CREATE TABLE IF NOT EXISTS key_templates (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  description TEXT,
+  config TEXT NOT NULL,
+  created_at INTEGER DEFAULT (unixepoch())
+);`);
+
+db.exec(`CREATE TABLE IF NOT EXISTS key_groups (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL UNIQUE,
+  description TEXT,
+  shared_quota TEXT,
+  created_at INTEGER DEFAULT (unixepoch())
+);`);
+
+db.exec(`CREATE TABLE IF NOT EXISTS key_group_members (
+  group_id INTEGER NOT NULL REFERENCES key_groups(id) ON DELETE CASCADE,
+  key_id INTEGER NOT NULL REFERENCES client_api_keys(id) ON DELETE CASCADE,
+  PRIMARY KEY (group_id, key_id)
+);`);
+
+db.exec(`CREATE TABLE IF NOT EXISTS webhook_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  key_id INTEGER REFERENCES client_api_keys(id) ON DELETE SET NULL,
+  event TEXT NOT NULL,
+  url TEXT NOT NULL,
+  payload TEXT NOT NULL,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'pending',
+  next_retry_at INTEGER DEFAULT (unixepoch()),
+  created_at INTEGER DEFAULT (unixepoch())
 );`);
 
 // Migrate legacy single-key table (provider_id PRIMARY KEY) to multi-key schema.
