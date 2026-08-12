@@ -34,8 +34,8 @@ const validInput = (overrides: Partial<ComboInput> = {}): ComboInput => ({
   name: "coding-fallback",
   strategy: "priority",
   steps: [
-    { modelId: "gpt-4o-mini", providerId: "openai" },
-    { modelId: "claude-haiku", prompt: "rapikan jawaban" },
+    { providerId: "openai", modelIds: ["gpt-4o-mini", "gpt-4o"] },
+    { modelIds: ["claude-haiku"], prompt: "rapikan jawaban" },
   ],
   ...overrides,
 });
@@ -66,10 +66,10 @@ describe("validateComboInput", () => {
   });
   test("rejects empty steps & missing model", () => {
     expect(validateComboInput(validInput({ steps: [] }))).toContain("at least one");
-    expect(validateComboInput(validInput({ steps: [{ modelId: "  " }] }))).toContain("model");
+    expect(validateComboInput(validInput({ steps: [{ modelIds: [] }] }))).toContain("model");
   });
   test("rejects nested combo reference", () => {
-    expect(validateComboInput(validInput({ steps: [{ modelId: "combo:other" }] }))).toContain("nested");
+    expect(validateComboInput(validInput({ steps: [{ modelIds: ["combo:other"] }] }))).toContain("nested");
   });
 });
 
@@ -79,8 +79,12 @@ describe("combo CRUD", () => {
     expect(combo.id).toBeGreaterThan(0);
     expect(combo.name).toBe("coding-fallback");
     expect(combo.strategy).toBe("priority");
-    expect(combo.steps.map((s) => s.modelId)).toEqual(["gpt-4o-mini", "claude-haiku"]);
+    expect(combo.steps.map((s) => s.modelIds)).toEqual([
+      ["gpt-4o-mini", "gpt-4o"],
+      ["claude-haiku"],
+    ]);
     expect(combo.steps[0].providerId).toBe("openai");
+    expect(combo.steps[0].accountId).toBeNull();
     expect(combo.steps[1].prompt).toBe("rapikan jawaban");
 
     expect(getComboByName("coding-fallback")?.id).toBe(combo.id);
@@ -98,17 +102,38 @@ describe("combo CRUD", () => {
     const updated = updateCombo(combo.id, {
       name: combo.name,
       strategy: "pipeline",
-      steps: [{ modelId: "gemini-pro" }],
+      steps: [{ modelIds: ["gemini-pro"] }],
     });
     expect(updated?.strategy).toBe("pipeline");
     expect(updated?.steps).toHaveLength(1);
-    expect(updated?.steps[0].modelId).toBe("gemini-pro");
+    expect(updated?.steps[0].modelIds).toEqual(["gemini-pro"]);
+  });
+
+  test("step keeps accountIds & multi-models round-trip", () => {
+    const combo = createCombo({
+      name: "account-step",
+      strategy: "priority",
+      steps: [{ providerId: "openai", modelIds: ["a", "b", "c"], accountIds: [7, 42] }],
+    });
+    const step = getComboById(combo.id)?.steps[0];
+    expect(step?.modelIds).toEqual(["a", "b", "c"]);
+    expect(step?.accountIds).toEqual([7, 42]);
+  });
+
+  test("empty accountIds stays dynamic", () => {
+    const combo = createCombo({
+      name: "dynamic-step",
+      strategy: "priority",
+      steps: [{ providerId: "openai", modelIds: ["a"] }],
+    });
+    expect(getComboById(combo.id)?.steps[0].accountIds).toEqual([]);
   });
 
   test("listCombos sorts by name", () => {
     const list = listCombos();
     expect(list.length).toBeGreaterThan(0);
-    expect(list[0].name).toBe("coding-fallback");
+    const names = list.map((c) => c.name);
+    expect(names).toEqual([...names].sort());
   });
 
   test("deleteCombo cascades steps", () => {

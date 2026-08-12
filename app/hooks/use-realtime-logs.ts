@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 
 export type LogEvent = {
-  type: string;
+  id?: number;
+  type: "request" | "proxy";
   created_at: number;
   [key: string]: unknown;
 };
@@ -28,7 +29,7 @@ export function useRealtimeLogs(
         if (filterRef.current && !filterRef.current(data)) return;
         setLogs((prev) => {
           const next = [...prev, data];
-          if (next.length > 500) return next.slice(next.length - 500);
+          if (next.length > 1000) return next.slice(next.length - 1000);
           return next;
         });
         requestAnimationFrame(() => {
@@ -42,5 +43,15 @@ export function useRealtimeLogs(
     return () => es.close();
   }, []);
 
-  return { logs, paused, setPaused, scrollRef };
+  /** Remove a log locally (after a successful server delete). */
+  function remove(id: number, type: "request" | "proxy") {
+    setLogs((prev) => prev.filter((l) => !(l.id === id && l.type === type)));
+  }
+
+  /** Replace the whole list locally (after clearing). */
+  function reset(next: LogEvent[] = []) {
+    setLogs(next);
+  }
+
+  return { logs, paused, setPaused, scrollRef, remove, reset };
 }

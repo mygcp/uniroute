@@ -6,11 +6,10 @@ import {
   KeyRound,
   KeySquare,
   Link2,
-  Globe,
-  Network,
   FolderOpen,
   LogOut,
   ScrollText,
+  TrendingUp,
   X,
 } from "lucide-react";
 
@@ -21,13 +20,17 @@ const NAV_ITEMS = [
   { to: "/api", label: "API", icon: KeyRound },
   { to: "/api-manager", label: "API Manager", icon: KeySquare },
   { to: "/combo", label: "Combo", icon: Link2 },
-  { to: "/proxy", label: "Proxy", icon: Globe },
-  { to: "/proxies", label: "Proxies", icon: Network },
 ];
 
-const LOGS_ITEMS = [
-  { to: "/logs/requests", label: "Request Logs", icon: ScrollText },
+// Grouped under "Monitoring" — request + proxy log viewers.
+const MONITORING_ITEMS = [
+  { to: "/logs", label: "Request Logs", icon: ScrollText },
   { to: "/logs/proxy", label: "Proxy Logs", icon: FolderOpen },
+];
+
+// Grouped under "Analytics" — usage and charts.
+const ANALYTICS_ITEMS = [
+  { to: "/analytics/usage", label: "Usage", icon: TrendingUp },
 ];
 
 function linkClass({ isActive }: { isActive: boolean }): string {
@@ -61,12 +64,39 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
 
         <div className="pt-3">
           <p className="px-3 pb-1 text-xs font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500">
-            Logs
+            Monitoring
           </p>
-          {LOGS_ITEMS.map((item) => {
+          {MONITORING_ITEMS.map((item) => {
             const Icon = item.icon;
             return (
-              <NavLink key={item.to} to={item.to} className={linkClass} onClick={onNavigate}>
+              <NavLink
+                key={item.to}
+                to={item.to}
+                className={linkClass}
+                end={item.to === "/logs"}
+                onClick={onNavigate}
+              >
+                <Icon size={16} />
+                {item.label}
+              </NavLink>
+            );
+          })}
+        </div>
+
+        <div className="pt-3">
+          <p className="px-3 pb-1 text-xs font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500">
+            Analytics
+          </p>
+          {ANALYTICS_ITEMS.map((item) => {
+            const Icon = item.icon;
+            return (
+              <NavLink
+                key={item.to}
+                to={item.to}
+                className={linkClass}
+                end={item.to === "/analytics/usage"}
+                onClick={onNavigate}
+              >
                 <Icon size={16} />
                 {item.label}
               </NavLink>

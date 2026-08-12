@@ -11,9 +11,13 @@ export type ComboStrategy = "priority" | "pipeline";
 export type ComboStepInput = {
   /** Provider id spesifik; null/undefined = semua provider untuk model itu. */
   providerId?: string | null;
-  modelId: string;
+  modelId?: string;
+  modelIds?: string[];
   /** Bobot untuk strategi weighted (cadangan, disimpan untuk kompatibilitas). */
   weight?: number | null;
+  /** kredensial/akun spesifik; null/undefined = auto/dynamic. */
+  accountId?: number | null;
+  accountIds?: number[];
   /** Instruksi khusus step (dipakai pipeline / ditambahkan sebagai system hint). */
   prompt?: string | null;
 };
@@ -23,7 +27,9 @@ export type ComboStep = {
   comboId: number;
   stepOrder: number;
   providerId: string | null;
-  modelId: string;
+  modelIds: string[];
+  accountId: number | null;
+  accountIds: number[];
   weight: number;
   prompt: string | null;
 };
@@ -58,7 +64,10 @@ type StepRow = {
   combo_id: number;
   step_order: number;
   provider_id: string | null;
-  model_id: string;
+  model_id: string | null;
+  model_ids: string | null;
+  account_id: number | null;
+  account_ids: string | null;
   weight: number;
   prompt: string | null;
 };
@@ -84,10 +93,44 @@ function parseConfig(raw: string): Record<string, unknown> {
   }
 }
 
+function parseModelIds(row: StepRow): string[] {
+  if (row.model_ids) {
+    try {
+      const v = JSON.parse(row.model_ids) as unknown;
+      if (Array.isArray(v)) {
+        const list = v
+          .map((m) => String(m).trim())
+          .filter((m) => m.length > 0);
+        if (list.length > 0) return list;
+      }
+    } catch {
+      /* fallthrough */
+    }
+  }
+  if (row.model_id) return [row.model_id];
+  return [];
+}
+function parseAccountIds(row: StepRow): number[] {
+  if (row.account_ids) {
+    try {
+      const v = JSON.parse(row.account_ids) as unknown;
+      if (Array.isArray(v)) {
+        const list = v.map(Number).filter((n) => Number.isFinite(n) && n > 0);
+        if (list.length > 0) return list;
+      }
+    } catch {
+      /* fallthrough */
+    }
+  }
+  if (row.account_id != null && Number.isFinite(Number(row.account_id)) && Number(row.account_id) > 0) {
+    return [Number(row.account_id)];
+  }
+  return [];
+}
 function stepsFor(comboId: number): ComboStep[] {
   const rows = (
     query(
-      `SELECT id, combo_id, step_order, provider_id, model_id, weight, prompt
+      `SELECT id, combo_id, step_order, provider_id, model_id, model_ids, account_id, account_ids, weight, prompt
        FROM combo_steps WHERE combo_id = ? ORDER BY step_order ASC, id ASC`,
     ).all(comboId) as unknown as StepRow[]
   ) ?? [];
@@ -96,7 +139,9 @@ function stepsFor(comboId: number): ComboStep[] {
     comboId: r.combo_id,
     stepOrder: r.step_order,
     providerId: r.provider_id ?? null,
-    modelId: r.model_id,
+    modelIds: parseModelIds(r),
+    accountId: r.account_id ?? null,
+    accountIds: parseAccountIds(r),
     weight: r.weight ?? 1,
     prompt: r.prompt ?? null,
   }));
@@ -158,10 +203,13 @@ export function validateComboInput(input: ComboInput): string | null {
   for (let i = 0; i < input.steps.length; i += 1) {
     const step = input.steps[i];
     if (!step || typeof step !== "object") return `step ${i + 1} is invalid`;
-    const modelId = (step.modelId ?? "").trim();
-    if (!modelId) return `step ${i + 1} requires a model`;
-    if (modelId.startsWith("combo:")) {
-      return `step ${i + 1}: nested combo reference is not supported yet`;
+    const modelIds = (step.modelIds?.length ? step.modelIds : step.modelId ? [step.modelId] : []) ?? [];
+    const clean = modelIds.map((m) => String(m).trim()).filter((m) => m.length > 0);
+    if (clean.length === 0) return `step ${i + 1} requires at least one model`;
+    for (const m of clean) {
+      if (m.startsWith("combo:")) {
+        return `step ${i + 1}: nested combo reference is not supported yet`;
+      }
     }
   }
   return null;
@@ -186,17 +234,31 @@ export function createCombo(input: ComboInput): Combo {
 
 function insertSteps(comboId: number, steps: ComboStepInput[]): void {
   const insert = query(
-    `INSERT INTO combo_steps (combo_id, step_order, provider_id, model_id, weight, prompt)
-     VALUES (?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO combo_steps (combo_id, step_order, provider_id, model_id, model_ids, account_id, account_ids, weight, prompt)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   steps.forEach((step, index) => {
-    const modelId = (step.modelId ?? "").trim();
     const providerId = (step.providerId ?? "").trim();
+    const modelIds = ((step.modelIds?.length ? step.modelIds : step.modelId ? [step.modelId] : []) ?? [])
+      .map((m) => String(m).trim())
+      .filter((m) => m.length > 0);
+    const accountIds = (
+      Array.isArray(step.accountIds)
+        ? step.accountIds
+        : step.accountId && Number.isFinite(Number(step.accountId))
+          ? [Number(step.accountId)]
+          : []
+    )
+      .map(Number)
+      .filter((n) => Number.isFinite(n) && n > 0);
     insert.run(
       comboId,
       index + 1,
       providerId || null,
-      modelId,
+      modelIds[0] ?? null,
+      modelIds.length > 0 ? JSON.stringify(modelIds) : null,
+      accountIds[0] ?? null,
+      accountIds.length > 0 ? JSON.stringify(accountIds) : null,
       Number.isFinite(Number(step.weight)) && Number(step.weight) > 0 ? Number(step.weight) : 1,
       (step.prompt ?? "").trim() || null,
     );

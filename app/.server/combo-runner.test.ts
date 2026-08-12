@@ -50,7 +50,7 @@ describe("runComboEngine (priority fallback chain)", () => {
     const combo = createCombo({
       name: "prio-fail",
       strategy: "priority",
-      steps: [{ modelId: "m-a" }, { modelId: "m-b" }],
+      steps: [{ providerId: "dummy-a", modelIds: ["m-a"] }, { providerId: "dummy-b", modelIds: ["m-b"] }],
     });
     const res = await runComboEngine({
       combo,
@@ -77,7 +77,7 @@ describe("runComboEngine (priority fallback chain)", () => {
     const combo = createCombo({
       name: "pipe-fail",
       strategy: "pipeline",
-      steps: [{ modelId: "m-a" }, { modelId: "m-b" }],
+      steps: [{ providerId: "dummy-a", modelIds: ["m-a"] }, { providerId: "dummy-b", modelIds: ["m-b"] }],
     });
     const res = await runComboEngine({
       combo,

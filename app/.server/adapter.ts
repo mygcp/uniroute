@@ -30,23 +30,22 @@ function resolveUrl(
 export function transformRequest(
   body: Record<string, unknown>,
   provider: Provider,
-  opts?: { model?: string },
+  opts?: { model?: string; apiKey?: string | null },
 ): TransformResult {
   const entry = getRegistryEntry(provider.id);
   const url = resolveUrl(provider, entry, opts?.model);
   const headers = new Headers({ "Content-Type": "application/json" });
 
+  const usedKey = opts?.apiKey ?? getApiKey(provider.id);
+
   if (entry?.authHeader) {
-    const key = getApiKey(provider.id);
-    if (key) {
-      headers.set(entry.authHeader, `${entry.authPrefix ?? ""} ${key}`.trim());
+    if (usedKey) {
+      headers.set(entry.authHeader, `${entry.authPrefix ?? ""} ${usedKey}`.trim());
     }
   } else if (provider.auth_type === "bearer") {
-    const key = getApiKey(provider.id);
-    if (key) headers.set("Authorization", `Bearer ${key}`);
+    if (usedKey) headers.set("Authorization", `Bearer ${usedKey}`);
   } else if (provider.auth_type === "apikey") {
-    const key = getApiKey(provider.id);
-    if (key) headers.set("x-goog-api-key", key);
+    if (usedKey) headers.set("x-goog-api-key", usedKey);
   }
 
   return { url, headers, body: JSON.stringify(body) };

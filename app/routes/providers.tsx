@@ -11,7 +11,6 @@ import { query } from "../.server/db";
 import { reload } from "../.server/registry";
 import { getRegistryEntry } from "~/registry";
 import { listApiKeys } from "../.server/credential";
-import { fetchUpstream, resolveProxy, resolveProxyForKey } from "../.server/proxy-resolver";
 import { Plug, Loader2 } from "lucide-react";
 
 export type ProviderRow = {
@@ -46,11 +45,9 @@ function testProvider(providerId: string): Promise<{ connected: number; total: n
       try {
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), 5000);
-        const proxy = resolveProxy(providerId);
-        const res = await fetchUpstream(
+        const res = await fetch(
           modelsUrl,
           { signal: controller.signal },
-          proxy,
         );
         clearTimeout(timer);
         return { connected: res.ok ? 1 : 0, total: 1 };
@@ -84,11 +81,9 @@ function testProvider(providerId: string): Promise<{ connected: number; total: n
       try {
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), 5000);
-        const proxy = resolveProxyForKey(providerId, key.proxy_id ?? null);
-        const res = await fetchUpstream(
+        const res = await fetch(
           modelsUrl,
           { headers, signal: controller.signal },
-          proxy,
         );
         clearTimeout(timer);
         if (res.ok) connected += 1;

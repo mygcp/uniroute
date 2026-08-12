@@ -7,14 +7,13 @@ export type ApiKeyRow = {
   api_key: string;
   is_active: number;
   is_routing: number;
-  proxy_id: number | null;
   created_at: number;
   updated_at: number;
 };
 
 export function listApiKeys(providerId: string): ApiKeyRow[] {
   return query(
-    `SELECT id, provider_id, label, api_key, is_active, is_routing, proxy_id, created_at, updated_at
+    `SELECT id, provider_id, label, api_key, is_active, is_routing, created_at, updated_at
      FROM provider_credentials WHERE provider_id = ? ORDER BY id`,
   ).all(providerId) as unknown as ApiKeyRow[];
 }
@@ -100,26 +99,15 @@ export function setApiKeyActive(id: number, active: boolean): void {
   ).run(active ? 1 : 0, id);
 }
 
-export type RoutingCredential = {
-  api_key: string;
-  proxy_id: number | null;
-};
-
 export function getRoutingCredential(
   providerId: string,
-): { api_key: string; proxy_id: number | null } | null {
+): { api_key: string } | null {
   const row = query(
-    "SELECT api_key, proxy_id FROM provider_credentials WHERE provider_id = ? AND is_routing = 1 AND is_active = 1 ORDER BY id LIMIT 1",
-  ).get(providerId) as { api_key: string; proxy_id: number | null } | undefined;
+    "SELECT api_key FROM provider_credentials WHERE provider_id = ? AND is_routing = 1 AND is_active = 1 ORDER BY id LIMIT 1",
+  ).get(providerId) as { api_key: string } | undefined;
   if (row) return row;
   const fallback = query(
-    "SELECT api_key, proxy_id FROM provider_credentials WHERE provider_id = ? AND is_active = 1 ORDER BY id LIMIT 1",
-  ).get(providerId) as { api_key: string; proxy_id: number | null } | undefined;
+    "SELECT api_key FROM provider_credentials WHERE provider_id = ? AND is_active = 1 ORDER BY id LIMIT 1",
+  ).get(providerId) as { api_key: string } | undefined;
   return fallback ?? null;
-}
-
-export function setKeyProxy(id: number, proxyId: number | null): void {
-  query(
-    "UPDATE provider_credentials SET proxy_id = ?, updated_at = unixepoch() WHERE id = ?",
-  ).run(proxyId, id);
 }

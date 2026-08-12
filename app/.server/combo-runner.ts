@@ -1,6 +1,7 @@
 import { transformRequest } from "./adapter";
 import { beginConnection, endConnection, selectProvider } from "./balancer";
 import { modelAllowed, type ClientKey } from "./client-key";
+import { listApiKeys } from "./credential";
 import {
   extractUpstreamText,
   recordComboMetric,
@@ -12,7 +13,6 @@ import { clientIpFromRequest } from "./key-enforce";
 import { recordRequestUsage } from "./key-ops";
 import { recordProxyLog, recordRequestLog, type RequestLog } from "./logger";
 import { estimateCost } from "./pricing";
-import { resolveProxyCandidates } from "./proxy-resolver";
 import { getAnyProvider, getProviders, reload, type Provider } from "./registry";
 import {
   composeStreamTransformer,
@@ -66,6 +66,7 @@ function cloneMessages(messages: CanonicalMessage[]): CanonicalMessage[] {
  */
 function buildStepCanonical(
   ctx: RunContext,
+  model: string,
   step: ComboStep,
   index: number,
   carryText: string | null,
@@ -91,12 +92,12 @@ function buildStepCanonical(
   const stream =
     ctx.combo.strategy === "pipeline" ? isFinal && ctx.canonical.stream : ctx.canonical.stream;
 
-  return { ...ctx.canonical, model: step.modelId, stream, messages };
+  return { ...ctx.canonical, model, stream, messages };
 }
 
-function resolveStepPool(ctx: RunContext, step: ComboStep): Provider[] {
-  let pool = getProviders(step.modelId);
-  if (pool.length === 0) pool = getAnyProvider(step.modelId);
+function resolveStepPool(ctx: RunContext, step: ComboStep, model: string): Provider[] {
+  let pool = getProviders(model);
+  if (pool.length === 0) pool = getAnyProvider(model);
   if (step.providerId) {
     const pinned = pool.filter((p) => p.id === step.providerId);
     if (pinned.length > 0) return pinned;
@@ -105,9 +106,24 @@ function resolveStepPool(ctx: RunContext, step: ComboStep): Provider[] {
   return pool;
 }
 
-function logFailure(ctx: RunContext, step: ComboStep, error: string): void {
+/** Resolusi api key akun: akun spesifik atau null (= auto/dynamic). */
+function resolveAccountApiKey(step: ComboStep, providerId: string): string | null {
+  const keys = listApiKeys(providerId).filter((k) => k.is_active === 1);
+  if (keys.length === 0) return null;
+  // Dynamic (kosong) = semua akun aktif provider ini.
+  const wanted =
+    step.accountIds && step.accountIds.length > 0
+      ? keys.filter((k) => step.accountIds!.includes(k.id))
+      : keys;
+  if (wanted.length === 0) return null;
+  // Rotasi sederhana merata antar akun terpilih.
+  const idx = Math.floor(Math.random() * wanted.length);
+  return wanted[idx].api_key;
+}
+
+function logFailure(ctx: RunContext, model: string, error: string): void {
   recordRequestLog({
-    model: step.modelId,
+    model,
     provider_id: "combo",
     strategy_used: `combo:${ctx.combo.strategy}`,
     rule_applied: ctx.ruleApplied,
@@ -117,9 +133,10 @@ function logFailure(ctx: RunContext, step: ComboStep, error: string): void {
   } as never);
 }
 
-async function executeStep(
+async function executeOneModel(
   ctx: RunContext,
   step: ComboStep,
+  model: string,
   index: number,
   carryText: string | null,
   isFinal: boolean,
@@ -127,58 +144,58 @@ async function executeStep(
   const started = Date.now();
   const label = `${ctx.combo.name}[${index + 1}]`;
 
-  // Step yang modelnya tidak diizinkan oleh api key → dilewati (bukan blokir
-  // request, agar chain tetap bisa lanjut ke step yang diizinkan).
-  if (ctx.rule && !modelAllowed(ctx.rule, step.modelId)) {
+  // Model yang tidak diizinkan oleh api key → dilewati (lanjut ke model/step lain).
+  if (ctx.rule && !modelAllowed(ctx.rule, model)) {
     recordProxyLog({
       level: "info",
       source: "combo",
-      message: `${label}: step skipped (model not allowed by api key)`,
-      metadata: { model: step.modelId },
+      message: `${label}: model ${model} skipped (not allowed by api key)`,
+      metadata: { model },
     });
-    return { kind: "fail", status: 0, error: `model ${step.modelId} not allowed by api key` };
+    return { kind: "fail", status: 0, error: `model ${model} not allowed by api key` };
   }
 
-  const pool = resolveStepPool(ctx, step);
+  const pool = resolveStepPool(ctx, step, model);
   const provider =
     step.providerId
       ? pool.find((p) => p.id === step.providerId) ?? pool[0]
-      : selectProvider(pool, step.modelId) ?? pool[0];
+      : selectProvider(pool, model) ?? pool[0];
 
   if (!provider) {
-    logFailure(ctx, step, `model ${step.modelId} not found`);
+    logFailure(ctx, model, `model ${model} not found`);
     recordComboMetric({
       comboId: ctx.combo.id,
       comboName: ctx.combo.name,
       strategy: ctx.combo.strategy,
       stepIndex: index,
-      modelId: step.modelId,
+      modelId: model,
       providerId: step.providerId ?? null,
       latencyMs: Date.now() - started,
       success: false,
       error: "model not found",
     });
-    return { kind: "fail", status: 404, error: `model ${step.modelId} not found` };
+    return { kind: "fail", status: 404, error: `model ${model} not found` };
   }
 
-  const stepCanonical = buildStepCanonical(ctx, step, index, carryText, isFinal);
+  const stepCanonical = buildStepCanonical(ctx, model, step, index, carryText, isFinal);
   const entry = getRegistryEntry(provider.id);
   const providerFormat = entry?.format === "claude" ? "anthropic" : entry?.format ?? "openai";
 
   let providerBody: Record<string, unknown>;
   let transformed: { url: string; headers: Headers; body: string };
+  const apiKey = resolveAccountApiKey(step, provider.id);
   try {
     providerBody = toProvider(providerFormat, stepCanonical);
-    transformed = transformRequest(providerBody, provider, { model: step.modelId });
+    transformed = transformRequest(providerBody, provider, { model, apiKey });
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err);
-    logFailure(ctx, step, error);
+    logFailure(ctx, model, error);
     recordComboMetric({
       comboId: ctx.combo.id,
       comboName: ctx.combo.name,
       strategy: ctx.combo.strategy,
       stepIndex: index,
-      modelId: step.modelId,
+      modelId: model,
       providerId: provider.id,
       latencyMs: Date.now() - started,
       success: false,
@@ -188,11 +205,10 @@ async function executeStep(
   }
 
   beginConnection(provider.id);
-  const proxies = resolveProxyCandidates(provider.id);
   const onComplete = (log: Partial<RequestLog> & Pick<RequestLog, "status">) => {
     const ok = log.status === "success";
     recordRequestLog({
-      model: step.modelId,
+      model,
       provider_id: provider.id,
       strategy_used: `combo:${ctx.combo.strategy}`,
       rule_applied: ctx.ruleApplied,
@@ -201,7 +217,7 @@ async function executeStep(
     } as never);
     if (ctx.rule) {
       recordRequestUsage(ctx.rule.id, {
-        model: step.modelId,
+        model,
         providerId: provider.id,
         status: ok ? 200 : 500,
         promptTokens: log.prompt_tokens ?? 0,
@@ -215,10 +231,10 @@ async function executeStep(
       comboName: ctx.combo.name,
       strategy: ctx.combo.strategy,
       stepIndex: index,
-      modelId: step.modelId,
+      modelId: model,
       providerId: provider.id,
       latencyMs: log.duration_ms ?? Date.now() - started,
-      cost: estimateCost(step.modelId, provider.id, log.prompt_tokens ?? 0, log.completion_tokens ?? 0),
+      cost: estimateCost(model, provider.id, log.prompt_tokens ?? 0, log.completion_tokens ?? 0),
       success: ok,
       tokensUsed: (log.prompt_tokens ?? 0) + (log.completion_tokens ?? 0),
       error: ok ? null : (log.error_message ?? "step failed"),
@@ -232,7 +248,6 @@ async function executeStep(
       headers: transformed.headers,
       body: transformed.body,
       signal: ctx.request.signal,
-      proxies,
       streamTransformer: composeStreamTransformer(providerFormat, ctx.clientFormat),
       onComplete,
     });
@@ -247,7 +262,6 @@ async function executeStep(
     headers: transformed.headers,
     body: transformed.body,
     signal: ctx.request.signal,
-    proxies,
     onComplete,
   });
   if (result.ok) {
@@ -258,9 +272,36 @@ async function executeStep(
 }
 
 /**
+ * Jalankan satu step (bisa berisi beberapa model sebagai fallback pada provider
+ * yang sama). Model dicoba berurutan; gagal → lanjut ke model berikutnya.
+ */
+async function executeStep(
+  ctx: RunContext,
+  step: ComboStep,
+  index: number,
+  carryText: string | null,
+  isFinal: boolean,
+): Promise<StepOutcome> {
+  const models = step.modelIds.length > 0 ? step.modelIds : [""];
+  let lastFail: StepOutcome = { kind: "fail", status: 502, error: "combo step failed" };
+
+  for (const model of models) {
+    const outcome = await executeOneModel(ctx, step, model, index, carryText, isFinal);
+    if (outcome.kind === "ok") return outcome;
+    lastFail = outcome;
+    if (outcome.status === 0) {
+      // Model tidak diizinkan oleh api key pada step ini — coba model berikutnya.
+      continue;
+    }
+    // Upstream gagal — coba model fallback berikutnya pada provider yang sama.
+  }
+  return lastFail;
+}
+
+/**
  * Jalankan Combo untuk satu request.
  *
- * - `priority`: coba step demi step; step pertama yang berhasil → return.
+ * - `priority`: coba step demi step (dan model dalam step); yang berhasil → return.
  *   Untuk request streaming, fallback hanya terjadi sebelum stream mulai.
  * - `pipeline`: jalankan step berurutan; tiap step menerima output step
  *   sebelumnya (kecuali step terakhir yang boleh streaming bila diminta).
@@ -276,6 +317,8 @@ export async function runComboEngine(params: ComboRunParams): Promise<Response> 
   for (let i = 0; i < ctx.combo.steps.length; i += 1) {
     const step = ctx.combo.steps[i];
     const isFinal = i === ctx.combo.steps.length - 1;
+    const label = step.modelIds[0] ?? "";
+
     const outcome = await executeStep(ctx, step, i, carryText, isFinal);
 
     if (outcome.kind === "ok") {
@@ -294,7 +337,7 @@ export async function runComboEngine(params: ComboRunParams): Promise<Response> 
       return json(
         {
           error: {
-            message: `combo pipeline failed at step ${i + 1} (${step.modelId})`,
+            message: `combo pipeline failed at step ${i + 1} (${label})`,
             detail: outcome.error,
           },
         },

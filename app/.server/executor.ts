@@ -1,6 +1,5 @@
 import { createStreamTransformer } from "./adapter";
 import type { RequestLog } from "./logger";
-import { fetchUpstream, type ProxyConfig } from "./proxy-resolver";
 import type { StreamTransformer } from "./translate/canonical";
 
 export type ExecutorOptions = {
@@ -8,7 +7,6 @@ export type ExecutorOptions = {
   headers: Headers;
   body: string;
   signal?: AbortSignal;
-  proxies?: ProxyConfig[];
   streamTransformer?: StreamTransformer;
   onComplete: (
     log: Partial<RequestLog> & Pick<RequestLog, "status">,
@@ -22,17 +20,14 @@ type AttemptResult =
 const EXECUTE_TIMEOUT_MS = 120_000;
 const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
 
-async function attempt(
-  options: ExecutorOptions,
-  proxy?: ProxyConfig,
-): Promise<AttemptResult> {
+async function attempt(options: ExecutorOptions): Promise<AttemptResult> {
   const { url, headers, body, signal } = options;
   const controller = new AbortController();
   const abortFromCaller = (): void => controller.abort();
   signal?.addEventListener("abort", abortFromCaller);
 
   try {
-    const upstream = await fetchUpstream(
+    const upstream = await fetch(
       url,
       {
         method: "POST",
@@ -43,7 +38,6 @@ async function attempt(
           controller.signal,
         ]),
       },
-      proxy ?? null,
     );
 
     if (!upstream.ok) {
@@ -70,8 +64,7 @@ async function attempt(
   } catch (err) {
     controller.abort();
     const raw = err instanceof Error ? err.message : String(err);
-    const context = proxy ? `proxy connect failed: ${proxy.host}:${proxy.port}` : "";
-    const message = context ? `${context} (${raw})` : raw;
+    const message = raw;
     return {
       ok: false,
       status: 502,
@@ -84,14 +77,6 @@ async function attempt(
 }
 
 async function runWithRetry(options: ExecutorOptions): Promise<AttemptResult> {
-  const proxies = options.proxies ?? [];
-  if (proxies.length > 0) {
-    let result = await attempt(options, proxies[0]);
-    for (let i = 1; i < proxies.length && !result.ok && result.retryable; i++) {
-      result = await attempt(options, proxies[i]);
-    }
-    return result;
-  }
   let result = await attempt(options);
   if (!result.ok && result.retryable) {
     result = await attempt(options);

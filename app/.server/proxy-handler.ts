@@ -21,7 +21,6 @@ import { runComboEngine } from "./combo-runner";
 import { recordProxyLog, recordRequestLog, type RequestLog } from "./logger";
 import { getProviders, reload, type Provider } from "./registry";
 import { evaluateRules } from "./rules";
-import { resolveProxyCandidates } from "./proxy-resolver";
 import { getRegistryEntry } from "~/registry";
 import {
   acquireConcurrency,
@@ -358,7 +357,6 @@ export async function handleProxy(
       break;
     }
 
-    const proxies = resolveProxyCandidates(provider.id);
     const onComplete = (log: Partial<RequestLog> & Pick<RequestLog, "status">) => {
       recordRequestLog({
         model: effectiveModel,
@@ -388,7 +386,6 @@ export async function handleProxy(
         headers: transformed.headers,
         body: transformed.body,
         signal: request.signal,
-        proxies,
         streamTransformer: composeStreamTransformer(providerFormat, config.clientFormat),
         onComplete,
       });
@@ -398,7 +395,6 @@ export async function handleProxy(
         headers: transformed.headers,
         body: transformed.body,
         signal: request.signal,
-        proxies,
         onComplete,
       });
       if (result.ok) {
