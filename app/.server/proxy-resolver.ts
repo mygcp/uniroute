@@ -5,6 +5,7 @@ import type { Socket } from "node:net";
 import { query } from "./db";
 import { recordProxyLog } from "./logger";
 import {
+	getGlobalProxyPool,
 	getPool,
 	getProxy,
 	type ProxyConfig,
@@ -52,10 +53,12 @@ const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
 export function resolveProxyPool(params: {
 	apiKeyPoolId?: number;
 	providerPoolId?: number;
+	globalPoolId?: number;
 }): ResolvedProxy[] | null {
 	let pool: ProxyPool | null = null;
 	if (params.apiKeyPoolId) pool = getPool(params.apiKeyPoolId);
 	if (!pool && params.providerPoolId) pool = getPool(params.providerPoolId);
+	if (!pool && params.globalPoolId) pool = getPool(params.globalPoolId);
 	if (!pool || !pool.is_active || pool.proxy_ids.length === 0) return null;
 
 	const active: ResolvedProxy[] = [];
@@ -99,10 +102,14 @@ export async function fetchUpstream(
 		...fetchInit
 	} = init;
 
-	const chain =
+	let chain =
 		proxyPoolId != null
 			? resolveProxyPool({ apiKeyPoolId: proxyPoolId })
 			: resolveProxyPool({ apiKeyPoolId, providerPoolId });
+	if (!chain) {
+		const globalPool = getGlobalProxyPool();
+		if (globalPool) chain = resolveProxyPool({ globalPoolId: globalPool.id });
+	}
 
 	if (!chain) {
 		// No active proxy pool → direct connection (current behavior).

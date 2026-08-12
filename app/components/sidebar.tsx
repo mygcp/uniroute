@@ -11,7 +11,6 @@ import {
   ScrollText,
   TrendingUp,
   Network,
-  Layers,
   X,
 } from "lucide-react";
 
@@ -23,7 +22,6 @@ const NAV_ITEMS = [
   { to: "/api-manager", label: "API Manager", icon: KeySquare },
   { to: "/combo", label: "Combo", icon: Link2 },
   { to: "/proxies", label: "Proxies", icon: Network },
-  { to: "/proxy-pools", label: "Proxy Pools", icon: Layers },
 ];
 
 // Grouped under "Monitoring" — request + proxy log viewers.

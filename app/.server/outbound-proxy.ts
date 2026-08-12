@@ -451,3 +451,28 @@ export function bulkImportProxies(rows: BulkProxyRow[]): {
 	}
 	return { imported, errors };
 }
+
+// ---------------------------------------------------------------------------
+// Global proxy (default fallback before direct connection)
+// ---------------------------------------------------------------------------
+
+const GLOBAL_POOL_SETTING = "global_proxy_pool_id";
+
+/** Global fallback pool applied when neither the API key nor the provider has a pool. */
+export function getGlobalProxyPool(): ProxyPool | null {
+  const row = query("SELECT value FROM settings WHERE key = ?").get(GLOBAL_POOL_SETTING) as
+    | { value: string }
+    | undefined;
+  if (!row || !row.value) return null;
+  return getPool(Number(row.value));
+}
+
+export function setGlobalProxyPool(poolId: number | null): void {
+  if (poolId == null || Number.isNaN(poolId)) {
+    query("DELETE FROM settings WHERE key = ?").run(GLOBAL_POOL_SETTING);
+  } else {
+    query(
+      "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+    ).run(GLOBAL_POOL_SETTING, String(poolId));
+  }
+}
