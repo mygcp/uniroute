@@ -1,7 +1,7 @@
 # UniRoute Proxy Engine — Technical Specification
 
 **Date**: 2026-08-11
-**Status**: Design
+**Status**: Implemented (2026-08-12)
 **Tag**: proxy, outbound, http-connect, socks5, proxy-pool, failover
 
 ## 1. Overview
@@ -439,3 +439,18 @@ import { query } from "./db";
 - Should proxy health checks (periodic) be implemented? (Deferred to Phase 5+)
 - Should SOCKS5 be supported via a pure-JS implementation or the `socks` npm package? (Decision: pure-JS minimal to avoid new dependency)
 - How to handle proxy pools with different types (mixed HTTP CONNECT + SOCKS5)? (Answer: round-robin across all, each establishes its own tunnel type)
+
+---
+
+## 12. Implementation Notes (2026-08-12)
+
+Shipped per phases 1–6:
+
+- **Schema**: `outbound_proxies`, `proxy_pools`, `proxy_pool_assignments` created in `app/.server/db.ts` (`initSchema`).
+- **CRUD**: `app/.server/outbound-proxy.ts` — proxy/pool/assignment CRUD, `getPoolForProvider()`, `getPoolForApiKey()`, `bulkImportProxies()`. Proxy passwords encrypted at rest via `key-crypto` (`API_KEY_SECRET`); fall back to plaintext column storage when no secret is configured.
+- **Resolver**: `app/.server/proxy-resolver.ts` — `resolveProxyPool()` (api key → provider → direct), `pickProxy()` round-robin by `last_used_at`, `fetchUpstream()` as the single egress point, `testProxyConnection()`. Tunneling via `node:net`/`node:tls` with zero new dependencies: HTTP CONNECT and SOCKS5 (RFC 1928) handshakes; raw HTTP/1.1 request/response with Content-Length and chunked body streaming.
+- **Failover**: connection errors and retryable statuses (429/500/502/503/504) rotate within the resolved pool; 401/407 never fail over; exhausted pool → 502 `proxy_error`.
+- **Integration**: `executor.ts` `attempt()` now calls `fetchUpstream()` with `apiKeyPoolId`/`providerPoolId`/`providerId`; `proxy-handler.ts` and `combo-runner.ts` resolve and pass pool context from the client key and the selected provider.
+- **UI**: `/proxies` (List / Bulk Import / Assignments tabs), `/proxies/create`, `/proxies/:id` (edit + test connection), `/proxy-pools`, `/proxy-pools/:id`; sidebar entries added.
+- **Tests**: `outbound-proxy.test.ts` (CRUD, assignments, bulk import) and `proxy-resolver.test.ts` (resolve priority, round-robin, direct fallback, CONNECT tunnel round-trip, chunked streaming, failover, 401 no-failover, all-dead → 502).
+- **Deviations**: SOCKS5 handshake implemented but not integration-tested against a live SOCKS5 server; proxy health checks deferred (noted in Open Questions).
