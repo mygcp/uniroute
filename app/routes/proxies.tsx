@@ -484,6 +484,7 @@ export default function Proxies({ loaderData }: Route.ComponentProps) {
 	const [staging, setStaging] = useState<FreeProxyRow[]>([]);
 	const [selected, setSelected] = useState<Set<string>>(new Set());
 	const [savedSelected, setSavedSelected] = useState<Set<number>>(new Set());
+	const [loadedSig, setLoadedSig] = useState<string | null>(null);
 
 	const testFetcher = useFetcher<{
 		test: { id: number; ok: boolean; latencyMs: number };
@@ -511,6 +512,7 @@ export default function Proxies({ loaderData }: Route.ComponentProps) {
 	const freeSaved = loaderData.proxies.filter((p) => !p.username);
 
 	const syncResults = syncFetcher.data?.freeList;
+	const syncSig = syncResults?.map((r) => rowKey(r)).join("\n") ?? null;
 	const freeTests = new Map(
 		(batchFetcher.data?.freeTests ?? []).map((t) => [t.key, t]),
 	);
@@ -532,7 +534,8 @@ export default function Proxies({ loaderData }: Route.ComponentProps) {
 	const showLoadButton =
 		syncResults &&
 		syncResults.length > 0 &&
-		(staging.length === 0 || staging !== syncResults);
+		syncSig !== null &&
+		loadedSig !== syncSig;
 
 	return (
 		<div>
@@ -758,6 +761,7 @@ export default function Proxies({ loaderData }: Route.ComponentProps) {
 									onClick={() => {
 										setStaging(syncResults);
 										setSelected(new Set());
+										setLoadedSig(syncSig);
 									}}
 								>
 									Load {syncResults.length} fetched
