@@ -48,7 +48,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
 function ThemedHtml({ children }: { children: React.ReactNode }) {
   const { theme } = useTheme();
   return (
-    <html lang="en" className={theme === "dark" ? "dark" : undefined} suppressHydrationWarning>
+    <html lang="en" className={theme === "light" ? "light" : undefined} suppressHydrationWarning>
       <head>
         <meta charSet="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -56,7 +56,7 @@ function ThemedHtml({ children }: { children: React.ReactNode }) {
         <Links />
         <script
           dangerouslySetInnerHTML={{
-            __html: `(function(){try{var t=localStorage.getItem("uniroute-theme");if(t==="dark"||(!t&&window.matchMedia("(prefers-color-scheme: dark)").matches)){document.documentElement.classList.add("dark")}}catch(e){}})();`,
+            __html: `(function(){try{var t=localStorage.getItem("uniroute-theme");if(t==="light"){document.documentElement.classList.add("light")}}catch(e){}})();`,
           }}
         />
       </head>
