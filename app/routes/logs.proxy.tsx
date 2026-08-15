@@ -182,7 +182,7 @@ export default function LogsProxy({ loaderData }: Route.ComponentProps) {
   const [pendingDelete, setPendingDelete] = useState<{ id: number; type: "proxy" } | null>(null);
   const clearFetcher = useFetcher();
   const deleteFetcher = useFetcher();
-  const { logs, paused, setPaused, scrollRef, remove, reset } =
+  const { logs, connected, paused, setPaused, scrollRef, remove, reset } =
     useRealtimeLogs((l) => l.type === "proxy", loaderData.initial);
 
   const options = useMemo(() => ({ source: OPTIONS.sources(logs) }), [logs]);
@@ -255,6 +255,11 @@ export default function LogsProxy({ loaderData }: Route.ComponentProps) {
         ) : null}
       </div>
 
+      {!connected ? (
+        <div className="mb-3 rounded-lg border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-warning">
+          Connection to live logs lost — reconnecting…
+        </div>
+      ) : null}
       <div className="flex h-[calc(100vh-330px)] flex-col rounded-xl border border-gray-200 bg-white shadow-sm dark:border-gray-800 dark:bg-gray-900 sm:h-[calc(100vh-290px)]">
         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-gray-200 px-3 py-2 dark:border-gray-800 sm:px-4 sm:py-3">
           <div className="flex items-center gap-2 sm:gap-3">

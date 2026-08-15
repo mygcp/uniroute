@@ -12,6 +12,7 @@ export function useRealtimeLogs(
   initial: LogEvent[] = [],
 ) {
   const [logs, setLogs] = useState<LogEvent[]>(initial);
+  const [connected, setConnected] = useState(true);
   const [paused, setPaused] = useState(false);
   const pausedRef = useRef(paused);
   pausedRef.current = paused;
@@ -21,6 +22,10 @@ export function useRealtimeLogs(
 
   useEffect(() => {
     const es = new EventSource("/api/logs/stream");
+    es.onopen = () => setConnected(true);
+    es.onerror = () => {
+      setConnected(false);
+    };
     es.onmessage = (ev) => {
       if (pausedRef.current) return;
       try {
@@ -53,5 +58,5 @@ export function useRealtimeLogs(
     setLogs(next);
   }
 
-  return { logs, paused, setPaused, scrollRef, remove, reset };
+  return { logs, connected, paused, setPaused, scrollRef, remove, reset };
 }
