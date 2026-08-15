@@ -24,14 +24,25 @@ import {
 } from "../.server/outbound-proxy";
 import { testProxyConnection } from "../.server/proxy-resolver";
 import { Plus, Trash2, Plug, Download, Globe, RefreshCw } from "lucide-react";
+import { Button } from "../components/ui/button";
+import { Card } from "../components/ui/card";
+import { Badge } from "../components/ui/badge";
+import { Checkbox, Input, Select, Textarea } from "../components/ui/field";
+import { Tabs } from "../components/ui/tabs";
+import { Toggle } from "../components/ui/toggle";
+import { PageHeader } from "../components/ui/page-header";
+import { EmptyState } from "../components/ui/empty-state";
+import { Spinner } from "../components/ui/feedback";
+import { Table, THead, THeadCell, TRow, TCell } from "../components/ui/table";
+import { useConfirm } from "../components/ui/confirm-dialog";
 
 export function meta() {
 	return [{ title: "Proxies — UniRoute" }];
 }
 
-// ---------------------------------------------------------------------------
+//---------------------------------------------------------------------------
 // Free proxy list sources
-// ---------------------------------------------------------------------------
+//---------------------------------------------------------------------------
 
 type FreeSourceFormat = "text" | "geonode";
 
@@ -72,7 +83,7 @@ const FREE_SOURCES: Array<{
 		format: "geonode",
 	},
 	{
-		id: "clarketm-http",
+		id: "clarketm",
 		label: "clarketm (HTTP/HTTPS)",
 		url: "https://raw.githubusercontent.com/clarketm/proxy-list/master/proxy-list-raw.txt",
 		format: "text",
@@ -161,20 +172,18 @@ async function fetchFreeProxies(
 	}
 }
 
-// ---------------------------------------------------------------------------
+//---------------------------------------------------------------------------
 // Loader / action
-// ---------------------------------------------------------------------------
+//---------------------------------------------------------------------------
 
 export async function loader() {
-	const providers = query(
-		"SELECT id, name FROM providers ORDER BY name",
-	).all() as {
+	const providers = query("SELECT id, name FROM providers ORDER BY name").all() as unknown as {
 		id: string;
 		name: string;
 	}[];
 	const apiKeys = query(
 		"SELECT id, name FROM client_api_keys ORDER BY name",
-	).all() as {
+	).all() as unknown as {
 		id: number;
 		name: string;
 	}[];
@@ -196,6 +205,7 @@ function parseLine(line: string, defaultType: ProxyType): BulkProxyRow | null {
 		type = scheme[1].toLowerCase() as ProxyType;
 		rest = rest.slice(scheme[0].length);
 	}
+
 	let username: string | null = null;
 	let password: string | null = null;
 	const at = rest.lastIndexOf("@");
@@ -210,6 +220,7 @@ function parseLine(line: string, defaultType: ProxyType): BulkProxyRow | null {
 			username = creds;
 		}
 	}
+
 	const m = rest.match(/^([^:]+):(\d+)$/);
 	if (!m) return null;
 	return { type, host: m[1], port: Number(m[2]), username, password };
@@ -217,10 +228,7 @@ function parseLine(line: string, defaultType: ProxyType): BulkProxyRow | null {
 
 async function testRows(
 	rows: FreeProxyRow[],
-	onResult: (
-		row: FreeProxyRow,
-		result: { ok: boolean; latencyMs: number },
-	) => void,
+	onResult: (row: FreeProxyRow, result: { ok: boolean; latencyMs: number }) => void,
 ): Promise<void> {
 	const batch = 6;
 	for (let i = 0; i < rows.length; i += batch) {
@@ -287,10 +295,10 @@ export async function action({ request }: Route.ActionArgs) {
 			id: 0,
 			name: "custom",
 			type: String(form.get("type")) === "socks5" ? "socks5" : "http-connect",
-			host: String(form.get("host") ?? ""),
+			host: String(form.get("host") || ""),
 			port: Number(form.get("port")),
-			username: String(form.get("username") ?? "") || null,
-			password: String(form.get("password") ?? "") || null,
+			username: String(form.get("username") || "") || null,
+			password: String(form.get("password") || "") || null,
 			password_enc: null,
 			is_active: true,
 			last_used_at: 0,
@@ -302,18 +310,20 @@ export async function action({ request }: Route.ActionArgs) {
 			created_at: 0,
 			updated_at: 0,
 		};
-		if (!proxy.host || !proxy.port)
+		if (!proxy.host || !proxy.port) {
 			return { customTest: { ok: false, latencyMs: 0, status: null } };
+		}
 		return { customTest: await testProxyConnection(proxy) };
 	}
 
 	// Fetch free proxies from a public list source.
 	if (intent === "sync-free") {
-		const sourceId = String(form.get("source") ?? "proxyscrape-http");
-		const customUrl = String(form.get("custom_url") ?? "").trim();
-		const limit = Math.min(Number(form.get("limit") ?? 100) || 100, 500);
+		const sourceId = String(form.get("source") || "proxyscrape-http");
+		const customUrl = String(form.get("custom_url") || "").trim();
+		const limit = Math.min(Number(form.get("limit") || 100) || 0, 500);
 		const source = FREE_SOURCES.find((s) => s.id === sourceId);
 		let rows: FreeProxyRow[] = [];
+
 		if (customUrl) {
 			rows = await fetchFreeProxies(customUrl, "http-connect", limit, "text");
 		} else if (source) {
@@ -324,13 +334,12 @@ export async function action({ request }: Route.ActionArgs) {
 		} else {
 			// Auto: try every source until we get results.
 			for (const s of FREE_SOURCES) {
-				const t: ProxyType = s.id.includes("socks5")
-					? "socks5"
-					: "http-connect";
+				const t: ProxyType = s.id.includes("socks5") ? "socks5" : "http-connect";
 				rows = await fetchFreeProxies(s.url, t, limit, s.format);
 				if (rows.length > 0) break;
 			}
 		}
+
 		const deduped: FreeProxyRow[] = [];
 		const seen = new Set<string>();
 		for (const r of rows) {
@@ -340,6 +349,7 @@ export async function action({ request }: Route.ActionArgs) {
 				deduped.push(r);
 			}
 		}
+
 		return { freeList: deduped.slice(0, limit) };
 	}
 
@@ -347,7 +357,7 @@ export async function action({ request }: Route.ActionArgs) {
 	if (intent === "test-free") {
 		let rows: FreeProxyRow[];
 		try {
-			rows = JSON.parse(String(form.get("rows") ?? "[]")) as FreeProxyRow[];
+			rows = JSON.parse(String(form.get("rows") || "[]")) as FreeProxyRow[];
 		} catch {
 			rows = [];
 		}
@@ -358,11 +368,11 @@ export async function action({ request }: Route.ActionArgs) {
 		return { freeTests: results };
 	}
 
-	// Move selected staged free proxies into the proxy list (test first).
+	// Move selected staged free proxies to the proxy list (testing them first).
 	if (intent === "move-free") {
 		let rows: FreeProxyRow[];
 		try {
-			rows = JSON.parse(String(form.get("rows") ?? "[]")) as FreeProxyRow[];
+			rows = JSON.parse(String(form.get("rows") || "[]")) as FreeProxyRow[];
 		} catch {
 			rows = [];
 		}
@@ -392,7 +402,7 @@ export async function action({ request }: Route.ActionArgs) {
 	}
 
 	if (intent === "create-pool") {
-		createPool({ name: String(form.get("name") ?? ""), proxy_ids: [] });
+		createPool({ name: String(form.get("name") || ""), proxy_ids: [] });
 		return redirect("/proxies");
 	}
 
@@ -409,7 +419,7 @@ export async function action({ request }: Route.ActionArgs) {
 	}
 
 	if (intent === "set-global") {
-		const raw = String(form.get("pool_id") ?? "");
+		const raw = String(form.get("pool_id") || "");
 		setGlobalProxyPool(raw ? Number(raw) : null);
 		return redirect("/proxies");
 	}
@@ -417,7 +427,7 @@ export async function action({ request }: Route.ActionArgs) {
 	if (intent === "assign") {
 		assignPool({
 			proxyPoolId: Number(form.get("pool_id")),
-			targetType: String(form.get("target_type")) as "provider" | "client_key",
+			targetType: String(form.get("target_type")) === "provider" ? "provider" : "client_key",
 			targetId: String(form.get("target_id")),
 		});
 		return redirect("/proxies");
@@ -425,25 +435,23 @@ export async function action({ request }: Route.ActionArgs) {
 
 	if (intent === "unassign") {
 		unassignPool(
-			String(form.get("target_type")) as "provider" | "client_key",
+			String(form.get("target_type")) === "provider" ? "provider" : "client_key",
 			String(form.get("target_id")),
 		);
 		return redirect("/proxies");
 	}
 
 	if (intent === "import") {
-		const text = String(form.get("text") ?? "");
+		const text = String(form.get("text") || "");
 		let rows: BulkProxyRow[] = [];
 		try {
 			const parsed = JSON.parse(text);
 			if (Array.isArray(parsed)) {
 				rows = parsed
-					.filter((r) => r && typeof r === "object")
+					.filter((r) => typeof r === "object")
 					.map((r) => ({
 						name: r.name ? String(r.name) : undefined,
-						type: (r.type === "socks5"
-							? "socks5"
-							: "http-connect") as ProxyType,
+						type: (r.type === "socks5" ? "socks5" : "http-connect") as ProxyType,
 						host: String(r.host ?? ""),
 						port: Number(r.port),
 						username: r.username != null ? String(r.username) : null,
@@ -465,9 +473,9 @@ export async function action({ request }: Route.ActionArgs) {
 	return null;
 }
 
-// ---------------------------------------------------------------------------
+//---------------------------------------------------------------------------
 // Component
-// ---------------------------------------------------------------------------
+//---------------------------------------------------------------------------
 
 type TabKey = "list" | "free" | "import" | "pools";
 
@@ -486,10 +494,7 @@ export default function Proxies({ loaderData }: Route.ComponentProps) {
 	const syncFetcher = useFetcher<{ freeList: FreeProxyRow[] }>();
 	const batchFetcher = useFetcher<{
 		freeTests?: Array<{ key: string; ok: boolean; latencyMs: number }>;
-		moveResult?: {
-			moved: string[];
-			failed: Array<{ key: string; error: string }>;
-		};
+		moveResult?: { moved: string[]; failed: Array<{ key: string; error: string }> };
 	}>();
 	const customTestFetcher = useFetcher<{
 		customTest: { ok: boolean; latencyMs: number; status: number | null };
@@ -502,9 +507,7 @@ export default function Proxies({ loaderData }: Route.ComponentProps) {
 		{ key: "pools", label: "Proxy Pools" },
 	];
 
-	const globalPool = loaderData.pools.find(
-		(p) => p.id === loaderData.globalPoolId,
-	);
+	const globalPool = loaderData.pools.find((p) => p.id === loaderData.globalPoolId);
 	const freeSaved = loaderData.proxies.filter((p) => !p.username);
 
 	const syncResults = syncFetcher.data?.freeList;
@@ -523,250 +526,255 @@ export default function Proxies({ loaderData }: Route.ComponentProps) {
 
 	const selectedRows = staging.filter((r) => selected.has(rowKey(r)));
 
+	const { dialog, confirm } = useConfirm();
+
+	const syncRunning = syncFetcher.state === "submitting";
+	const showLoadButton =
+		syncResults &&
+		syncResults.length > 0 &&
+		(staging.length === 0 || staging !== syncResults);
+
 	return (
 		<div>
-			<div className="mb-6 flex items-center justify-between">
-				<h1 className="text-xl font-bold text-gray-900 dark:text-white">
-					Proxy Engine
-					<span className="ml-3 text-sm font-normal text-gray-500 dark:text-gray-400">
-						HTTP CONNECT &amp; SOCKS5 outbound routing
-					</span>
-				</h1>
-				<Link
-					to="/proxies/create"
-					className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700"
-				>
-					<Plus size={16} /> New Proxy
-				</Link>
-			</div>
-
-			<div className="mb-4 flex gap-2 border-b border-gray-200 dark:border-gray-700">
-				{tabs.map((t) => (
-					<button
-						key={t.key}
-						onClick={() => setTab(t.key)}
-						className={`border-b-2 px-4 py-2 text-sm font-medium transition-colors ${
-							tab === t.key
-								? "border-blue-600 text-blue-600 dark:text-blue-400"
-								: "border-transparent text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
-						}`}
+			<PageHeader
+				title="Proxy Engine"
+				icon={<Globe size={20} />}
+				subtitle="HTTP CONNECT &amp; SOCKS5 outbound routing"
+				actions={
+					<Link
+						to="/proxies/create"
+						className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-primary px-4 text-sm font-medium text-primary-foreground shadow-sm transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
 					>
-						{t.label}
-					</button>
-				))}
-			</div>
+						<Plus size={16} /> New Proxy
+					</Link>
+				}
+			/>
+
+			<Tabs
+				tabs={tabs.map((t) => t.label)}
+				active={tabs.find((t) => t.key === tab)?.label ?? ""}
+				onChange={(label) =>
+					setTab(tabs.find((t) => t.label === label)?.key ?? "list")
+				}
+				className="mb-6"
+			/>
 
 			{tab === "list" && (
-				<div className="overflow-x-auto rounded-xl border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800">
-					<table className="w-full text-left text-sm">
-						<thead className="text-xs uppercase text-gray-500 dark:text-gray-400">
-							<tr className="border-b border-gray-200 dark:border-gray-700">
-								<th className="px-4 py-3">Name</th>
-								<th className="px-4 py-3">Type</th>
-								<th className="px-4 py-3">Address</th>
-								<th className="px-4 py-3">Auth</th>
-								<th className="px-4 py-3">Last Used</th>
-								<th className="px-4 py-3">Status</th>
-								<th className="px-4 py-3 text-right">Actions</th>
-							</tr>
-						</thead>
-						<tbody>
-							{loaderData.proxies.map((p) => {
-								const test =
-									testFetcher.data?.test?.id === p.id
-										? testFetcher.data.test
-										: null;
-								return (
-									<tr
-										key={p.id}
-										className="border-b border-gray-100 dark:border-gray-700"
-									>
-										<td className="px-4 py-3 font-medium text-gray-900 dark:text-white">
-											<Link
-												to={`/proxies/${p.id}`}
-												className="hover:text-blue-600 dark:hover:text-blue-400"
-											>
-												{p.name}
-											</Link>
-										</td>
-										<td className="px-4 py-3">
-											<span className="rounded bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-700 dark:bg-gray-700 dark:text-gray-300">
-												{p.type}
-											</span>
-										</td>
-										<td className="px-4 py-3 font-mono text-xs text-gray-700 dark:text-gray-300">
-											{p.host}:{p.port}
-										</td>
-										<td className="px-4 py-3 text-gray-600 dark:text-gray-400">
-											{p.username ? p.username : "—"}
-										</td>
-										<td className="px-4 py-3 text-xs text-gray-500 dark:text-gray-400">
-											{p.last_used_at
-												? new Date(p.last_used_at).toLocaleString()
-												: "never"}
-										</td>
-										<td className="px-4 py-3">
-											<span
-												className={`inline-block h-2 w-2 rounded-full ${
-													p.is_active ? "bg-green-500" : "bg-red-500"
-												}`}
-											/>
-										</td>
-										<td className="px-4 py-3">
-											<div className="flex items-center justify-end gap-2">
-												<testFetcher.Form method="post">
-													<input type="hidden" name="intent" value="test" />
-													<input type="hidden" name="id" value={p.id} />
-													<button
-														type="submit"
-														title="Test connection"
-														className="flex h-8 w-8 items-center justify-center rounded-lg text-gray-500 hover:bg-gray-100 hover:text-blue-600 dark:text-gray-400 dark:hover:bg-gray-700"
-													>
-														<Plug size={15} />
-													</button>
-												</testFetcher.Form>
-												<Form method="post">
-													<input type="hidden" name="intent" value="toggle" />
-													<input type="hidden" name="id" value={p.id} />
-													<input
-														type="hidden"
-														name="is_active"
-														value={p.is_active ? "1" : "0"}
-													/>
-													<button
-														type="submit"
-														title={p.is_active ? "Deactivate" : "Activate"}
-														className="h-8 rounded-lg px-2 text-xs font-medium text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700"
-													>
-														{p.is_active ? "on" : "off"}
-													</button>
-												</Form>
-												<Form method="post">
-													<input type="hidden" name="intent" value="delete" />
-													<input type="hidden" name="id" value={p.id} />
-													<button
-														type="submit"
-														title="Delete"
-														className="flex h-8 w-8 items-center justify-center rounded-lg text-gray-500 hover:bg-red-50 hover:text-red-600 dark:text-gray-400 dark:hover:bg-red-900/20"
-													>
-														<Trash2 size={15} />
-													</button>
-												</Form>
-											</div>
-											{test && (
-												<div
-													className={`mt-1 text-right text-xs ${
-														test.ok
-															? "text-green-600 dark:text-green-400"
-															: "text-red-600 dark:text-red-400"
-													}`}
+				<Card padded={false} className="overflow-hidden">
+					{loaderData.proxies.length === 0 ? (
+						<EmptyState
+							icon={<Plug size={28} />}
+							title="No proxies yet"
+							description="Use the Free Proxy tab to fetch some, or the Import tab to paste them."
+						/>
+					) : (
+						<Table>
+							<THead>
+								<TRow>
+									<THeadCell>Name</THeadCell>
+									<THeadCell>Type</THeadCell>
+									<THeadCell>Address</THeadCell>
+									<THeadCell>Auth</THeadCell>
+									<THeadCell>Last Used</THeadCell>
+									<THeadCell>Status</THeadCell>
+									<THeadCell className="text-right">Actions</THeadCell>
+								</TRow>
+							</THead>
+							<tbody>
+								{loaderData.proxies.map((p) => {
+									const test =
+										testFetcher.data?.test?.id === p.id
+											? testFetcher.data.test
+											: null;
+									return (
+										<TRow key={p.id}>
+											<TCell className="px-4 py-3 font-medium text-foreground">
+												<Link
+													to={`/proxies/${p.id}`}
+													className="hover:text-primary"
 												>
-													{test.ok ? `OK · ${test.latencyMs}ms` : "failed"}
+													{p.name}
+												</Link>
+											</TCell>
+											<TCell className="px-4 py-3">
+												<Badge tone="neutral" style="subtle">
+													{p.type}
+												</Badge>
+											</TCell>
+											<TCell className="px-4 py-3 font-mono text-xs text-muted-foreground">
+												{p.host}:{p.port}
+											</TCell>
+											<TCell className="px-4 py-3 text-muted-foreground">
+												{p.username ? p.username : "—"}
+											</TCell>
+											<TCell className="px-4 py-3 text-muted-foreground">
+												{p.last_used_at
+													? new Date(p.last_used_at).toLocaleString()
+													: "never"}
+											</TCell>
+											<TCell className="px-4 py-3">
+												<Badge
+													tone={p.is_active ? "success" : "danger"}
+													style="subtle"
+												>
+													{p.is_active ? "Active" : "Inactive"}
+												</Badge>
+											</TCell>
+											<TCell className="px-4 py-3">
+												<div className="flex items-center justify-end gap-2">
+													<testFetcher.Form method="post">
+														<input type="hidden" name="intent" value="test" />
+														<input type="hidden" name="id" value={p.id} />
+														<Button
+															size="icon"
+															variant="ghost"
+															type="submit"
+															title="Test connection"
+															aria-label="Test connection"
+														>
+															<Plug size={15} />
+														</Button>
+													</testFetcher.Form>
+													<Toggle
+														checked={Boolean(p.is_active)}
+														label={`${p.is_active ? "Deactivate" : "Activate"} proxy ${p.name}`}
+														onChange={() => {
+															const form = document.getElementById(
+																`toggle-proxy-${p.id}`,
+															) as HTMLFormElement | null;
+															form?.requestSubmit();
+														}}
+													/>
+													<Form
+														className="hidden"
+														id={`toggle-proxy-${p.id}`}
+														method="post"
+													>
+														<input type="hidden" name="intent" value="toggle" />
+														<input type="hidden" name="id" value={p.id} />
+													</Form>
+													<Form
+														method="post"
+														onSubmit={async (e) => {
+															if (
+																!(await confirm({
+																	title: "Delete proxy?",
+																	description: `Proxy "${p.name}" will be permanently removed.`,
+																	confirmLabel: "Delete",
+																	variant: "danger",
+																}))
+															) {
+																e.preventDefault();
+															}
+														}}
+													>
+														<input type="hidden" name="intent" value="delete" />
+														<input type="hidden" name="id" value={p.id} />
+														<Button
+															size="icon"
+															variant="ghost"
+															type="submit"
+															title="Delete proxy"
+															aria-label="Delete proxy"
+															className="text-danger"
+														>
+															<Trash2 size={15} />
+														</Button>
+													</Form>
 												</div>
-											)}
-										</td>
-									</tr>
-								);
-							})}
-							{loaderData.proxies.length === 0 && (
-								<tr>
-									<td
-										colSpan={7}
-										className="px-4 py-8 text-center text-sm text-gray-400"
-									>
-										No proxies yet. Use the Free Proxy tab to fetch some, or
-										Import.
-									</td>
-								</tr>
-							)}
-						</tbody>
-					</table>
-				</div>
+												{test && (
+													<div
+														className={`mt-1 text-right text-xs ${
+															test.ok ? "text-success" : "text-danger"
+														}`}
+													>
+														{test.ok ? `OK · ${test.latencyMs}ms` : "failed"}
+													</div>
+												)}
+											</TCell>
+										</TRow>
+									);
+								})}
+							</tbody>
+						</Table>
+					)}
+				</Card>
 			)}
 
 			{tab === "free" && (
 				<div className="space-y-6">
-					<div className="rounded-xl border border-gray-200 bg-white p-6 dark:border-gray-700 dark:bg-gray-800">
-						<h2 className="mb-1 flex items-center gap-2 text-sm font-semibold text-gray-900 dark:text-white">
+					<Card>
+						<h2 className="mb-1 flex items-center gap-2 text-sm font-semibold text-foreground">
 							<RefreshCw size={15} /> Fetch Free Proxies
 						</h2>
-						<p className="mb-4 text-xs text-gray-500 dark:text-gray-400">
-							Sync fetches the latest free proxies from a public list. Test
-							them, then move the good ones into your proxy list. Syncing
-							replaces the previous staged list.
+						<p className="mb-4 text-xs text-muted-foreground">
+							Sync fetches the latest free proxies from public lists. Test
+							them, then move the good ones to the proxy list. Syncing
+							replaces the previously staged list.
 						</p>
 						<syncFetcher.Form method="post" className="flex flex-wrap gap-2">
 							<input type="hidden" name="intent" value="sync-free" />
-							<select
-								name="source"
-								defaultValue="proxyscrape-http"
-								className="rounded-lg border border-gray-300 bg-gray-50 px-3 py-2 text-sm dark:border-gray-600 dark:bg-gray-900 dark:text-gray-200"
-							>
+							<Select name="source" defaultValue="proxyscrape-http" className="w-auto">
 								<option value="auto">Auto (try all sources)</option>
 								{FREE_SOURCES.map((s) => (
 									<option key={s.id} value={s.id}>
 										{s.label}
 									</option>
 								))}
-							</select>
-							<input
+							</Select>
+							<Input
 								name="custom_url"
 								placeholder="or custom list URL (e.g. your Webshare download link)"
-								className="min-w-52 flex-1 rounded-lg border border-gray-300 bg-gray-50 px-3 py-2 font-mono text-xs dark:border-gray-600 dark:bg-gray-900 dark:text-gray-200"
+								className="min-w-52 flex-1 font-mono"
 							/>
-							<input
+							<Input
 								name="limit"
 								type="number"
 								min={1}
 								max={500}
 								defaultValue={100}
 								title="Max proxies"
-								className="w-24 rounded-lg border border-gray-300 bg-gray-50 px-3 py-2 text-sm dark:border-gray-600 dark:bg-gray-900 dark:text-gray-200"
+								className="w-24"
 							/>
-							<button
-								type="submit"
-								className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
-							>
+							<Button type="submit" disabled={syncRunning}>
 								<RefreshCw size={15} /> Sync
-							</button>
+								{syncRunning && <Spinner size={14} />}
+							</Button>
 						</syncFetcher.Form>
-					</div>
+					</Card>
 
-					<div className="rounded-xl border border-gray-200 bg-white p-6 dark:border-gray-700 dark:bg-gray-800">
+					<Card>
 						<div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-							<h2 className="text-sm font-semibold text-gray-900 dark:text-white">
+							<h2 className="text-sm font-semibold text-foreground">
 								Staged Free Proxies
-								<span className="ml-2 text-xs font-normal text-gray-500 dark:text-gray-400">
+								<span className="ml-2 text-xs font-normal text-muted-foreground">
 									{staging.length} fetched · {selected.size} selected
 								</span>
 							</h2>
-							{syncResults && staging.length === 0 && (
-								<button
+							{showLoadButton && (
+								<Button
+									size="sm"
+									variant="secondary"
 									onClick={() => {
 										setStaging(syncResults);
 										setSelected(new Set());
 									}}
-									className="inline-flex items-center gap-2 rounded-lg bg-gray-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-gray-700 dark:bg-gray-600"
 								>
 									Load {syncResults.length} fetched
-								</button>
+								</Button>
 							)}
 							{staging.length > 0 && (
 								<div className="flex flex-wrap items-center gap-2">
-									<label className="flex items-center gap-1.5 text-xs text-gray-600 dark:text-gray-300">
-										<input
-											type="checkbox"
-											checked={
-												staging.length > 0 && selected.size === staging.length
-											}
-											onChange={(e) => {
+									<label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+										<Checkbox
+											checked={staging.length > 0 && selected.size === staging.length}
+											onChange={(e) =>
 												setSelected(
 													e.target.checked
 														? new Set(staging.map((r) => rowKey(r)))
 														: new Set<string>(),
-												);
-											}}
-											className="rounded"
+												)
+											}
 										/>
 										Select all
 									</label>
@@ -777,13 +785,14 @@ export default function Proxies({ loaderData }: Route.ComponentProps) {
 											name="rows"
 											value={JSON.stringify(selectedRows)}
 										/>
-										<button
+										<Button
+											size="sm"
+											variant="outline"
 											type="submit"
 											disabled={selectedRows.length === 0}
-											className="rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-100 disabled:opacity-40 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-700"
 										>
 											Test selected
-										</button>
+										</Button>
 									</batchFetcher.Form>
 									<batchFetcher.Form method="post">
 										<input type="hidden" name="intent" value="move-free" />
@@ -792,95 +801,86 @@ export default function Proxies({ loaderData }: Route.ComponentProps) {
 											name="rows"
 											value={JSON.stringify(selectedRows)}
 										/>
-										<button
+										<Button
+											size="sm"
 											type="submit"
 											disabled={selectedRows.length === 0}
-											className="inline-flex items-center gap-1.5 rounded-lg bg-green-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-green-700 disabled:opacity-40"
+											className="gap-1.5"
 										>
-											<Plus size={13} /> Move to Proxy List
-										</button>
+											<Plus size={13} /> Move Proxy List
+										</Button>
 									</batchFetcher.Form>
-									<button
+									<Button
+										size="sm"
+										variant="outline"
+										className="gap-1.5 text-danger"
+										disabled={selected.size === 0}
 										onClick={() => {
 											setStaging((prev) =>
 												prev.filter((r) => !selected.has(rowKey(r))),
 											);
 											setSelected(new Set());
 										}}
-										disabled={selected.size === 0}
-										className="inline-flex items-center gap-1.5 rounded-lg bg-red-50 px-3 py-1.5 text-xs font-medium text-red-600 hover:bg-red-100 disabled:opacity-40 dark:bg-red-900/20 dark:text-red-400"
 									>
 										<Trash2 size={13} /> Delete selected
-									</button>
+									</Button>
 								</div>
 							)}
 						</div>
 
 						{staging.length === 0 && syncResults && (
-							<div className="rounded-lg bg-gray-50 p-4 text-sm text-gray-600 dark:bg-gray-900 dark:text-gray-300">
+							<div className="mb-3 rounded-lg bg-muted p-4 text-sm text-muted-foreground">
 								{syncResults.length > 0
-									? `${syncResults.length} free proxies fetched — click “Load” to review them.`
+									? `${syncResults.length} free proxies fetched — click "Load" to review them.`
 									: "No proxies found from this source. Try another source or a custom URL."}
 							</div>
 						)}
+
 						{staging.length === 0 && !syncResults && (
-							<p className="text-xs text-gray-400">
+							<p className="text-xs text-muted-foreground">
 								Nothing staged yet — hit Sync above to fetch the latest free
 								proxies.
 							</p>
 						)}
 
 						{staging.length > 0 && (
-							<div className="max-h-80 overflow-y-auto rounded-lg border border-gray-100 dark:border-gray-700">
-								<table className="w-full text-left text-sm">
-									<thead className="sticky top-0 bg-gray-50 text-xs uppercase text-gray-500 dark:bg-gray-900 dark:text-gray-400">
-										<tr className="border-b border-gray-200 dark:border-gray-700">
-											<th className="w-8 px-2 py-2"></th>
-											<th className="px-2 py-2">Address</th>
-											<th className="px-2 py-2">Type</th>
-											<th className="px-2 py-2">Test</th>
-										</tr>
-									</thead>
+							<div className="max-h-80 overflow-y-auto rounded-lg border border-border">
+								<Table>
+									<THead className="sticky top-0 bg-surface">
+										<TRow>
+											<THeadCell className="w-8 px-2" />
+											<THeadCell className="px-2">Address</THeadCell>
+											<THeadCell className="px-2">Type</THeadCell>
+											<THeadCell className="px-2">Test</THeadCell>
+										</TRow>
+									</THead>
 									<tbody>
 										{staging.map((r) => {
 											const key = rowKey(r);
 											const test = freeTests.get(key);
-											const status = test
-												? test.ok
-													? "ok"
-													: "fail"
-												: r.status;
+											const status = test ? (test.ok ? "ok" : "fail") : r.status;
 											return (
-												<tr
-													key={key}
-													className="border-b border-gray-100 dark:border-gray-700"
-												>
-													<td className="px-2 py-1.5">
-														<input
-															type="checkbox"
+												<TRow key={key}>
+													<TCell className="px-2 py-1.5">
+														<Checkbox
 															checked={selected.has(key)}
-															onChange={(e) =>
-																markSelected(key, e.target.checked)
-															}
-															className="rounded"
+															onChange={(e) => markSelected(key, e.target.checked)}
 														/>
-													</td>
-													<td className="px-2 py-1.5 font-mono text-xs text-gray-700 dark:text-gray-300">
+													</TCell>
+													<TCell className="px-2 py-1.5 font-mono text-xs text-muted-foreground">
 														{r.host}:{r.port}
-													</td>
-													<td className="px-2 py-1.5 text-xs text-gray-500 dark:text-gray-400">
+													</TCell>
+													<TCell className="px-2 py-1.5 text-xs text-muted-foreground">
 														{r.type}
-													</td>
-													<td className="px-2 py-1.5">
+													</TCell>
+													<TCell className="px-2 py-1.5">
 														{status === "ok" && (
-															<span className="text-xs font-medium text-green-600 dark:text-green-400">
-																OK · {test?.latencyMs ?? r.latencyMs}ms
+															<span className="text-xs font-medium text-success">
+																{test?.latencyMs ?? r.latencyMs}ms
 															</span>
 														)}
 														{status === "fail" && (
-															<span className="text-xs text-red-600 dark:text-red-400">
-																failed
-															</span>
+															<span className="text-xs text-danger">failed</span>
 														)}
 														{!status && (
 															<batchFetcher.Form method="post">
@@ -894,45 +894,44 @@ export default function Proxies({ loaderData }: Route.ComponentProps) {
 																	name="rows"
 																	value={JSON.stringify([r])}
 																/>
-																<button
+																<Button
 																	type="submit"
-																	className="text-xs font-medium text-blue-600 hover:underline dark:text-blue-400"
+																	size="sm"
+																	variant="ghost"
+																	className="text-xs text-primary"
 																>
 																	test
-																</button>
+																</Button>
 															</batchFetcher.Form>
 														)}
-													</td>
-												</tr>
+													</TCell>
+												</TRow>
 											);
 										})}
 									</tbody>
-								</table>
+								</Table>
 							</div>
 						)}
 
 						{batchFetcher.data?.moveResult && (
-							<div className="mt-3 rounded-lg bg-gray-50 p-3 text-xs dark:bg-gray-900">
-								<span className="font-semibold text-green-600 dark:text-green-400">
-									{batchFetcher.data.moveResult.moved.length} moved to proxy
-									list
+							<div className="mt-3 rounded-lg bg-muted p-3 text-xs text-foreground">
+								<span className="font-semibold text-success">
+									{batchFetcher.data.moveResult.moved.length} moved to proxy list
 								</span>
 								{batchFetcher.data.moveResult.failed.length > 0 && (
-									<span className="ml-2 text-red-600 dark:text-red-400">
+									<span className="ml-2 text-danger">
 										{batchFetcher.data.moveResult.failed.length} failed
 									</span>
 								)}
 							</div>
 						)}
-					</div>
+					</Card>
 
-					<div className="rounded-xl border border-gray-200 bg-white p-6 dark:border-gray-700 dark:bg-gray-800">
+					<Card>
 						<div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-							<h2 className="text-sm font-semibold text-gray-900 dark:text-white">
-								Test Tool
-							</h2>
-							<p className="text-xs text-gray-500 dark:text-gray-400">
-								Test any proxy before adding — no need to save it first.
+							<h2 className="text-sm font-semibold text-foreground">Test Tool</h2>
+							<p className="text-xs text-muted-foreground">
+								Test any proxy before adding or saving it.
 							</p>
 						</div>
 						<customTestFetcher.Form
@@ -940,106 +939,112 @@ export default function Proxies({ loaderData }: Route.ComponentProps) {
 							className="grid grid-cols-2 gap-2 sm:grid-cols-6"
 						>
 							<input type="hidden" name="intent" value="test-custom" />
-							<select
-								name="type"
-								defaultValue="http-connect"
-								className="rounded-lg border border-gray-300 bg-gray-50 px-2 py-2 text-sm dark:border-gray-600 dark:bg-gray-900 dark:text-gray-200"
-							>
+							<Select name="type" defaultValue="http-connect" className="px-2">
 								<option value="http-connect">CONNECT</option>
 								<option value="socks5">SOCKS5</option>
-							</select>
-							<input
+							</Select>
+							<Input
 								name="host"
 								required
 								placeholder="host"
-								className="rounded-lg border border-gray-300 bg-gray-50 px-3 py-2 font-mono text-sm dark:border-gray-600 dark:bg-gray-900 dark:text-gray-200 sm:col-span-2"
+								className="font-mono sm:col-span-2"
 							/>
-							<input
+							<Input
 								name="port"
 								type="number"
 								required
 								min={1}
 								max={65535}
 								placeholder="port"
-								className="rounded-lg border border-gray-300 bg-gray-50 px-3 py-2 text-sm dark:border-gray-600 dark:bg-gray-900 dark:text-gray-200"
 							/>
-							<input
+							<Input
 								name="username"
 								placeholder="user (opt)"
 								autoComplete="off"
-								className="rounded-lg border border-gray-300 bg-gray-50 px-3 py-2 text-sm dark:border-gray-600 dark:bg-gray-900 dark:text-gray-200"
 							/>
-							<button
-								type="submit"
-								className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white hover:bg-gray-700 dark:bg-gray-600"
-							>
-								Test
-							</button>
+							<Button type="submit">Test</Button>
 						</customTestFetcher.Form>
 						{customTestFetcher.data?.customTest && (
 							<div
 								className={`mt-3 rounded-lg px-3 py-2 text-sm ${
 									customTestFetcher.data.customTest.ok
-										? "bg-green-50 text-green-700 dark:bg-green-900/20 dark:text-green-400"
-										: "bg-red-50 text-red-700 dark:bg-red-900/20 dark:text-red-400"
+										? "bg-success/15 text-success"
+										: "bg-danger/15 text-danger"
 								}`}
 							>
 								{customTestFetcher.data.customTest.ok
 									? `OK · ${customTestFetcher.data.customTest.latencyMs}ms`
-									: `Failed (${customTestFetcher.data.customTest.status ?? "no response"})`}
+									: `Failed (${
+											customTestFetcher.data.customTest.status ?? "no response"
+										})`}
 							</div>
 						)}
-					</div>
+					</Card>
 
-					<div className="rounded-xl border border-gray-200 bg-white p-6 dark:border-gray-700 dark:bg-gray-800">
+					<Card>
 						<div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-							<h2 className="text-sm font-semibold text-gray-900 dark:text-white">
+							<h2 className="text-sm font-semibold text-foreground">
 								Saved Free Proxies (no auth)
-								<span className="ml-2 text-xs font-normal text-gray-500 dark:text-gray-400">
+								<span className="ml-2 text-xs font-normal text-muted-foreground">
 									{freeSaved.length} saved
 								</span>
 							</h2>
 							{savedSelected.size > 0 && (
-								<Form method="post">
+								<Form
+									method="post"
+									onSubmit={async (e) => {
+										if (
+											!(await confirm({
+												title: "Delete selected proxies?",
+												description: `${savedSelected.size} selected free proxies will be permanently removed.`,
+												confirmLabel: "Delete",
+												variant: "danger",
+											}))
+										) {
+											e.preventDefault();
+										}
+									}}
+								>
 									{[...savedSelected].map((id) => (
 										<input key={id} type="hidden" name="ids" value={id} />
 									))}
 									<input type="hidden" name="intent" value="delete-many" />
-									<button
+									<Button
 										type="submit"
-										className="inline-flex items-center gap-1.5 rounded-lg bg-red-50 px-3 py-1.5 text-xs font-medium text-red-600 hover:bg-red-100 dark:bg-red-900/20 dark:text-red-400"
+										size="sm"
+										variant="outline"
+										className="gap-1.5 text-danger"
 									>
 										<Trash2 size={13} /> Delete selected ({savedSelected.size})
-									</button>
+									</Button>
 								</Form>
 							)}
 						</div>
-						{freeSaved.length === 0 ? (
-							<p className="text-xs text-gray-400">
+
+						{freeSaved.length === 0 && (
+							<p className="text-xs text-muted-foreground">
 								No auth-free proxies saved yet — sync and move some above.
 							</p>
-						) : (
-							<div className="max-h-72 overflow-y-auto rounded-lg border border-gray-100 dark:border-gray-700">
-								<table className="w-full text-left text-sm">
-									<thead className="sticky top-0 bg-gray-50 text-xs uppercase text-gray-500 dark:bg-gray-900 dark:text-gray-400">
-										<tr className="border-b border-gray-200 dark:border-gray-700">
-											<th className="w-8 px-2 py-2"></th>
-											<th className="px-2 py-2">Name</th>
-											<th className="px-2 py-2">Type</th>
-											<th className="px-2 py-2">Address</th>
-											<th className="px-2 py-2">Status</th>
-											<th className="px-2 py-2 text-right">Actions</th>
-										</tr>
-									</thead>
+						)}
+
+						{freeSaved.length > 0 && (
+							<div className="max-h-72 overflow-y-auto rounded-lg border border-border">
+								<Table>
+									<THead className="sticky top-0 bg-surface">
+										<TRow>
+											<THeadCell className="w-8 px-2" />
+											<THeadCell className="px-2">Name</THeadCell>
+											<THeadCell className="px-2">Type</THeadCell>
+											<THeadCell className="px-2">Address</THeadCell>
+											<THeadCell className="px-2">Status</THeadCell>
+											<THeadCell className="px-2 text-right">Actions</THeadCell>
+										</TRow>
+									</THead>
 									<tbody>
 										{freeSaved.map((p) => (
-											<tr
-												key={p.id}
-												className="border-b border-gray-100 dark:border-gray-700"
-											>
-												<td className="px-2 py-1.5">
-													<input
-														type="checkbox"
+											<TRow key={p.id}>
+												<TCell className="px-2 py-1.5">
+													<Checkbox
 														checked={savedSelected.has(p.id)}
 														onChange={(e) => {
 															setSavedSelected((prev) => {
@@ -1049,85 +1054,82 @@ export default function Proxies({ loaderData }: Route.ComponentProps) {
 																return next;
 															});
 														}}
-														className="rounded"
 													/>
-												</td>
-												<td className="px-2 py-1.5 text-gray-900 dark:text-white">
+												</TCell>
+												<TCell className="px-2 py-1.5 text-foreground">
 													{p.name}
-												</td>
-												<td className="px-2 py-1.5 text-xs text-gray-500 dark:text-gray-400">
+												</TCell>
+												<TCell className="px-2 py-1.5 text-xs text-muted-foreground">
 													{p.type}
-												</td>
-												<td className="px-2 py-1.5 font-mono text-xs text-gray-700 dark:text-gray-300">
+												</TCell>
+												<TCell className="px-2 py-1.5 font-mono text-xs text-muted-foreground">
 													{p.host}:{p.port}
-												</td>
-												<td className="px-2 py-1.5">
-													<span
-														className={`inline-block h-2 w-2 rounded-full ${
-															p.is_active ? "bg-green-500" : "bg-red-500"
-														}`}
-													/>
-												</td>
-												<td className="px-2 py-1.5 text-right">
+												</TCell>
+												<TCell className="px-2 py-1.5">
+													<Badge
+														tone={p.is_active ? "success" : "danger"}
+														style="subtle"
+													>
+														{p.is_active ? "Active" : "Inactive"}
+													</Badge>
+												</TCell>
+												<TCell className="px-2 py-1.5 text-right">
 													<testFetcher.Form method="post">
 														<input type="hidden" name="intent" value="test" />
 														<input type="hidden" name="id" value={p.id} />
-														<button
+														<Button
+															size="icon"
+															variant="ghost"
 															type="submit"
 															title="Test connection"
-															className="flex h-8 w-8 items-center justify-center rounded-lg text-gray-500 hover:bg-gray-100 hover:text-blue-600 dark:text-gray-400 dark:hover:bg-gray-700"
+															aria-label="Test connection"
 														>
 															<Plug size={15} />
-														</button>
+														</Button>
 													</testFetcher.Form>
-												</td>
-											</tr>
+												</TCell>
+											</TRow>
 										))}
 									</tbody>
-								</table>
+								</Table>
 							</div>
 						)}
-					</div>
+					</Card>
 				</div>
 			)}
 
 			{tab === "import" && (
-				<div className="rounded-xl border border-gray-200 bg-white p-6 dark:border-gray-700 dark:bg-gray-800">
-					<h2 className="mb-1 text-sm font-semibold text-gray-900 dark:text-white">
-						Import
-					</h2>
-					<p className="mb-4 text-xs text-gray-500 dark:text-gray-400">
+				<Card>
+					<h2 className="mb-1 text-sm font-semibold text-foreground">Import</h2>
+					<p className="mb-4 text-xs text-muted-foreground">
 						One per line:{" "}
-						<code className="font-mono">[type://][user:pass@]host:port</code> —
+						<code className="font-mono">[type://][user:pass@]host:port</code>{" "}
 						or a JSON array of objects. Optionally include{" "}
 						<code className="font-mono">poolName</code> to group imported
-						proxies into a pool. Free proxies (no auth) can also be pasted here
-						as plain <code className="font-mono">host:port</code> lines.
+						proxies into a pool. Free proxies (no auth) can be pasted as plain{" "}
+						<code className="font-mono">host:port</code> lines.
 					</p>
 					<importFetcher.Form method="post" className="space-y-3">
 						<input type="hidden" name="intent" value="import" />
-						<textarea
+						<Textarea
 							name="text"
 							rows={10}
 							placeholder={
 								"socks5://user:pass@127.0.0.1:1080\nhttp-connect://127.0.0.1:3128\nproxy.example.com:8080"
 							}
-							className="w-full rounded-lg border border-gray-300 bg-gray-50 px-3 py-2 font-mono text-xs dark:border-gray-600 dark:bg-gray-900 dark:text-gray-200"
+							className="font-mono"
 						/>
-						<button
-							type="submit"
-							className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
-						>
+						<Button type="submit">
 							<Download size={15} /> Import
-						</button>
+						</Button>
 					</importFetcher.Form>
 					{importFetcher.data?.importResult && (
-						<div className="mt-4 rounded-lg bg-gray-50 p-3 text-xs dark:bg-gray-900">
-							<span className="font-semibold text-green-600 dark:text-green-400">
+						<div className="mt-4 rounded-lg bg-muted p-3 text-xs text-foreground">
+							<span className="font-semibold text-success">
 								{importFetcher.data.importResult.imported} imported
 							</span>
 							{importFetcher.data.importResult.errors.length > 0 && (
-								<ul className="mt-1 list-disc pl-4 text-red-600 dark:text-red-400">
+								<ul className="mt-1 list-disc pl-4 text-danger">
 									{importFetcher.data.importResult.errors.map((e, i) => (
 										<li key={i}>{e}</li>
 									))}
@@ -1135,26 +1137,26 @@ export default function Proxies({ loaderData }: Route.ComponentProps) {
 							)}
 						</div>
 					)}
-				</div>
+				</Card>
 			)}
 
 			{tab === "pools" && (
 				<div className="space-y-6">
-					<div className="rounded-xl border border-gray-200 bg-white p-6 dark:border-gray-700 dark:bg-gray-800">
-						<h2 className="mb-1 flex items-center gap-2 text-sm font-semibold text-gray-900 dark:text-white">
+					<Card>
+						<h2 className="mb-1 flex items-center gap-2 text-sm font-semibold text-foreground">
 							<Globe size={15} /> Global Proxy
 						</h2>
-						<p className="mb-4 text-xs text-gray-500 dark:text-gray-400">
-							Default fallback pool used when neither the client API key nor the
-							provider has a pool assigned. Priority: client key → provider →
+						<p className="mb-4 text-xs text-muted-foreground">
+							Default fallback pool when neither a client API key nor a
+							provider pool is assigned. Priority: client key → provider →
 							global → direct.
 						</p>
 						<Form method="post" className="flex gap-2">
 							<input type="hidden" name="intent" value="set-global" />
-							<select
+							<Select
 								name="pool_id"
 								defaultValue={loaderData.globalPoolId ?? ""}
-								className="flex-1 rounded-lg border border-gray-300 bg-gray-50 px-3 py-2 text-sm dark:border-gray-600 dark:bg-gray-900 dark:text-gray-200"
+								className="flex-1"
 							>
 								<option value="">— None (direct) —</option>
 								{loaderData.pools.map((pool) => (
@@ -1162,137 +1164,134 @@ export default function Proxies({ loaderData }: Route.ComponentProps) {
 										{pool.name}
 									</option>
 								))}
-							</select>
-							<button
-								type="submit"
-								className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
-							>
-								Save
-							</button>
+							</Select>
+							<Button type="submit">Save</Button>
 						</Form>
 						{globalPool && (
-							<p className="mt-3 text-xs text-green-600 dark:text-green-400">
-								Currently using pool “{globalPool.name}” (
+							<p className="mt-3 text-xs text-success">
+								Currently using pool{" "}
+								<span className="font-semibold">{globalPool.name}</span> (
 								{globalPool.proxy_ids.length} proxies)
 							</p>
 						)}
-					</div>
+					</Card>
 
-					<div className="rounded-xl border border-gray-200 bg-white p-6 dark:border-gray-700 dark:bg-gray-800">
-						<h2 className="mb-4 text-sm font-semibold text-gray-900 dark:text-white">
-							Pools
-						</h2>
-						{loaderData.pools.length === 0 ? (
-							<p className="text-xs text-gray-400">
-								No pools. Create one below.
+					<Card>
+						<h2 className="mb-4 text-sm font-semibold text-foreground">Pools</h2>
+						{loaderData.pools.length === 0 && (
+							<p className="text-xs text-muted-foreground">
+								No pools yet. Create one below.
 							</p>
-						) : (
-							<div className="space-y-4">
-								{loaderData.pools.map((pool) => (
-									<div
-										key={pool.id}
-										className="rounded-lg border border-gray-200 p-4 dark:border-gray-600"
-									>
-										<div className="mb-3 flex items-center justify-between">
-											<h3 className="text-sm font-semibold text-gray-900 dark:text-white">
-												{pool.name}
-												<span className="ml-2 text-xs font-normal text-gray-500 dark:text-gray-400">
-													{pool.proxy_ids.length} proxies ·{" "}
-													{pool.is_active ? "active" : "inactive"}
-												</span>
-											</h3>
-											<Form method="post">
-												<input
-													type="hidden"
-													name="intent"
-													value="delete-pool"
-												/>
-												<input type="hidden" name="id" value={pool.id} />
-												<button
-													type="submit"
-													title="Delete pool"
-													className="flex h-8 w-8 items-center justify-center rounded-lg text-gray-500 hover:bg-red-50 hover:text-red-600 dark:text-gray-400 dark:hover:bg-red-900/20"
-												>
-													<Trash2 size={15} />
-												</button>
-											</Form>
-										</div>
-										<Form method="post">
-											<input type="hidden" name="intent" value="update-pool" />
+						)}
+						<div className="space-y-4">
+							{loaderData.pools.map((pool) => (
+								<div key={pool.id} className="rounded-lg border border-border p-4">
+									<div className="mb-3 flex items-center justify-between">
+										<h3 className="text-sm font-semibold text-foreground">
+											{pool.name}
+											<span className="ml-2 text-xs font-normal text-muted-foreground">
+												{pool.proxy_ids.length} proxies ·{" "}
+												{pool.is_active ? "active" : "inactive"}
+											</span>
+										</h3>
+										<Form
+											method="post"
+											onSubmit={async (e) => {
+												if (
+													!(await confirm({
+														title: "Delete pool?",
+														description: `Pool "${pool.name}" and its proxy assignments will be deleted.`,
+														confirmLabel: "Delete",
+														variant: "danger",
+													}))
+												) {
+													e.preventDefault();
+												}
+											}}
+										>
+											<input type="hidden" name="intent" value="delete-pool" />
 											<input type="hidden" name="id" value={pool.id} />
-											<div className="max-h-48 space-y-1 overflow-y-auto rounded-lg border border-gray-100 p-2 dark:border-gray-700">
-												{loaderData.proxies.map((p) => (
-													<label
-														key={p.id}
-														className="flex items-center gap-2 rounded px-2 py-1 text-sm text-gray-700 hover:bg-gray-50 dark:text-gray-300 dark:hover:bg-gray-700"
-													>
-														<input
-															type="checkbox"
-															name="proxy_ids"
-															value={p.id}
-															defaultChecked={pool.proxy_ids.includes(p.id)}
-															disabled={!p.is_active}
-															className="rounded"
-														/>
-														{p.name}{" "}
-														<span className="font-mono text-xs text-gray-400">
-															({p.type} · {p.host}:{p.port}
-															{p.is_active ? "" : " · inactive"})
-														</span>
-													</label>
-												))}
-												{loaderData.proxies.length === 0 && (
-													<p className="p-2 text-xs text-gray-400">
-														No proxies defined.
-													</p>
-												)}
-											</div>
-											<button
+											<Button
+												size="icon"
+												variant="ghost"
 												type="submit"
-												className="mt-3 rounded-lg bg-gray-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-gray-700 dark:bg-gray-600"
+												title="Delete pool"
+												aria-label="Delete pool"
+												className="text-danger"
 											>
-												Save pool
-											</button>
+												<Trash2 size={15} />
+											</Button>
 										</Form>
 									</div>
-								))}
-							</div>
-						)}
+									<Form method="post">
+										<input type="hidden" name="intent" value="update-pool" />
+										<input type="hidden" name="id" value={pool.id} />
+										<div className="max-h-48 space-y-1 overflow-y-auto rounded-lg border border-border p-2">
+											{loaderData.proxies.map((p) => (
+												<label
+													key={p.id}
+													className="flex items-center gap-2 rounded px-2 py-1 text-sm text-foreground hover:bg-muted"
+												>
+													<Checkbox
+														name="proxy_ids"
+														value={p.id}
+														defaultChecked={pool.proxy_ids.includes(p.id)}
+														disabled={!p.is_active}
+													/>
+													{p.name}{" "}
+													<span className="font-mono text-xs text-muted-foreground">
+														({p.type} {p.host}:{p.port}
+														{!p.is_active ? " inactive" : ""})
+													</span>
+												</label>
+											))}
+											{loaderData.proxies.length === 0 && (
+												<p className="p-2 text-xs text-muted-foreground">
+													No proxies defined.
+												</p>
+											)}
+										</div>
+										<Button
+											type="submit"
+											size="sm"
+											variant="secondary"
+											className="mt-3"
+										>
+											Save pool
+										</Button>
+									</Form>
+								</div>
+							))}
+						</div>
 						<Form method="post" className="mt-4 flex gap-2">
 							<input type="hidden" name="intent" value="create-pool" />
-							<input
-								name="name"
-								placeholder="Pool name"
-								className="rounded-lg border border-gray-300 bg-gray-50 px-3 py-1.5 text-sm dark:border-gray-600 dark:bg-gray-900 dark:text-gray-200"
-							/>
-							<button
-								type="submit"
-								className="rounded-lg bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700"
-							>
-								Create pool
-							</button>
+							<Input name="name" placeholder="Pool name" />
+							<Button type="submit">Create pool</Button>
 						</Form>
-					</div>
+					</Card>
 
-					<div className="rounded-xl border border-gray-200 bg-white p-6 dark:border-gray-700 dark:bg-gray-800">
-						<h2 className="mb-1 text-sm font-semibold text-gray-900 dark:text-white">
+					<Card>
+						<h2 className="mb-1 text-sm font-semibold text-foreground">
 							Assignments
 						</h2>
-						<p className="mb-4 text-xs text-gray-500 dark:text-gray-400">
+						<p className="mb-4 text-xs text-muted-foreground">
 							Priority: client key → provider → global → direct.
 						</p>
-						{loaderData.assignments.length === 0 ? (
-							<p className="text-xs text-gray-400">Nothing assigned yet.</p>
-						) : (
-							<table className="w-full text-left text-sm">
-								<thead className="text-xs uppercase text-gray-500 dark:text-gray-400">
-									<tr className="border-b border-gray-200 dark:border-gray-700">
-										<th className="px-2 py-2">Target</th>
-										<th className="px-2 py-2">Kind</th>
-										<th className="px-2 py-2">Pool</th>
-										<th className="px-2 py-2 text-right">Actions</th>
-									</tr>
-								</thead>
+						{loaderData.assignments.length === 0 && (
+							<p className="text-xs text-muted-foreground">
+								Nothing assigned yet.
+							</p>
+						)}
+						{loaderData.assignments.length > 0 && (
+							<Table>
+								<THead>
+									<TRow>
+										<THeadCell className="px-2">Target</THeadCell>
+										<THeadCell className="px-2">Kind</THeadCell>
+										<THeadCell className="px-2">Pool</THeadCell>
+										<THeadCell className="px-2 text-right">Actions</THeadCell>
+									</TRow>
+								</THead>
 								<tbody>
 									{loaderData.assignments.map((a, i) => {
 										const pool = loaderData.pools.find(
@@ -1300,32 +1299,40 @@ export default function Proxies({ loaderData }: Route.ComponentProps) {
 										);
 										const targetName =
 											a.target_type === "provider"
-												? loaderData.providers.find((p) => p.id === a.target_id)
-														?.name
+												? loaderData.providers.find(
+														(p) => p.id === a.target_id,
+													)?.name
 												: loaderData.apiKeys.find(
 														(k) => String(k.id) === a.target_id,
 													)?.name;
 										return (
-											<tr
-												key={i}
-												className="border-b border-gray-100 dark:border-gray-700"
-											>
-												<td className="px-2 py-2 text-gray-900 dark:text-white">
+											<TRow key={i}>
+												<TCell className="px-2 py-2 text-foreground">
 													{targetName ?? a.target_id}
-												</td>
-												<td className="px-2 py-2 text-xs text-gray-500 dark:text-gray-400">
+												</TCell>
+												<TCell className="px-2 py-2 text-xs text-muted-foreground">
 													{a.target_type}
-												</td>
-												<td className="px-2 py-2 text-gray-700 dark:text-gray-300">
+												</TCell>
+												<TCell className="px-2 py-2 text-foreground">
 													{pool?.name ?? a.proxy_pool_id}
-												</td>
-												<td className="px-2 py-2 text-right">
-													<Form method="post">
-														<input
-															type="hidden"
-															name="intent"
-															value="unassign"
-														/>
+												</TCell>
+												<TCell className="px-2 py-2 text-right">
+													<Form
+														method="post"
+														onSubmit={async (e) => {
+															if (
+																!(await confirm({
+																	title: "Remove assignment?",
+																	description: "This pool assignment will be removed.",
+																	confirmLabel: "Remove",
+																	variant: "danger",
+																}))
+															) {
+																e.preventDefault();
+															}
+														}}
+													>
+														<input type="hidden" name="intent" value="unassign" />
 														<input
 															type="hidden"
 															name="target_type"
@@ -1336,63 +1343,52 @@ export default function Proxies({ loaderData }: Route.ComponentProps) {
 															name="target_id"
 															value={a.target_id}
 														/>
-														<button
+														<Button
 															type="submit"
-															className="text-xs font-medium text-red-600 hover:underline dark:text-red-400"
+															size="sm"
+															variant="ghost"
+															className="text-xs text-danger"
 														>
 															remove
-														</button>
+														</Button>
 													</Form>
-												</td>
-											</tr>
+												</TCell>
+											</TRow>
 										);
 									})}
 								</tbody>
-							</table>
+							</Table>
 						)}
 						<Form
 							method="post"
 							className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-4"
 						>
 							<input type="hidden" name="intent" value="assign" />
-							<select
-								name="target_type"
-								defaultValue="provider"
-								className="rounded-lg border border-gray-300 bg-gray-50 px-3 py-1.5 text-sm dark:border-gray-600 dark:bg-gray-900 dark:text-gray-200"
-							>
+							<Select name="target_type" defaultValue="provider">
 								<option value="provider">Provider</option>
 								<option value="client_key">API Key</option>
-							</select>
-							<select
-								name="target_id"
-								className="rounded-lg border border-gray-300 bg-gray-50 px-3 py-1.5 text-sm dark:border-gray-600 dark:bg-gray-900 dark:text-gray-200"
-							>
+							</Select>
+							<Select name="target_id">
 								{loaderData.providers.map((p) => (
 									<option key={p.id} value={p.id}>
 										{p.name}
 									</option>
 								))}
-							</select>
-							<select
-								name="pool_id"
-								className="rounded-lg border border-gray-300 bg-gray-50 px-3 py-1.5 text-sm dark:border-gray-600 dark:bg-gray-900 dark:text-gray-200"
-							>
+							</Select>
+							<Select name="pool_id">
 								{loaderData.pools.map((pool) => (
 									<option key={pool.id} value={pool.id}>
 										{pool.name}
 									</option>
 								))}
-							</select>
-							<button
-								type="submit"
-								className="rounded-lg bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700"
-							>
-								Assign
-							</button>
+							</Select>
+							<Button type="submit">Assign</Button>
 						</Form>
-					</div>
+					</Card>
 				</div>
 			)}
+
+			{dialog}
 		</div>
 	);
 }
