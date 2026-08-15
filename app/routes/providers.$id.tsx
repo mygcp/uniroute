@@ -17,16 +17,20 @@ import { useStreaming } from "../hooks/use-streaming";
 import { MessageInput } from "../components/message-input";
 import { StreamingResponse } from "../components/streaming-response";
 import { useConfirm } from "../components/ui/confirm-dialog";
+import { useToast } from "../components/ui/toast";
+import { PageHeader } from "../components/ui/page-header";
+import { Card, CardHeader, CardTitle } from "../components/ui/card";
+import { Badge } from "../components/ui/badge";
+import { Button } from "../components/ui/button";
+import { Spinner } from "../components/ui/feedback";
+import { Input, Label, Select } from "../components/ui/field";
+import { Tabs } from "../components/ui/tabs";
 import {
   ArrowLeft,
-  KeyRound,
   Plug,
   Trash2,
   Plus,
-  MessageSquare,
-  Boxes,
   RefreshCw,
-  Loader2,
   Send,
   Square,
   CheckCircle2,
@@ -49,6 +53,12 @@ type ModelRow = {
   is_active: number;
   is_primary: number;
 };
+
+const TAB_ITEMS: { value: "keys" | "models" | "chat"; label: string }[] = [
+  { value: "keys", label: "API Keys" },
+  { value: "models", label: "Models" },
+  { value: "chat", label: "Chat Playground" },
+];
 
 function dbSyncModels(providerId: string, entry: RegistryEntry): void {
   for (const [i, m] of entry.models.entries()) {
@@ -96,11 +106,11 @@ export async function action({ request, params }: Route.ActionArgs) {
   if (intent === "test-key") {
     const keyId = Number(form.get("key_id"));
     const key = listApiKeys(id).find((k) => k.id === keyId);
-    if (!key) return { test: { ok: false, message: "Key tidak ditemukan" } };
+    if (!key) return { test: { ok: false, message: "Key not found" } };
     const provider = query(
       "SELECT base_url, auth_type FROM providers WHERE id = ?",
     ).get(id) as { base_url: string; auth_type: string } | undefined;
-    if (!provider) return { test: { ok: false, message: "Provider tidak ada" } };
+    if (!provider) return { test: { ok: false, message: "Provider not found" } };
 
     const entry = getRegistryEntry(id);
     const modelsUrl =
@@ -128,7 +138,7 @@ export async function action({ request, params }: Route.ActionArgs) {
       );
       clearTimeout(timer);
       if (res.ok) {
-        return { test: { ok: true, okId: keyId, message: "Terhubung" } };
+        return { test: { ok: true, okId: keyId, message: "Connected" } };
       }
       const text = (await res.text()).slice(0, 300);
       return {
@@ -206,33 +216,6 @@ function MaskedKey({ value }: { value: string }) {
   );
 }
 
-function TabButton({
-  active,
-  onClick,
-  icon,
-  label,
-}: {
-  active: boolean;
-  onClick: () => void;
-  icon: React.ReactNode;
-  label: string;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium ${
-        active
-          ? "bg-blue-600 text-white"
-          : "bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700"
-      }`}
-    >
-      {icon}
-      {label}
-    </button>
-  );
-}
-
 export default function ProviderDetail({ loaderData }: Route.ComponentProps) {
   const { provider, keys, models, missingModels, entry } = loaderData;
   const [tab, setTab] = useState<"keys" | "models" | "chat">("keys");
@@ -246,6 +229,7 @@ export default function ProviderDetail({ loaderData }: Route.ComponentProps) {
   const [prompt, setPrompt] = useState("");
   const stream = useStreaming();
   const { dialog, confirm } = useConfirm();
+  const { toast } = useToast();
 
   const handleDelete = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -259,177 +243,152 @@ export default function ProviderDetail({ loaderData }: Route.ComponentProps) {
     if (ok) form.submit();
   };
 
+  const handleDeleteKey = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    const form = e.currentTarget;
+    const ok = await confirm({
+      title: "Delete API key?",
+      description: "This permanently removes the key. Requests using it will stop working.",
+      confirmLabel: "Delete",
+      variant: "danger",
+    });
+    if (ok) form.submit();
+  };
+
+  const handleAddSubmit = (e: React.FormEvent<HTMLFormElement>) => {
+    if (!apiKey.trim()) {
+      e.preventDefault();
+      toast({
+        title: "API key required",
+        description: "Enter an API key before saving.",
+        variant: "error",
+      });
+      return;
+    }
+    setAddOpen(false);
+    setApiKey("");
+    setLabel("");
+  };
+
   if (!provider) {
     return (
-      <div className="rounded-xl border border-gray-200 bg-white p-8 text-center dark:border-gray-800 dark:bg-gray-900">
-        <p className="text-gray-600 dark:text-gray-300">Provider tidak ditemukan.</p>
-        <a href="/providers" className="mt-4 inline-block text-blue-600 hover:underline">
-          ← Kembali ke daftar
+      <Card padded={false} className="p-8 text-center">
+        <p className="text-muted-foreground">Provider not found.</p>
+        <a href="/providers" className="mt-4 inline-block text-primary hover:underline">
+          ← Back to list
         </a>
-      </div>
+      </Card>
     );
   }
 
   const testResult = fetcher.data?.test;
 
-  const handleAdd = () => {
-    if (!apiKey.trim()) return;
-    const form = document.getElementById("add-key-form") as HTMLFormElement | null;
-    form?.requestSubmit();
-  };
-
   return (
     <div>
-      <div className="mb-6 flex flex-wrap items-center justify-between gap-4">
-        <div className="flex items-start gap-3 sm:items-center">
-          <a
-            href="/providers"
-            className="mt-1 shrink-0 rounded-lg border border-gray-300 p-2 text-gray-600 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"
-          >
-            <ArrowLeft size={18} />
-          </a>
-          <div className="min-w-0 flex-1">
-            <h1 className="text-xl font-bold text-gray-900 dark:text-white sm:text-2xl">{provider.name}</h1>
-            <p className="truncate text-sm text-gray-500 dark:text-gray-400">
-              {provider.id} · {provider.base_url}
-            </p>
-          </div>
-        </div>
-        <span
-          className={`mt-2 shrink-0 self-start rounded-full px-3 py-1 text-xs font-medium ${
-            provider.is_active
-              ? "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300"
-              : "bg-gray-200 text-gray-600 dark:bg-gray-800 dark:text-gray-400"
-          }`}
-        >
-          {provider.is_active ? "Aktif" : "Non-aktif"}
-        </span>
-      </div>
+      <a
+        href="/providers"
+        className="mb-4 inline-flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
+      >
+        <ArrowLeft size={16} />
+        Back to providers
+      </a>
 
-      <div className="tabs-scroll mb-6">
-        <TabButton
-          active={tab === "keys"}
-          onClick={() => setTab("keys")}
-          icon={<KeyRound size={16} />}
-          label="API Keys"
-        />
-        <TabButton
-          active={tab === "models"}
-          onClick={() => setTab("models")}
-          icon={<Boxes size={16} />}
-          label="Models"
-        />
-        <TabButton
-          active={tab === "chat"}
-          onClick={() => setTab("chat")}
-          icon={<MessageSquare size={16} />}
-          label="Chat Playground"
-        />
-      </div>
+      <PageHeader
+        title={provider.name}
+        subtitle={`${provider.id} · ${provider.base_url}`}
+        actions={
+          provider.is_active ? (
+            <Badge tone="success">Active</Badge>
+          ) : (
+            <Badge tone="neutral">Inactive</Badge>
+          )
+        }
+      />
+
+      <Tabs
+        tabs={TAB_ITEMS.map((t) => t.label)}
+        active={TAB_ITEMS.find((t) => t.value === tab)?.label ?? "API Keys"}
+        onChange={(label) => {
+          const item = TAB_ITEMS.find((t) => t.label === label);
+          if (item) setTab(item.value);
+        }}
+        className="mb-6"
+      />
 
       {tab === "keys" ? (
-        <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-gray-900">
-          <div className="mb-4 flex items-center justify-between">
-            <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
-              API Keys ({keys.length})
-            </h2>
-            <button
-              type="button"
-              onClick={() => setAddOpen(true)}
-              className="flex items-center gap-2 rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700"
-            >
+        <Card>
+          <CardHeader>
+            <CardTitle>API Keys ({keys.length})</CardTitle>
+            <Button type="button" onClick={() => setAddOpen(true)}>
               <Plus size={16} />
-              Tambah API Key
-            </button>
-          </div>
+              Add API Key
+            </Button>
+          </CardHeader>
 
           {addOpen ? (
             <Form
               id="add-key-form"
               method="post"
-              onSubmit={() => {
-                setAddOpen(false);
-                setApiKey("");
-                setLabel("");
-              }}
-              className="mb-4 rounded-lg border border-blue-200 bg-blue-50 p-4 dark:border-blue-900 dark:bg-blue-950/40"
+              onSubmit={handleAddSubmit}
+              className="mb-4 rounded-lg border border-primary/30 bg-primary/5 p-4"
             >
               <input type="hidden" name="intent" value="add-key" />
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                 <div>
-                  <label className="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-300">
-                    Label (opsional)
-                  </label>
-                  <input
+                  <Label htmlFor="add-key-label">Label (optional)</Label>
+                  <Input
+                    id="add-key-label"
                     name="label"
                     value={label}
                     onChange={(e) => setLabel(e.target.value)}
-                    placeholder="mis. akun-utama"
-                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 placeholder-gray-400 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+                    placeholder="e.g. primary-account"
                   />
                 </div>
                 <div className="sm:col-span-2">
-                  <label className="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-300">
-                    API Key
-                  </label>
-                  <input
+                  <Label htmlFor="add-key-value">API Key</Label>
+                  <Input
+                    id="add-key-value"
                     name="api_key"
                     value={apiKey}
                     onChange={(e) => setApiKey(e.target.value)}
-                    required
                     placeholder="sk-..."
-                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 placeholder-gray-400 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
                   />
                 </div>
               </div>
               <div className="mt-3 flex gap-2">
-                <button
-                  type="submit"
-                  onClick={handleAdd}
-                  className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
-                >
-                  Simpan
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setAddOpen(false)}
-                  className="rounded-lg border border-gray-300 px-4 py-2 text-sm text-gray-600 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"
-                >
-                  Batal
-                </button>
+                <Button type="submit">Save</Button>
+                <Button type="button" variant="outline" onClick={() => setAddOpen(false)}>
+                  Cancel
+                </Button>
               </div>
             </Form>
           ) : null}
 
           {keys.length === 0 ? (
-            <p className="py-8 text-center text-sm text-gray-400">
-              Belum ada API key. Tambahkan untuk mengaktifkan provider ini.
+            <p className="py-8 text-center text-sm text-muted-foreground">
+              No API keys yet. Add one to activate this provider.
             </p>
           ) : (
             <div className="space-y-3">
               {keys.map((key) => (
                 <div
                   key={key.id}
-                  className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-gray-200 p-4 dark:border-gray-700"
+                  className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border p-4"
                 >
                   <div className="min-w-0">
                     <div className="flex items-center gap-2">
-                      <p className="font-medium text-gray-900 dark:text-white">
+                      <p className="font-medium text-foreground">
                         {key.label || `Key #${key.id}`}
                       </p>
                       {key.is_routing ? (
-                        <span className="flex items-center gap-1 rounded bg-blue-100 px-2 py-0.5 text-[11px] text-blue-700 dark:bg-blue-900/50 dark:text-blue-300">
+                        <Badge tone="info">
                           <ShieldCheck size={12} />
                           routing
-                        </span>
+                        </Badge>
                       ) : null}
-                      {!key.is_active ? (
-                        <span className="rounded bg-gray-200 px-2 py-0.5 text-[11px] text-gray-600 dark:bg-gray-700 dark:text-gray-300">
-                          non-aktif
-                        </span>
-                      ) : null}
+                      {!key.is_active ? <Badge tone="neutral">inactive</Badge> : null}
                     </div>
-                    <p className="mt-0.5 font-mono text-xs text-gray-500 dark:text-gray-400">
+                    <p className="mt-0.5 font-mono text-xs text-muted-foreground">
                       <MaskedKey value={key.api_key} />
                     </p>
                   </div>
@@ -444,126 +403,111 @@ export default function ProviderDetail({ loaderData }: Route.ComponentProps) {
                     <Form method="post">
                       <input type="hidden" name="intent" value="route-key" />
                       <input type="hidden" name="key_id" value={key.id} />
-                      <button
+                      <Button
                         type="submit"
+                        size="sm"
+                        variant="outline"
                         disabled={Boolean(key.is_routing)}
-                        className={`rounded-lg border px-3 py-1.5 text-xs ${
+                        className={
                           key.is_routing
-                            ? "cursor-default border-blue-200 bg-blue-50 text-blue-600 dark:border-blue-900 dark:bg-blue-950/40 dark:text-blue-300"
-                            : "border-gray-300 text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-800"
-                        }`}
+                            ? "cursor-default border-primary/30 bg-primary/15 text-primary"
+                            : ""
+                        }
                       >
-                        {key.is_routing ? "Routing aktif" : "Pakai untuk routing"}
-                      </button>
+                        {key.is_routing ? "Routing active" : "Use for routing"}
+                      </Button>
                     </Form>
 
                     <Form method="post">
                       <input type="hidden" name="intent" value="active-key" />
                       <input type="hidden" name="key_id" value={key.id} />
                       <input type="hidden" name="is_active" value={key.is_active ? 0 : 1} />
-                      <button
-                        type="submit"
-                        className="rounded-lg border border-gray-300 px-3 py-1.5 text-xs text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-800"
-                      >
-                        {key.is_active ? "Non-aktifkan" : "Aktifkan"}
-                      </button>
+                      <Button type="submit" variant="outline" size="sm">
+                        {key.is_active ? "Deactivate" : "Activate"}
+                      </Button>
                     </Form>
 
-                    <Form method="post">
+                    <Form method="post" onSubmit={handleDeleteKey}>
                       <input type="hidden" name="intent" value="delete-key" />
                       <input type="hidden" name="key_id" value={key.id} />
-                      <button
+                      <Button
                         type="submit"
-                        className="rounded-lg border border-red-200 px-3 py-1.5 text-xs text-red-600 hover:bg-red-50 dark:border-red-900 dark:text-red-400 dark:hover:bg-red-950/40"
+                        variant="danger"
+                        size="sm"
+                        aria-label={`Delete key #${key.id}`}
                       >
                         <Trash2 size={14} />
-                      </button>
+                      </Button>
                     </Form>
                   </div>
                 </div>
               ))}
             </div>
           )}
-        </div>
+        </Card>
       ) : tab === "models" ? (
-        <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-gray-900">
-          <div className="mb-4 flex items-center justify-between">
-            <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
-              Models ({models.length})
-            </h2>
+        <Card>
+          <CardHeader>
+            <CardTitle>Models ({models.length})</CardTitle>
             {missingModels.length > 0 ? (
               <Form method="post">
                 <input type="hidden" name="intent" value="sync-models" />
-                <button
-                  type="submit"
-                  className="flex items-center gap-2 rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700"
-                >
+                <Button type="submit" size="sm">
                   <RefreshCw size={16} />
-                  Sinkron dari registry ({missingModels.length})
-                </button>
+                  Sync from registry ({missingModels.length})
+                </Button>
               </Form>
             ) : null}
-          </div>
+          </CardHeader>
 
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {models.map((m) => (
-              <div
-                key={m.id}
-                className="rounded-lg border border-gray-200 p-3 dark:border-gray-700"
-              >
+              <div key={m.id} className="rounded-lg border border-border p-3">
                 <div className="flex items-center justify-between gap-2">
-                  <p className="font-mono text-sm font-medium text-gray-900 dark:text-white">
+                  <p className="font-mono text-sm font-medium text-foreground">
                     {m.model_name}
                   </p>
-                  {m.is_primary ? (
-                    <span className="rounded bg-blue-100 px-2 py-0.5 text-[11px] text-blue-700 dark:bg-blue-900/50 dark:text-blue-300">
-                      primary
-                    </span>
-                  ) : null}
+                  {m.is_primary ? <Badge tone="info">primary</Badge> : null}
                 </div>
-                <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                <p className="mt-1 text-xs text-muted-foreground">
                   {m.context_length
                     ? `${Math.round(m.context_length / 1000)}k context`
-                    : "context tidak diketahui"}
-                  {m.is_active ? "" : " · non-aktif"}
+                    : "Unknown context"}
+                  {m.is_active ? "" : " · inactive"}
                 </p>
               </div>
             ))}
           </div>
-        </div>
+        </Card>
       ) : (
-        <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-gray-900">
-          <h2 className="mb-4 text-lg font-semibold text-gray-900 dark:text-white">
-            Chat Playground
-          </h2>
+        <Card>
+          <CardTitle className="mb-4">Chat Playground</CardTitle>
           {models.length === 0 ? (
-            <p className="py-8 text-center text-sm text-gray-400">
-              Belum ada model untuk provider ini. Sinkronkan model dari registry
-              di tab Models.
+            <p className="py-8 text-center text-sm text-muted-foreground">
+              No models for this provider yet. Sync models from the registry in the Models tab.
             </p>
           ) : (
             <>
               <div className="mb-4">
-                <label className="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-300">
-                  Model
-                </label>
-                <select
+                <Label htmlFor="chat-model">Model</Label>
+                <Select
+                  id="chat-model"
                   value={chatModel}
                   onChange={(e) => setChatModel(e.target.value)}
-                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 dark:border-gray-600 dark:bg-gray-800 dark:text-white sm:w-72"
+                  className="sm:w-72"
                 >
                   {models.map((m) => (
                     <option key={m.id} value={m.model_name}>
                       {m.model_name}
                     </option>
                   ))}
-                </select>
+                </Select>
               </div>
 
               <MessageInput value={prompt} onChange={setPrompt} />
 
               <div className="mb-4 flex gap-2">
-                <button
+                <Button
                   type="button"
                   onClick={() => {
                     if (!prompt.trim()) return;
@@ -572,20 +516,15 @@ export default function ProviderDetail({ loaderData }: Route.ComponentProps) {
                     stream.send(chatModel, p, true);
                   }}
                   disabled={stream.streaming}
-                  className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
                 >
-                  {stream.streaming ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}
-                  Kirim
-                </button>
+                  {stream.streaming ? <Spinner size={16} /> : <Send size={16} />}
+                  Send
+                </Button>
                 {stream.streaming ? (
-                  <button
-                    type="button"
-                    onClick={stream.stop}
-                    className="flex items-center gap-2 rounded-lg border border-gray-300 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-800"
-                  >
+                  <Button type="button" variant="outline" onClick={stream.stop}>
                     <Square size={16} />
                     Stop
-                  </button>
+                  </Button>
                 ) : null}
               </div>
 
@@ -597,17 +536,15 @@ export default function ProviderDetail({ loaderData }: Route.ComponentProps) {
               />
             </>
           )}
-        </div>
+        </Card>
       )}
 
       <Form method="post" className="mt-6 sm:mt-8" onSubmit={handleDelete}>
         <input type="hidden" name="intent" value="delete-provider" />
-        <button
-          type="submit"
-          className="rounded-lg border border-red-200 px-4 py-2 text-sm text-red-600 hover:bg-red-50 dark:border-red-900 dark:text-red-400 dark:hover:bg-red-950/40"
-        >
-          Hapus provider ini
-        </button>
+        <Button type="submit" variant="danger">
+          <Trash2 size={16} />
+          Delete provider
+        </Button>
       </Form>
       {dialog}
     </div>
@@ -629,27 +566,21 @@ function KeyTestButton({
       {result ? (
         <span
           className={`flex items-center gap-1 text-xs ${
-            result.ok
-              ? "text-green-600 dark:text-green-400"
-              : "text-red-600 dark:text-red-400"
+            result.ok ? "text-success" : "text-danger"
           }`}
           title={result.message}
         >
           {result.ok ? <CheckCircle2 size={14} /> : <XCircle size={14} />}
-          {result.ok ? "OK" : "Gagal"}
+          {result.ok ? "OK" : "Failed"}
         </span>
       ) : null}
       <fetcher.Form method="post">
         <input type="hidden" name="intent" value="test-key" />
         <input type="hidden" name="key_id" value={keyId} />
-        <button
-          type="submit"
-          disabled={pending}
-          className="flex items-center gap-1 rounded-lg border border-gray-300 px-3 py-1.5 text-xs text-gray-700 hover:bg-gray-50 disabled:opacity-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-800"
-        >
-          {pending ? <Loader2 size={14} className="animate-spin" /> : <Plug size={14} />}
+        <Button type="submit" variant="outline" size="sm" disabled={pending}>
+          {pending ? <Spinner size={14} /> : <Plug size={14} />}
           Test
-        </button>
+        </Button>
       </fetcher.Form>
     </div>
   );

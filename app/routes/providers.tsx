@@ -11,7 +11,13 @@ import { query } from "../.server/db";
 import { reload } from "../.server/registry";
 import { getRegistryEntry } from "~/registry";
 import { listApiKeys } from "../.server/credential";
-import { Plug, Loader2 } from "lucide-react";
+import { Plug } from "lucide-react";
+import { PageHeader } from "../components/ui/page-header";
+import { Card } from "../components/ui/card";
+import { Badge, type BadgeTone } from "../components/ui/badge";
+import { Toggle } from "../components/ui/toggle";
+import { Button } from "../components/ui/button";
+import { Spinner } from "../components/ui/feedback";
 
 export type ProviderRow = {
   id: string;
@@ -159,12 +165,14 @@ export async function action({ request }: Route.ActionArgs) {
   return redirect("/providers");
 }
 
+const AUTH_TONE: Record<string, BadgeTone> = {
+  none: "neutral",
+  bearer: "info",
+  apikey: "primary",
+};
+
 function AuthBadge({ auth }: { auth: string }) {
-  return (
-    <span className="rounded bg-gray-100 px-2 py-0.5 text-xs text-gray-600 dark:bg-gray-800 dark:text-gray-300">
-      {auth}
-    </span>
-  );
+  return <Badge tone={AUTH_TONE[auth] ?? "neutral"}>{auth}</Badge>;
 }
 
 export default function Providers({ loaderData }: Route.ComponentProps) {
@@ -181,20 +189,18 @@ export default function Providers({ loaderData }: Route.ComponentProps) {
 
   return (
     <div>
-      <h1 className="mb-6 text-2xl font-bold text-gray-900 dark:text-white">Providers</h1>
+      <PageHeader title="Providers" icon={<Plug size={20} />} />
 
       {picked ? (
         <>
           <div className="mb-4 flex items-center justify-between">
-            <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
-              Tambah provider
-            </h2>
+            <h2 className="text-lg font-semibold text-foreground">Add provider</h2>
             <button
               type="button"
               onClick={() => setPicked(null)}
-              className="rounded-lg border border-gray-300 px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"
+              className="rounded-lg border border-border px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-muted"
             >
-              ← Pilih template lain
+              ← Choose another template
             </button>
           </div>
           <div className="mb-8">
@@ -203,11 +209,9 @@ export default function Providers({ loaderData }: Route.ComponentProps) {
         </>
       ) : (
         <>
-          <h2 className="mb-1 text-lg font-semibold text-gray-900 dark:text-white">
-            Tambah provider
-          </h2>
-          <p className="mb-4 text-sm text-gray-500 dark:text-gray-400">
-            Pilih template di bawah untuk mengisi konfigurasi secara otomatis.
+          <h2 className="mb-1 text-lg font-semibold text-foreground">Add provider</h2>
+          <p className="mb-4 text-sm text-muted-foreground">
+            Pick a template below to prefill the configuration.
           </p>
           <div className="mb-8 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {PROVIDER_TEMPLATES.map((t) => (
@@ -217,49 +221,52 @@ export default function Providers({ loaderData }: Route.ComponentProps) {
         </>
       )}
 
-      <h2 className="mb-3 text-lg font-semibold text-gray-900 dark:text-white">
-        Daftar provider ({providers.length})
+      <h2 className="mb-3 text-lg font-semibold text-foreground">
+        Providers ({providers.length})
       </h2>
       <div className="mb-8 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {providers.map((p) => (
-          <div
+          <Card
             key={p.id}
-            className={`rounded-xl border p-4 shadow-sm transition-colors ${
-              p.is_active
-                ? "border-gray-200 bg-white dark:border-gray-800 dark:bg-gray-900"
-                : "border-gray-200 bg-gray-50 opacity-80 dark:border-gray-800 dark:bg-gray-900/50"
-            }`}
+            className={p.is_active ? "transition-colors" : "opacity-80 transition-colors"}
           >
-            <a href={`/providers/${p.id}`} className="block">
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <p className="font-semibold text-gray-900 dark:text-white">{p.name}</p>
-                  <p className="text-xs text-gray-400">{p.id}</p>
-                </div>
-                <div className="flex items-center gap-2">
-                            <label className="flex cursor-pointer items-center gap-1.5 text-xs text-gray-500 dark:text-gray-400">
-                                <input type="checkbox" className="peer sr-only" checked={Boolean(p.is_active)} onChange={() => { const form = document.getElementById(`toggle-${p.id}`) as HTMLFormElement | null; form?.requestSubmit(); }} />
-                                <span className="relative inline-block h-4 w-7 rounded-full bg-gray-300 transition-colors after:absolute after:left-0.5 after:top-0.5 after:h-3 after:w-3 after:rounded-full after:bg-white after:shadow after:transition-transform peer-checked:bg-blue-600 peer-checked:after:translate-x-3 dark:bg-gray-600" />
-                                {p.is_active ? "ON" : "OFF"}
-                            </label>
-                            <AuthBadge auth={p.auth_type} />
-                        </div>
-                        </div>
-              <p className="mt-2 truncate text-xs text-gray-500 dark:text-gray-400">{p.base_url}</p>
+            <div className="flex items-start justify-between gap-3">
+              <a href={`/providers/${p.id}`} className="block min-w-0">
+                <p className="font-semibold text-foreground">{p.name}</p>
+                <p className="text-xs text-muted-foreground">{p.id}</p>
+              </a>
+              <div className="flex shrink-0 items-center gap-2">
+                <span className="text-xs text-muted-foreground">{p.is_active ? "ON" : "OFF"}</span>
+                <Toggle
+                  checked={Boolean(p.is_active)}
+                  label={`${p.is_active ? "Deactivate" : "Activate"} ${p.name}`}
+                  onChange={() => {
+                    const form = document.getElementById(`toggle-${p.id}`) as HTMLFormElement | null;
+                    form?.requestSubmit();
+                  }}
+                />
+                <AuthBadge auth={p.auth_type} />
+              </div>
+            </div>
+            <a
+              href={`/providers/${p.id}`}
+              className="mt-2 block truncate text-xs text-muted-foreground"
+            >
+              {p.base_url}
             </a>
-                        <Form id={`toggle-${p.id}`} method="post" className="hidden">
-                            <input type="hidden" name="intent" value="toggle" />
-                            <input type="hidden" name="id" value={p.id} />
-                            <input type="hidden" name="is_active" value={p.is_active} />
-                        </Form>
-                        <ProviderStatusCard
+            <Form id={`toggle-${p.id}`} method="post" className="hidden">
+              <input type="hidden" name="intent" value="toggle" />
+              <input type="hidden" name="id" value={p.id} />
+              <input type="hidden" name="is_active" value={p.is_active} />
+            </Form>
+            <ProviderStatusCard
               providerId={p.id}
               keyCount={keyCounts[p.id] ?? 0}
               result={testResult && testResult.id === p.id ? testResult : undefined}
               testing={testing}
-      fetcher={fetcher}
+              fetcher={fetcher}
             />
-          </div>
+          </Card>
         ))}
       </div>
     </div>
@@ -285,25 +292,25 @@ function ProviderStatusCard({
 
   if (keyCount === 0) {
     statusText = "no connection";
-    statusClass = "text-gray-400 dark:text-gray-500";
+    statusClass = "text-muted-foreground";
   } else if (result) {
     if (result.connected > 0) {
       statusText = `${result.connected} Connected`;
-      statusClass = "text-green-600 dark:text-green-400";
+      statusClass = "text-success";
     } else {
       statusText = "Error";
-      statusClass = "text-red-600 dark:text-red-400";
+      statusClass = "text-danger";
     }
   } else {
     statusText = "Not connected";
-    statusClass = "text-gray-400 dark:text-gray-500";
+    statusClass = "text-muted-foreground";
   }
 
   return (
-    <div className="mt-3 flex items-center justify-between border-t border-gray-100 pt-3 dark:border-gray-800">
+    <div className="mt-3 flex items-center justify-between border-t border-border pt-3">
       <span className={`flex items-center gap-1.5 text-sm font-medium ${statusClass}`}>
         {pending ? (
-          <Loader2 size={14} className="animate-spin" />
+          <Spinner size={14} />
         ) : (
           <span className="inline-block h-2 w-2 rounded-full bg-current" />
         )}
@@ -312,14 +319,10 @@ function ProviderStatusCard({
       <fetcher.Form method="post">
         <input type="hidden" name="intent" value="test" />
         <input type="hidden" name="id" value={providerId} />
-        <button
-          type="submit"
-          disabled={pending}
-          className="flex items-center gap-2 rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-800"
-        >
-          {pending ? <Loader2 size={14} className="animate-spin" /> : <Plug size={14} />}
+        <Button type="submit" variant="outline" size="sm" disabled={pending}>
+          {pending ? <Spinner size={14} /> : <Plug size={14} />}
           Test
-        </button>
+        </Button>
       </fetcher.Form>
     </div>
   );
