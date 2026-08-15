@@ -1,4 +1,4 @@
-import { Form, Link } from "react-router";
+import { Form, Link, redirect } from "react-router";
 import { useState } from "react";
 import type { Route } from "./+types/api-manager.$id";
 import {
@@ -84,7 +84,7 @@ export async function action({ request, params }: Route.ActionArgs) {
   if (intent === "reactivate") reactivateKey(id);
   if (intent === "delete") {
     deleteKey(id);
-    return { deleted: true };
+    return redirect("/api-manager");
   }
   if (intent === "update") {
     const accessHoursEnabled = form.get("access_enabled") === "1";
@@ -151,6 +151,13 @@ function fmtTs(ts: number | null | undefined): string {
   return new Date(ts * 1000).toLocaleString();
 }
 
+function toDateInput(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
 function pct(value: number, total: number): number {
   if (!total) return 0;
   return Math.min(100, Math.round((value / total) * 100));
@@ -164,23 +171,11 @@ export default function KeyDetail({ loaderData, actionData }: Route.ComponentPro
   const { key, month, today, status, audit, byDay, groups, health, budget } = loaderData;
   const [editing, setEditing] = useState(false);
   const rotated = (actionData as { newlyRotated?: { key: string } } | undefined)?.newlyRotated;
-  const deleted = (actionData as { deleted?: boolean } | undefined)?.deleted;
   const updated = (actionData as { updated?: boolean } | undefined)?.updated;
   const st = STATUS_STYLE[status];
   const usagePct = budget && budget > 0 ? pct(month.cost, budget) : null;
   const success = audit.filter((a) => a.action === "REQUEST").length;
   const errors = health.checks.errors_last_hour;
-
-  if (deleted) {
-    return (
-      <div className="rounded-xl border border-gray-200 bg-white p-8 text-center shadow-sm dark:border-gray-800 dark:bg-gray-900">
-        <p className="text-gray-700 dark:text-gray-200">API key dihapus.</p>
-        <Link to="/api-manager" className="mt-4 inline-block text-blue-600 hover:underline dark:text-blue-400">
-          ← Kembali ke API Manager
-        </Link>
-      </div>
-    );
-  }
 
   return (
     <div>
@@ -252,7 +247,7 @@ export default function KeyDetail({ loaderData, actionData }: Route.ComponentPro
           <Form
             method="post"
             onSubmit={(e) => {
-              if (!window.confirm("Hapus API key ini? Tindakan tidak bisa dibatalkan.")) e.preventDefault();
+              if (!window.confirm("Delete this API key? This action cannot be undone.")) e.preventDefault();
             }}
           >
             <input type="hidden" name="intent" value="delete" />
@@ -509,7 +504,7 @@ function EditKeyForm({ data }: { data: ClientKey }) {
       </div>
       <div>
         <label className={editLabel}>Expires</label>
-        <input name="expires_at" type="date" className={editInput} defaultValue={data.expires_at ? new Date(data.expires_at * 1000).toISOString().slice(0, 10) : ""} />
+        <input name="expires_at" type="date" className={editInput} defaultValue={data.expires_at ? toDateInput(new Date(data.expires_at * 1000)) : ""} />
       </div>
       <div>
         <label className={editLabel}>Rotation interval (days)</label>
