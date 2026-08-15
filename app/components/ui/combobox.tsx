@@ -4,6 +4,7 @@ type ComboboxProps = {
   options: string[];
   value: string;
   onChange: (v: string) => void;
+  id?: string;
   name?: string;
   placeholder?: string;
   required?: boolean;
@@ -14,6 +15,7 @@ export function Combobox({
   options,
   value,
   onChange,
+  id,
   name,
   placeholder,
   required,
@@ -43,6 +45,7 @@ export function Combobox({
   return (
     <div ref={rootRef} className="relative">
       <input
+        id={id}
         name={name}
         value={value}
         placeholder={placeholder}

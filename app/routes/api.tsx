@@ -1,11 +1,19 @@
 import { Form } from "react-router";
 import { useState } from "react";
 import type { Route } from "./+types/api";
-import { KeyRound } from "lucide-react";
+import { KeyRound, ListFilter, Route as RouteIcon, Trash2 } from "lucide-react";
 import { query } from "../.server/db";
 import { isModelsPublic, setModelsPublic } from "../.server/model-public";
 import { getModelSuggestions, getProviderSuggestions } from "../.server/suggest";
-import { Combobox } from "../components/combobox";
+import { Combobox } from "../components/ui/combobox";
+import { PageHeader } from "../components/ui/page-header";
+import { Card, CardHeader, CardTitle } from "../components/ui/card";
+import { Badge } from "../components/ui/badge";
+import { Button } from "../components/ui/button";
+import { Input, Label, Select } from "../components/ui/field";
+import { Table, THead, THeadCell, TRow, TCell } from "../components/ui/table";
+import { Toggle } from "../components/ui/toggle";
+import { EmptyState } from "../components/ui/empty-state";
 
 type AllowlistRow = {
   id: number;
@@ -24,6 +32,9 @@ type RuleRow = {
   priority: number;
   is_active: number;
 };
+
+const comboboxClass =
+  "w-full rounded-lg border border-border bg-surface-2 px-3 text-sm text-foreground placeholder:text-muted-foreground transition-colors focus:border-primary focus:outline-none focus:ring-2 focus:ring-ring/40 h-9";
 
 export function loader() {
   const allowlist = query(
@@ -102,10 +113,6 @@ export async function action({ request }: Route.ActionArgs) {
   return null;
 }
 
-function inputClass() {
-  return "w-full rounded-lg border border-gray-300 px-3 py-1.5 text-sm text-gray-900 dark:border-gray-600 dark:bg-gray-800 dark:text-white";
-}
-
 export default function Api({ loaderData }: Route.ComponentProps) {
   const {
     allowlist,
@@ -117,167 +124,171 @@ export default function Api({ loaderData }: Route.ComponentProps) {
 
   return (
     <div>
-      <h1 className="mb-6 flex items-center gap-2 text-2xl font-bold text-gray-900 dark:text-white">
-        <KeyRound size={24} /> API Management
-      </h1>
+      <PageHeader title="API" icon={<KeyRound size={20} />} />
 
-      <div className="mb-5 flex flex-wrap items-center gap-3 rounded-xl border border-blue-200 bg-blue-50 p-4 text-sm text-blue-900 dark:border-blue-800 dark:bg-blue-950/40 dark:text-blue-100">
-        <span>
-          Kelola API key untuk klien, budget, quota, dan keamanan sekarang pindah ke halaman
-          "API Manager".
-        </span>
-        <a
-          href="/api-manager"
-          className="rounded-lg bg-blue-600 px-3 py-1.5 font-medium text-white hover:bg-blue-700"
+      <Card className="mb-4">
+        <Form
+          id="public-models-form"
+          method="post"
+          className="flex items-center justify-between gap-4"
         >
-          Buka API Manager →
-        </a>
-      </div>
-
-      <div className="mt-4 rounded-xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-gray-900">
-        <Form method="post" className="flex items-center justify-between gap-4">
           <input type="hidden" name="section" value="settings" />
           <input type="hidden" name="intent" value="models_public" />
+          <input type="hidden" name="enabled" value={modelsPublic ? "0" : "1"} />
           <div>
-            <h3 className="text-sm font-semibold text-gray-900 dark:text-white">Public Models</h3>
-            <p className="text-xs text-gray-500 dark:text-gray-400">
-              Jika aktif, <code>/v1/models</code> bisa diakses tanpa auth dan hanya menampilkan model bertanda <em>public</em>.
+            <h3 className="text-sm font-semibold text-foreground">Public Models</h3>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              When enabled, <code>/v1/models</code> can be accessed without auth and only shows
+              models marked as <em>public</em>.
             </p>
           </div>
-          <button
-            name="enabled"
-            value={modelsPublic ? "0" : "1"}
-            type="submit"
-            className={`rounded-lg px-4 py-2 text-sm font-medium transition ${
-              modelsPublic
-                ? "bg-green-600 text-white hover:bg-green-700"
-                : "bg-gray-200 text-gray-700 hover:bg-gray-300 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600"
-            }`}
-          >
-            {modelsPublic ? "ON" : "OFF"}
-          </button>
+          <Toggle
+            checked={modelsPublic}
+            label={modelsPublic ? "Disable public models" : "Enable public models"}
+            onChange={() => {
+              const form = document.getElementById(
+                "public-models-form",
+              ) as HTMLFormElement | null;
+              form?.requestSubmit();
+            }}
+          />
         </Form>
-      </div>
+      </Card>
 
-      <div className="mt-4 rounded-xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-gray-900">
-        <h2 className="mb-3 text-lg font-semibold text-gray-900 dark:text-white">
-          Model Allowlist ({allowlist.length})
-        </h2>
+      <Card className="mb-4">
+        <CardHeader>
+          <CardTitle>Model Allowlist ({allowlist.length})</CardTitle>
+        </CardHeader>
         <AllowlistForm modelSuggestions={modelSuggestions} />
-          <div className="table-wrap">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b text-left text-xs uppercase text-gray-400 dark:border-gray-700">
-                <th className="py-2 pr-4">Model</th>
-                <th className="py-2 pr-4">Action</th>
-                <th className="py-2 pr-4">Reason</th>
-                <th className="py-2">Actions</th>
+        {allowlist.length === 0 ? (
+          <EmptyState
+            icon={<ListFilter size={20} />}
+            title="No allowlist entries"
+            description="Add a model to allow or deny access to it."
+          />
+        ) : (
+          <Table>
+            <THead>
+              <tr>
+                <THeadCell>Model</THeadCell>
+                <THeadCell>Action</THeadCell>
+                <THeadCell>Reason</THeadCell>
+                <THeadCell className="pr-0">Actions</THeadCell>
               </tr>
-            </thead>
+            </THead>
             <tbody>
               {allowlist.map((row) => (
-                <tr key={row.id} className="border-b border-gray-100 dark:border-gray-800">
-                  <td className="py-2 pr-4 font-medium text-gray-900 dark:text-white">{row.model_name}</td>
-                  <td className="py-2 pr-4">
-                    <span
-                      className={`rounded-full px-2 py-0.5 text-xs ${
-                        row.action === "deny"
-                          ? "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300"
-                          : "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300"
-                      }`}
-                    >
+                <TRow key={row.id}>
+                  <TCell className="font-medium text-foreground">{row.model_name}</TCell>
+                  <TCell>
+                    <Badge tone={row.action === "deny" ? "danger" : "success"}>
                       {row.action}
-                    </span>
-                  </td>
-                  <td className="py-2 pr-4 text-gray-500 dark:text-gray-400">{row.reason}</td>
-                  <td className="py-2">
+                    </Badge>
+                  </TCell>
+                  <TCell className="text-muted-foreground">{row.reason}</TCell>
+                  <TCell className="pr-0">
                     <Form method="post">
                       <input type="hidden" name="section" value="allowlist" />
                       <input type="hidden" name="intent" value="delete" />
                       <input type="hidden" name="id" value={row.id} />
-                      <button className="text-red-500 hover:underline dark:text-red-400">Delete</button>
+                      <Button
+                        type="submit"
+                        variant="danger"
+                        size="icon"
+                        aria-label={`Delete ${row.model_name}`}
+                      >
+                        <Trash2 size={14} />
+                      </Button>
                     </Form>
-                  </td>
-                </tr>
+                  </TCell>
+                </TRow>
               ))}
             </tbody>
-          </table>
-          </div>
-        </div>
+          </Table>
+        )}
+      </Card>
 
-      <div className="mt-4 rounded-xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-gray-900">
-<h2 className="mb-3 text-lg font-semibold text-gray-900 dark:text-white">
-          Routing Rules ({rules.length})
-        </h2>
+      <Card className="mb-4">
+        <CardHeader>
+          <CardTitle>Routing Rules ({rules.length})</CardTitle>
+        </CardHeader>
         <RulesForm
           modelSuggestions={modelSuggestions}
           providerSuggestions={providerSuggestions}
         />
-          <div className="table-wrap">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b text-left text-xs uppercase text-gray-400 dark:border-gray-700">
-                <th className="py-3 pr-4">Name</th>
-                <th className="py-3 pr-4">Source</th>
-                <th className="py-3 pr-4">Type</th>
-                <th className="py-3 pr-4">Target</th>
-                <th className="py-3 pr-4">Priority</th>
-                <th className="py-3 pr-4">Active</th>
-                <th className="py-3">Actions</th>
+        {rules.length === 0 ? (
+          <EmptyState
+            icon={<RouteIcon size={20} />}
+            title="No routing rules"
+            description="Add a rule above to control how models are routed."
+          />
+        ) : (
+          <Table>
+            <THead>
+              <tr>
+                <THeadCell>Name</THeadCell>
+                <THeadCell>Source</THeadCell>
+                <THeadCell>Type</THeadCell>
+                <THeadCell>Target</THeadCell>
+                <THeadCell>Priority</THeadCell>
+                <THeadCell>Active</THeadCell>
+                <THeadCell className="pr-0">Actions</THeadCell>
               </tr>
-            </thead>
+            </THead>
             <tbody>
               {rules.map((rule) => (
-                <tr key={rule.id} className="border-b border-gray-100 dark:border-gray-800">
-                  <td className="py-2 pr-4 font-medium text-gray-900 dark:text-white">{rule.name}</td>
-                  <td className="py-2 pr-4 text-gray-800 dark:text-gray-200">{rule.source_model}</td>
-                  <td className="py-2 pr-4">
-                    <span className="rounded bg-gray-100 px-2 py-0.5 text-xs text-gray-700 dark:bg-gray-800 dark:text-gray-300">
-                      {rule.rule_type}
-                    </span>
-                  </td>
-                  <td className="py-2 pr-4 text-gray-500 dark:text-gray-400">
+                <TRow key={rule.id}>
+                  <TCell className="font-medium text-foreground">{rule.name}</TCell>
+                  <TCell className="text-foreground">{rule.source_model}</TCell>
+                  <TCell>
+                    <Badge tone="neutral">{rule.rule_type}</Badge>
+                  </TCell>
+                  <TCell className="text-muted-foreground">
                     {rule.target_model ?? rule.target_provider_id ?? "-"}
-                  </td>
-                  <td className="py-2 pr-4 text-gray-800 dark:text-gray-200">{rule.priority}</td>
-                  <td className="py-2 pr-4">
-                    <Form method="post">
+                  </TCell>
+                  <TCell className="text-foreground">{rule.priority}</TCell>
+                  <TCell>
+                    <Form
+                      id={`rule-toggle-${rule.id}`}
+                      method="post"
+                      className="hidden"
+                    >
                       <input type="hidden" name="section" value="rules" />
                       <input type="hidden" name="intent" value="toggle" />
                       <input type="hidden" name="id" value={rule.id} />
-                      <button
-                        type="submit"
-                        className={`rounded-full px-2 py-0.5 text-xs ${
-                          rule.is_active
-                            ? "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300"
-                            : "bg-gray-200 text-gray-500 dark:bg-gray-700 dark:text-gray-400"
-                        }`}
-                      >
-                        {rule.is_active ? "on" : "off"}
-                      </button>
                     </Form>
-                  </td>
-                  <td className="py-2">
+                    <Toggle
+                      checked={Boolean(rule.is_active)}
+                      label={`${rule.is_active ? "Deactivate" : "Activate"} rule ${rule.name}`}
+                      onChange={() => {
+                        const form = document.getElementById(
+                          `rule-toggle-${rule.id}`,
+                        ) as HTMLFormElement | null;
+                        form?.requestSubmit();
+                      }}
+                    />
+                  </TCell>
+                  <TCell className="pr-0">
                     <Form method="post">
                       <input type="hidden" name="section" value="rules" />
                       <input type="hidden" name="intent" value="delete" />
                       <input type="hidden" name="id" value={rule.id} />
-                      <button className="text-red-600 hover:underline dark:text-red-400">Delete</button>
+                      <Button
+                        type="submit"
+                        variant="danger"
+                        size="icon"
+                        aria-label={`Delete rule ${rule.name}`}
+                      >
+                        <Trash2 size={14} />
+                      </Button>
                     </Form>
-                  </td>
-                </tr>
+                  </TCell>
+                </TRow>
               ))}
-              {rules.length === 0 ? (
-                <tr>
-                  <td colSpan={7} className="py-6 text-center text-gray-400 dark:text-gray-500">
-                    Belum ada routing rule.
-                  </td>
-                </tr>
-              ) : null}
             </tbody>
-          </table>
-          </div>
-        </div>
+          </Table>
+        )}
+      </Card>
     </div>
   );
 }
@@ -288,34 +299,35 @@ function AllowlistForm({ modelSuggestions }: { modelSuggestions: string[] }) {
     <Form method="post" className="mb-4 flex flex-wrap items-end gap-3">
       <input type="hidden" name="section" value="allowlist" />
       <div>
-        <label className="mb-1 block text-xs text-gray-500 dark:text-gray-400">Model</label>
+        <Label htmlFor="allowlist-model">Model</Label>
         <Combobox
+          id="allowlist-model"
           name="model_name"
           value={model}
           onChange={setModel}
           options={modelSuggestions}
           required
           placeholder="e.g. gpt-4o"
-          className={inputClass()}
+          className={comboboxClass}
         />
       </div>
       <div>
-        <label className="mb-1 block text-xs text-gray-500 dark:text-gray-400">Action</label>
-        <select name="action" className={inputClass()}>
+        <Label htmlFor="allowlist-action">Action</Label>
+        <Select id="allowlist-action" name="action">
           <option value="allow">allow</option>
           <option value="deny">deny</option>
-        </select>
+        </Select>
       </div>
       <div>
-        <label className="mb-1 block text-xs text-gray-500 dark:text-gray-400">Reason</label>
-        <input name="reason" className={inputClass()} />
+        <Label htmlFor="allowlist-reason">Reason</Label>
+        <Input
+          id="allowlist-reason"
+          name="reason"
+          autoComplete="off"
+          className="w-64"
+        />
       </div>
-      <button
-        type="submit"
-        className="rounded-lg bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-700"
-      >
-        Add
-      </button>
+      <Button type="submit">Add</Button>
     </Form>
   );
 }
@@ -334,7 +346,7 @@ function RulesForm({
 
   return (
     <>
-      <p className="mb-3 text-xs text-gray-500 dark:text-gray-400">
+      <p className="mb-3 text-xs text-muted-foreground">
         Routing rules are evaluated per request for the requested source model, in priority
         order:
         <span className="mt-1 block">
@@ -349,70 +361,74 @@ function RulesForm({
       <Form method="post" className="mb-4 grid grid-cols-1 items-end gap-3 sm:grid-cols-4">
         <input type="hidden" name="section" value="rules" />
         <div>
-          <label className="mb-1 block text-xs text-gray-500 dark:text-gray-400">Name</label>
-          <input name="name" required className={inputClass()} />
+          <Label htmlFor="rule-name">Name</Label>
+          <Input id="rule-name" name="name" required autoComplete="off" />
         </div>
         <div>
-          <label className="mb-1 block text-xs text-gray-500 dark:text-gray-400">Source Model</label>
+          <Label htmlFor="rule-source-model">Source Model</Label>
           <Combobox
+            id="rule-source-model"
             name="source_model"
             value={sourceModel}
             onChange={setSourceModel}
             options={modelSuggestions}
             required
             placeholder="e.g. gpt-4o"
-            className={inputClass()}
+            className={comboboxClass}
           />
         </div>
         <div>
-          <label className="mb-1 block text-xs text-gray-500 dark:text-gray-400">Type</label>
-          <select
+          <Label htmlFor="rule-type">Type</Label>
+          <Select
+            id="rule-type"
             name="rule_type"
             value={ruleType}
             onChange={(e) => setRuleType(e.target.value)}
-            className={inputClass()}
           >
             <option value="rewrite">rewrite</option>
             <option value="deny">deny</option>
             <option value="fallback">fallback</option>
-          </select>
+          </Select>
         </div>
         <div>
-          <label className="mb-1 block text-xs text-gray-500 dark:text-gray-400">Priority</label>
-          <input name="priority" type="number" defaultValue={0} className={inputClass()} />
+          <Label htmlFor="rule-priority">Priority</Label>
+          <Input
+            id="rule-priority"
+            name="priority"
+            type="number"
+            defaultValue={0}
+            autoComplete="off"
+          />
         </div>
         {ruleType === "rewrite" ? (
           <div>
-            <label className="mb-1 block text-xs text-gray-500 dark:text-gray-400">Target Model</label>
+            <Label htmlFor="rule-target-model">Target Model</Label>
             <Combobox
+              id="rule-target-model"
               name="target_model"
               value={targetModel}
               onChange={setTargetModel}
               options={modelSuggestions}
               placeholder="e.g. gpt-4o-mini"
-              className={inputClass()}
+              className={comboboxClass}
             />
           </div>
         ) : null}
         {ruleType === "fallback" ? (
           <div>
-            <label className="mb-1 block text-xs text-gray-500 dark:text-gray-400">Target Provider</label>
+            <Label htmlFor="rule-target-provider">Target Provider</Label>
             <Combobox
+              id="rule-target-provider"
               name="target_provider_id"
               value={targetProvider}
               onChange={setTargetProvider}
               options={providerSuggestions}
               placeholder="e.g. openai"
-              className={inputClass()}
+              className={comboboxClass}
             />
           </div>
         ) : null}
-        <button
-          type="submit"
-          className="rounded-lg bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-700"
-        >
-          Add
-        </button>
+        <Button type="submit">Add</Button>
       </Form>
     </>
   );
