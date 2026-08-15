@@ -2,6 +2,13 @@ import { Form } from "react-router";
 import type { Route } from "./+types/api-manager.templates";
 import { LayoutTemplate, Trash2 } from "lucide-react";
 import { listTemplates, createTemplate, deleteTemplate } from "../.server/key-templates";
+import { PageHeader } from "../components/ui/page-header";
+import { Card } from "../components/ui/card";
+import { Button } from "../components/ui/button";
+import { Input, Label } from "../components/ui/field";
+import { EmptyState } from "../components/ui/empty-state";
+import { Table, THead, THeadCell, TRow, TCell } from "../components/ui/table";
+import { useConfirm } from "../components/ui/confirm-dialog";
 
 export function loader() {
   return { templates: listTemplates() };
@@ -45,102 +52,118 @@ export async function action({ request }: Route.ActionArgs) {
   return null;
 }
 
-const inputClass =
-  "w-full rounded-lg border border-gray-300 px-3 py-1.5 text-sm text-gray-900 dark:border-gray-600 dark:bg-gray-800 dark:text-white";
-const labelClass = "mb-1 block text-xs font-medium text-gray-600 dark:text-gray-300";
-
 export default function Templates({ loaderData }: Route.ComponentProps) {
   const { templates } = loaderData;
   return (
     <div className="mx-auto max-w-3xl">
-      <h1 className="mb-6 flex items-center gap-2 text-2xl font-bold text-gray-900 dark:text-white">
-        <LayoutTemplate size={24} /> API Key Templates
-      </h1>
+      <PageHeader
+        title="API Key Templates"
+        icon={<LayoutTemplate size={20} />}
+        subtitle="Reusable configurations for creating API keys."
+      />
 
-      <Form
-        method="post"
-        className="mb-6 space-y-3 rounded-xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-gray-900"
-      >
-        <input type="hidden" name="intent" value="create" />
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <label className={labelClass}>Name</label>
-            <input name="name" required className={inputClass} placeholder="production-default" />
+      <Card className="mb-6">
+        <Form method="post" className="space-y-3">
+          <input type="hidden" name="intent" value="create" />
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div>
+              <Label htmlFor="template-name">Name</Label>
+              <Input id="template-name" name="name" required placeholder="production-default" autoComplete="off" />
+            </div>
+            <div>
+              <Label htmlFor="template-description">Description</Label>
+              <Input id="template-description" name="description" autoComplete="off" />
+            </div>
           </div>
           <div>
-            <label className={labelClass}>Description</label>
-            <input name="description" className={inputClass} />
+            <Label htmlFor="template-models">Allowed Models (comma separated)</Label>
+            <Input id="template-models" name="allowed_models" placeholder="gpt-4o, claude-3.5" autoComplete="off" />
           </div>
-        </div>
-        <div>
-          <label className={labelClass}>Allowed Models (comma separated)</label>
-          <input name="allowed_models" className={inputClass} placeholder="gpt-4o, claude-3.5" />
-        </div>
-        <div className="grid grid-cols-3 gap-3">
-          <div>
-            <label className={labelClass}>Monthly Budget ($)</label>
-            <input name="budget_monthly" type="number" step="any" className={inputClass} />
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <div>
+              <Label htmlFor="template-budget">Monthly Budget ($)</Label>
+              <Input id="template-budget" name="budget_monthly" type="number" step="any" autoComplete="off" />
+            </div>
+            <div>
+              <Label htmlFor="template-rpm">Requests/Min</Label>
+              <Input id="template-rpm" name="quota_rpm" type="number" autoComplete="off" />
+            </div>
+            <div>
+              <Label htmlFor="template-tpm">Tokens/Min</Label>
+              <Input id="template-tpm" name="quota_tpm" type="number" autoComplete="off" />
+            </div>
+            <div>
+              <Label htmlFor="template-concurrent">Concurrent</Label>
+              <Input id="template-concurrent" name="quota_concurrent" type="number" autoComplete="off" />
+            </div>
           </div>
-          <div>
-            <label className={labelClass}>Requests/Min</label>
-            <input name="quota_rpm" type="number" className={inputClass} />
-          </div>
-          <div>
-            <label className={labelClass}>Tokens/Min</label>
-            <input name="quota_tpm" type="number" className={inputClass} />
-          </div>
-          <div>
-            <label className={labelClass}>Concurrent</label>
-            <input name="quota_concurrent" type="number" className={inputClass} />
-          </div>
-        </div>
-        <button
-          type="submit"
-          className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
-        >
-          Create Template
-        </button>
-      </Form>
+          <Button type="submit">Create Template</Button>
+        </Form>
+      </Card>
 
-      <div className="table-wrap">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="border-b text-left text-xs uppercase text-gray-400 dark:border-gray-700">
-              <th className="py-2 pr-4">Name</th>
-              <th className="py-2 pr-4">Description</th>
-              <th className="py-2 pr-4">Models</th>
-              <th className="py-2">Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {templates.map((t) => (
-              <tr key={t.id} className="border-b border-gray-100 dark:border-gray-800">
-                <td className="py-2 pr-4 font-medium text-gray-900 dark:text-white">{t.name}</td>
-                <td className="py-2 pr-4 text-gray-500 dark:text-gray-400">{t.description ?? "—"}</td>
-                <td className="py-2 pr-4 text-xs text-gray-500 dark:text-gray-400">
-                  {t.config.allowedModels?.join(", ") || "all"}
-                </td>
-                <td className="py-2">
-                  <Form method="post">
-                    <input type="hidden" name="intent" value="delete" />
-                    <input type="hidden" name="id" value={t.id} />
-                    <button className="rounded border border-red-200 p-1 text-red-500 hover:bg-red-50 dark:border-red-900">
-                      <Trash2 size={14} />
-                    </button>
-                  </Form>
-                </td>
-              </tr>
-            ))}
-            {templates.length === 0 ? (
+      {templates.length === 0 ? (
+        <Card>
+          <EmptyState
+            icon={<LayoutTemplate size={20} />}
+            title="No templates yet"
+            description="Create a template to reuse key configurations."
+          />
+        </Card>
+      ) : (
+        <Card padded={false}>
+          <Table>
+            <THead>
               <tr>
-                <td colSpan={4} className="py-6 text-center text-gray-400 dark:text-gray-500">
-                  Belum ada template.
-                </td>
+                <THeadCell>Name</THeadCell>
+                <THeadCell>Description</THeadCell>
+                <THeadCell>Models</THeadCell>
+                <THeadCell className="pr-0">Actions</THeadCell>
               </tr>
-            ) : null}
-          </tbody>
-        </table>
-      </div>
+            </THead>
+            <tbody>
+              {templates.map((t) => (
+                <TRow key={t.id}>
+                  <TCell className="font-medium text-foreground">{t.name}</TCell>
+                  <TCell className="text-muted-foreground">{t.description ?? "—"}</TCell>
+                  <TCell className="text-xs text-muted-foreground">
+                    {t.config.allowedModels?.join(", ") || "all"}
+                  </TCell>
+                  <TCell className="pr-0">
+                    <DeleteTemplateButton id={t.id} name={t.name} />
+                  </TCell>
+                </TRow>
+              ))}
+            </tbody>
+          </Table>
+        </Card>
+      )}
     </div>
+  );
+}
+
+function DeleteTemplateButton({ id, name }: { id: number; name: string }) {
+  const { dialog, confirm } = useConfirm();
+  const handleDelete = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    const form = e.currentTarget;
+    const ok = await confirm({
+      title: "Delete template?",
+      description: `"${name}" will be permanently removed.`,
+      confirmLabel: "Delete",
+      variant: "danger",
+    });
+    if (ok) form.submit();
+  };
+  return (
+    <>
+      <Form method="post" onSubmit={handleDelete}>
+        <input type="hidden" name="intent" value="delete" />
+        <input type="hidden" name="id" value={id} />
+        <Button type="submit" variant="danger" size="icon" aria-label={`Delete template ${name}`}>
+          <Trash2 size={14} />
+        </Button>
+      </Form>
+      {dialog}
+    </>
   );
 }

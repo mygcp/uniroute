@@ -1,11 +1,16 @@
 import { Form } from "react-router";
-import { useRef, type ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import type { Route } from "./+types/api-manager.create";
-import { KeyRound, Copy } from "lucide-react";
+import { KeyRound } from "lucide-react";
 import { createClientKey, type CreateClientKeyInput } from "../.server/client-key";
 import { enqueueWebhook } from "../.server/webhook";
 import { getModelSuggestions, getProviderSuggestions } from "../.server/suggest";
 import { listTemplates, type KeyTemplate } from "../.server/key-templates";
+import { PageHeader } from "../components/ui/page-header";
+import { Card } from "../components/ui/card";
+import { Button } from "../components/ui/button";
+import { Input, Label, Select, Checkbox, Textarea } from "../components/ui/field";
+import { CopyButton } from "../components/ui/copy-button";
 
 export function loader() {
   return {
@@ -117,28 +122,12 @@ function parseListUnchecked(form: FormData, name: string): string[] {
     .filter(Boolean);
 }
 
-const inputClass =
-  "w-full rounded-lg border border-gray-300 px-3 py-1.5 text-sm text-gray-900 dark:border-gray-600 dark:bg-gray-800 dark:text-white";
-const labelClass = "mb-1 block text-xs font-medium text-gray-600 dark:text-gray-300";
-
 function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <fieldset className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-gray-900">
-      <legend className="px-2 text-sm font-semibold text-gray-700 dark:text-gray-200">{title}</legend>
-      <div className="mt-2">{children}</div>
-    </fieldset>
-  );
-}
-
-function CopyButton({ value }: { value: string }) {
-  return (
-    <button
-      type="button"
-      onClick={() => navigator.clipboard?.writeText(value)}
-      className="flex items-center gap-1 rounded border border-gray-300 px-2 py-1 text-xs text-gray-600 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-300"
-    >
-      <Copy size={12} /> Copy
-    </button>
+    <Card>
+      <h2 className="mb-3 text-sm font-semibold text-foreground">{title}</h2>
+      {children}
+    </Card>
   );
 }
 
@@ -146,6 +135,12 @@ export default function CreateKey({ loaderData, actionData }: Route.ComponentPro
   const { modelSuggestions, providerSuggestions, templates } = loaderData;
   const formRef = useRef<HTMLFormElement>(null);
   const created = actionData as { newlyCreatedKey?: string; name?: string } | undefined;
+
+  useEffect(() => {
+    if (created?.newlyCreatedKey) {
+      formRef.current?.reset();
+    }
+  }, [created?.newlyCreatedKey]);
 
   const applyTemplate = (template: KeyTemplate["config"]) => {
     const el = formRef.current;
@@ -175,40 +170,44 @@ export default function CreateKey({ loaderData, actionData }: Route.ComponentPro
 
   return (
     <div className="mx-auto max-w-3xl">
-      <h1 className="mb-6 flex items-center gap-2 text-2xl font-bold text-gray-900 dark:text-white">
-        <KeyRound size={24} /> Create New API Key
-      </h1>
+      <PageHeader
+        title="Create New API Key"
+        icon={<KeyRound size={20} />}
+        subtitle="Generate a key with budgets, quotas, and access controls."
+      />
 
       {created?.newlyCreatedKey ? (
-        <div className="mb-6 rounded-lg border border-yellow-300 bg-yellow-50 p-4 text-sm dark:border-yellow-700 dark:bg-yellow-950/40">
-          <p className="font-semibold text-yellow-800 dark:text-yellow-200">
-            Key berhasil dibuat — salin sekarang, tidak akan tampil lagi.
+        <div className="mb-6 rounded-lg border border-warning/30 bg-warning/10 p-4 text-sm">
+          <p className="font-semibold text-foreground">
+            Key created — copy it now, it won't be shown again.
           </p>
           <div className="mt-2 flex items-start gap-2">
-            <code className="break-all rounded bg-white px-3 py-2 font-mono text-xs text-gray-800 dark:bg-gray-900 dark:text-gray-100">
+            <code className="break-all rounded bg-surface-2 px-3 py-2 font-mono text-xs text-foreground">
               {created.newlyCreatedKey}
             </code>
-            <CopyButton value={created.newlyCreatedKey} />
+            <CopyButton text={created.newlyCreatedKey} label="Copy" />
           </div>
         </div>
       ) : null}
 
-      <div className="mb-4 flex items-center gap-2">
-        <label className={labelClass}>Create from Template:</label>
-        <select
-          className={inputClass}
-          onChange={(e) => {
-            const t = templates.find((x) => x.id === Number(e.target.value));
-            if (t) applyTemplate(t.config);
-          }}
-        >
-          <option value="">— none —</option>
-          {templates.map((t) => (
-            <option key={t.id} value={t.id}>
-              {t.name}
-            </option>
-          ))}
-        </select>
+      <div className="mb-4 flex items-end gap-3">
+        <div className="flex-1">
+          <Label htmlFor="template-select">Create from Template:</Label>
+          <Select
+            id="template-select"
+            onChange={(e) => {
+              const t = templates.find((x) => x.id === Number(e.target.value));
+              if (t) applyTemplate(t.config);
+            }}
+          >
+            <option value="">— none —</option>
+            {templates.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.name}
+              </option>
+            ))}
+          </Select>
+        </div>
       </div>
 
       <Form
@@ -216,19 +215,19 @@ export default function CreateKey({ loaderData, actionData }: Route.ComponentPro
         method="post"
         className="space-y-4"
       >
-        <Section title="Informasi">
+        <Section title="Information">
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div>
-              <label className={labelClass}>Key Name</label>
-              <input name="name" className={inputClass} required placeholder="e.g. production-client" />
+              <Label htmlFor="name">Key Name</Label>
+              <Input id="name" name="name" required placeholder="e.g. production-client" autoComplete="off" />
             </div>
             <div>
-              <label className={labelClass}>Description</label>
-              <input name="description" className={inputClass} placeholder="Optional" />
+              <Label htmlFor="description">Description</Label>
+              <Input id="description" name="description" placeholder="Optional" autoComplete="off" />
             </div>
             <div>
-              <label className={labelClass}>Prefix</label>
-              <input name="prefix" className={inputClass} defaultValue="sk-" />
+              <Label htmlFor="prefix">Prefix</Label>
+              <Input id="prefix" name="prefix" defaultValue="sk-" autoComplete="off" />
             </div>
           </div>
         </Section>
@@ -243,13 +242,13 @@ export default function CreateKey({ loaderData, actionData }: Route.ComponentPro
               ["rerank", "Reranking"],
             ].map(([id, label]) => (
               <label key={id as string} className="flex items-center gap-2">
-                <input type="checkbox" name="scopes" value={id as string} defaultChecked={Boolean(label === "Chat Completions")} />
+                <Checkbox name="scopes" value={id as string} defaultChecked={Boolean(label === "Chat Completions")} />
                 {label}
               </label>
             ))}
           </div>
           <label className="mt-3 flex items-center gap-2 text-sm">
-            <input type="checkbox" name="manage_scope" value="1" />
+            <Checkbox name="manage_scope" value="1" />
             Management API Access (manage scope)
           </label>
         </Section>
@@ -257,28 +256,28 @@ export default function CreateKey({ loaderData, actionData }: Route.ComponentPro
         <Section title="Model Access">
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div>
-              <label className={labelClass}>Allowed Models (empty = all)</label>
-              <textarea name="allowed_models" className={inputClass} rows={3} placeholder="gpt-4o, claude-3.5, gemini-1.5-pro" />
+              <Label htmlFor="allowed_models">Allowed Models (empty = all)</Label>
+              <Textarea id="allowed_models" name="allowed_models" rows={3} placeholder="gpt-4o, claude-3.5, gemini-1.5-pro" />
             </div>
             <div>
-              <label className={labelClass}>Blocked Models</label>
-              <textarea name="blocked_models" className={inputClass} rows={3} placeholder="gpt-4o-mini, llama-3-8b" />
+              <Label htmlFor="blocked_models">Blocked Models</Label>
+              <Textarea id="blocked_models" name="blocked_models" rows={3} placeholder="gpt-4o-mini, llama-3-8b" />
             </div>
             <div>
-              <label className={labelClass}>Allowed Providers (empty = all)</label>
-              <input name="allowed_providers" className={inputClass} placeholder="openai, anthropic" />
+              <Label htmlFor="allowed_providers">Allowed Providers (empty = all)</Label>
+              <Input id="allowed_providers" name="allowed_providers" placeholder="openai, anthropic" autoComplete="off" />
             </div>
             <div>
-              <label className={labelClass}>Blocked Providers</label>
-              <input name="blocked_providers" className={inputClass} placeholder="deepseek" />
+              <Label htmlFor="blocked_providers">Blocked Providers</Label>
+              <Input id="blocked_providers" name="blocked_providers" placeholder="deepseek" autoComplete="off" />
             </div>
             <div>
-              <label className={labelClass}>Model Override (advanced)</label>
-              <input name="model_override" className={inputClass} list="model-suggestions" placeholder="e.g. gpt-4o-mini" />
+              <Label htmlFor="model_override">Model Override (advanced)</Label>
+              <Input id="model_override" name="model_override" list="model-suggestions" placeholder="e.g. gpt-4o-mini" autoComplete="off" />
             </div>
             <div>
-              <label className={labelClass}>Pinned Provider (advanced)</label>
-              <input name="pinned_provider_id" className={inputClass} list="provider-suggestions" placeholder="e.g. openai" />
+              <Label htmlFor="pinned_provider_id">Pinned Provider (advanced)</Label>
+              <Input id="pinned_provider_id" name="pinned_provider_id" list="provider-suggestions" placeholder="e.g. openai" autoComplete="off" />
             </div>
           </div>
           <datalist id="model-suggestions">
@@ -307,13 +306,13 @@ export default function CreateKey({ loaderData, actionData }: Route.ComponentPro
               ["alert_threshold", "Alert at (0..1)"],
             ].map(([name, label]) => (
               <div key={name as string}>
-                <label className={labelClass}>{label}</label>
-                <input name={name} type="number" step="any" className={inputClass} />
+                <Label htmlFor={name as string}>{label}</Label>
+                <Input id={name as string} name={name} type="number" step="any" autoComplete="off" />
               </div>
             ))}
           </div>
           <label className="mt-3 flex items-center gap-2 text-sm">
-            <input type="checkbox" name="auto_block" value="1" defaultChecked />
+            <Checkbox name="auto_block" value="1" defaultChecked />
             Auto-block when budget exceeded
           </label>
         </Section>
@@ -321,68 +320,69 @@ export default function CreateKey({ loaderData, actionData }: Route.ComponentPro
         <Section title="Security">
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div>
-              <label className={labelClass}>Expires</label>
-              <input name="expires_at" type="date" className={inputClass} />
+              <Label htmlFor="expires_at">Expires</Label>
+              <Input id="expires_at" name="expires_at" type="date" />
             </div>
             <div>
-              <label className={labelClass}>Rotation interval (days)</label>
-              <input name="rotation_interval_days" type="number" className={inputClass} placeholder="e.g. 30" />
+              <Label htmlFor="rotation_interval_days">Rotation interval (days)</Label>
+              <Input id="rotation_interval_days" name="rotation_interval_days" type="number" placeholder="e.g. 30" autoComplete="off" />
             </div>
             <div>
-              <label className={labelClass}>Grace period (days)</label>
-              <input name="grace_period_days" type="number" className={inputClass} placeholder="e.g. 7" />
+              <Label htmlFor="grace_period_days">Grace period (days)</Label>
+              <Input id="grace_period_days" name="grace_period_days" type="number" placeholder="e.g. 7" autoComplete="off" />
             </div>
             <div>
-              <label className={labelClass}>Webhook URL</label>
-              <input name="webhook_url" type="url" className={inputClass} placeholder="https://my-app.com/webhook" />
+              <Label htmlFor="webhook_url">Webhook URL</Label>
+              <Input id="webhook_url" name="webhook_url" type="url" placeholder="https://my-app.com/webhook" autoComplete="off" />
             </div>
             <div>
-              <label className={labelClass}>IP Whitelist (CIDR / IP)</label>
-              <input name="ip_whitelist" className={inputClass} placeholder="192.168.1.0/24, 10.0.0.1" />
+              <Label htmlFor="ip_whitelist">IP Whitelist (CIDR / IP)</Label>
+              <Input id="ip_whitelist" name="ip_whitelist" placeholder="192.168.1.0/24, 10.0.0.1" autoComplete="off" />
             </div>
             <div>
-              <label className={labelClass}>IP Blacklist</label>
-              <input name="ip_blacklist" className={inputClass} placeholder="203.0.113.0/24" />
+              <Label htmlFor="ip_blacklist">IP Blacklist</Label>
+              <Input id="ip_blacklist" name="ip_blacklist" placeholder="203.0.113.0/24" autoComplete="off" />
             </div>
           </div>
           <label className="mt-3 flex items-center gap-2 text-sm">
-            <input type="checkbox" name="strict_ip" value="1" />
-            Strict IP — hanya IP whitelist yang boleh akses
+            <Checkbox name="strict_ip" value="1" />
+            Strict IP — only whitelisted IPs may access
           </label>
         </Section>
 
         <Section title="Time-Based Access">
           <label className="mb-2 flex items-center gap-2 text-sm">
-            <input type="checkbox" name="access_enabled" value="1" defaultChecked />
+            <Checkbox name="access_enabled" value="1" defaultChecked />
             Enable access hours
           </label>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
             <div>
-              <label className={labelClass}>Timezone</label>
-              <input name="access_timezone" className={inputClass} placeholder="Asia/Jakarta" />
+              <Label htmlFor="access_timezone">Timezone</Label>
+              <Input id="access_timezone" name="access_timezone" placeholder="Asia/Jakarta" autoComplete="off" />
             </div>
             <div>
-              <label className={labelClass}>Allowed days</label>
-              <input name="access_days" className={inputClass} placeholder="monday, tuesday,…" />
+              <Label htmlFor="access_days">Allowed days</Label>
+              <Input id="access_days" name="access_days" placeholder="monday, tuesday,…" autoComplete="off" />
             </div>
             <div>
-              <label className={labelClass}>Start (HH:mm)</label>
-              <input name="access_start" type="time" className={inputClass} defaultValue="08:00" />
+              <Label htmlFor="access_start">Start (HH:mm)</Label>
+              <Input id="access_start" name="access_start" type="time" defaultValue="08:00" />
             </div>
             <div>
-              <label className={labelClass}>End (HH:mm)</label>
-              <input name="access_end" type="time" className={inputClass} defaultValue="18:00" />
+              <Label htmlFor="access_end">End (HH:mm)</Label>
+              <Input id="access_end" name="access_end" type="time" defaultValue="18:00" />
             </div>
           </div>
         </Section>
 
         <div className="flex items-center justify-end gap-3">
-          <a href="/api-manager" className="rounded-lg border border-gray-300 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-800">
+          <a
+            href="/api-manager"
+            className="inline-flex items-center rounded-lg border border-border px-4 py-2 text-sm font-medium text-foreground hover:bg-muted"
+          >
             Cancel
           </a>
-          <button type="submit" className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700">
-            Create API Key
-          </button>
+          <Button type="submit">Create API Key</Button>
         </div>
       </Form>
     </div>

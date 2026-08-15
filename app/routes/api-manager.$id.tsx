@@ -3,7 +3,7 @@ import { useState } from "react";
 import type { Route } from "./+types/api-manager.$id";
 import {
   ArrowLeft,
-  Copy,
+  Activity,
   Download,
   KeyRound,
   Pencil,
@@ -31,6 +31,16 @@ import {
   suspendKey,
 } from "../.server/key-ops";
 import { groupsOfKey } from "../.server/key-groups";
+import { PageHeader } from "../components/ui/page-header";
+import { Card, CardHeader, CardTitle } from "../components/ui/card";
+import { Badge, type BadgeTone } from "../components/ui/badge";
+import { Button } from "../components/ui/button";
+import { Input, Label, Textarea, Checkbox } from "../components/ui/field";
+import { CopyButton } from "../components/ui/copy-button";
+import { EmptyState } from "../components/ui/empty-state";
+import { Table, THead, THeadCell, TRow, TCell } from "../components/ui/table";
+import { UsageBar } from "../components/ui/usage-bar";
+import { useConfirm } from "../components/ui/confirm-dialog";
 
 export function loader({ params }: Route.LoaderArgs) {
   const id = Number(params.id);
@@ -139,11 +149,18 @@ export async function action({ request, params }: Route.ActionArgs) {
   return null;
 }
 
-const STATUS_STYLE: Record<KeyStatus, { label: string; cls: string }> = {
-  active: { label: "🟢 Active", cls: "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300" },
-  near_limit: { label: "🟡 Near Limit", cls: "bg-yellow-100 text-yellow-700 dark:bg-yellow-900/40 dark:text-yellow-300" },
-  suspended: { label: "🔒 Locked", cls: "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300" },
-  expired: { label: "⚠️ Expired", cls: "bg-gray-200 text-gray-600 dark:bg-gray-800 dark:text-gray-300" },
+const STATUS_TONE: Record<KeyStatus, BadgeTone> = {
+  active: "success",
+  near_limit: "warning",
+  suspended: "danger",
+  expired: "neutral",
+};
+
+const STATUS_LABEL: Record<KeyStatus, string> = {
+  active: "Active",
+  near_limit: "Near Limit",
+  suspended: "Locked",
+  expired: "Expired",
 };
 
 function fmtTs(ts: number | null | undefined): string {
@@ -163,6 +180,10 @@ function pct(value: number, total: number): number {
   return Math.min(100, Math.round((value / total) * 100));
 }
 
+function usageTone(p: number): "success" | "warning" | "danger" {
+  return p >= 80 ? "danger" : p >= 50 ? "warning" : "success";
+}
+
 function shortAction(a: AuditEntry): string {
   return a.action === "REQUEST" ? "request" : a.action.toLowerCase();
 }
@@ -172,116 +193,121 @@ export default function KeyDetail({ loaderData, actionData }: Route.ComponentPro
   const [editing, setEditing] = useState(false);
   const rotated = (actionData as { newlyRotated?: { key: string } } | undefined)?.newlyRotated;
   const updated = (actionData as { updated?: boolean } | undefined)?.updated;
-  const st = STATUS_STYLE[status];
   const usagePct = budget && budget > 0 ? pct(month.cost, budget) : null;
   const success = audit.filter((a) => a.action === "REQUEST").length;
   const errors = health.checks.errors_last_hour;
+  const { dialog, confirm } = useConfirm();
+
+  const maskedKey = `${key.key_prefix}…${key.key_hash.slice(0, 6)}`;
+  const subtitle = key.description ? `${maskedKey} — ${key.description}` : maskedKey;
+
+  const handleRotate = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    const form = e.currentTarget;
+    const ok = await confirm({
+      title: "Rotate key?",
+      description: "The old key stays valid for the grace period.",
+      confirmLabel: "Rotate",
+    });
+    if (ok) form.submit();
+  };
+
+  const handleSuspend = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    const form = e.currentTarget;
+    const ok = await confirm({
+      title: "Suspend API key?",
+      description: "Requests with this key will be rejected.",
+      confirmLabel: "Suspend",
+    });
+    if (ok) form.submit();
+  };
+
+  const handleDelete = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    const form = e.currentTarget;
+    const ok = await confirm({
+      title: "Delete API key?",
+      description: "This action cannot be undone.",
+      confirmLabel: "Delete",
+      variant: "danger",
+    });
+    if (ok) form.submit();
+  };
 
   return (
     <div>
       <Link
         to="/api-manager"
-        className="mb-4 inline-flex items-center gap-1 text-sm text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
+        className="mb-4 inline-flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
       >
         <ArrowLeft size={14} /> API Manager
       </Link>
 
-      <div className="mb-6 flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="flex items-center gap-2 text-2xl font-bold text-gray-900 dark:text-white">
-            <KeyRound size={24} /> {key.name}
-          </h1>
-          <p className="mt-1 font-mono text-sm text-gray-500 dark:text-gray-400">
-            {key.key_prefix}…{key.key_hash.slice(0, 6)}
-            <span className={`ml-2 rounded-full px-2 py-0.5 text-xs font-sans font-medium ${st.cls}`}>{st.label}</span>
-          </p>
-          {key.description ? (
-            <p className="mt-1 text-sm text-gray-600 dark:text-gray-300">{key.description}</p>
-          ) : null}
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            onClick={() => setEditing((v) => !v)}
-            className="flex items-center gap-1 rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-800"
-          >
-            <Pencil size={14} /> {editing ? "Close Edit" : "Edit"}
-          </button>
-          <a
-            href={`/api-manager/${key.id}/export`}
-            className="flex items-center gap-1 rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-800"
-          >
-            <Download size={14} /> Download Logs
-          </a>
-          <Form
-            method="post"
-            onSubmit={(e) => {
-              if (!window.confirm("Rotasi key ini? Key lama tetap valid selama grace period.")) e.preventDefault();
-            }}
-          >
-            <input type="hidden" name="intent" value="rotate" />
-            <button className="flex items-center gap-1 rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-800">
-              <RotateCw size={14} /> Rotate
-            </button>
+      <PageHeader
+        title={key.name}
+        icon={<KeyRound size={20} />}
+        subtitle={subtitle}
+        actions={<Badge tone={STATUS_TONE[status]}>{STATUS_LABEL[status]}</Badge>}
+      />
+
+      <div className="mb-6 flex flex-wrap items-center gap-2">
+        <Button type="button" variant="outline" onClick={() => setEditing((v) => !v)}>
+          <Pencil size={14} /> {editing ? "Close Edit" : "Edit"}
+        </Button>
+        <a
+          href={`/api-manager/${key.id}/export`}
+          className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-sm font-medium text-foreground hover:bg-muted"
+        >
+          <Download size={14} /> Download Logs
+        </a>
+        <Form method="post" onSubmit={handleRotate}>
+          <input type="hidden" name="intent" value="rotate" />
+          <Button type="submit" variant="outline">
+            <RotateCw size={14} /> Rotate
+          </Button>
+        </Form>
+        {status === "suspended" ? (
+          <Form method="post">
+            <input type="hidden" name="intent" value="reactivate" />
+            <Button type="submit">
+              <LockOpen size={14} /> Reactivate
+            </Button>
           </Form>
-          {status === "suspended" ? (
-            <Form method="post">
-              <input type="hidden" name="intent" value="reactivate" />
-              <button className="flex items-center gap-1 rounded-lg bg-green-600 px-3 py-2 text-sm text-white hover:bg-green-700">
-                <LockOpen size={14} /> Reactivate
-              </button>
-            </Form>
-          ) : (
-            <Form
-              method="post"
-              onSubmit={(e) => {
-                if (!window.confirm("Suspend API key ini? Request dengan key ini akan ditolak.")) e.preventDefault();
-              }}
-            >
-              <input type="hidden" name="intent" value="suspend" />
-              <button className="flex items-center gap-1 rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-800">
-                <Lock size={14} /> Suspend
-              </button>
-            </Form>
-          )}
-          <Form
-            method="post"
-            onSubmit={(e) => {
-              if (!window.confirm("Delete this API key? This action cannot be undone.")) e.preventDefault();
-            }}
-          >
-            <input type="hidden" name="intent" value="delete" />
-            <button className="flex items-center gap-1 rounded-lg bg-red-600 px-3 py-2 text-sm text-white hover:bg-red-700">
-              <Trash2 size={14} /> Delete
-            </button>
+        ) : (
+          <Form method="post" onSubmit={handleSuspend}>
+            <input type="hidden" name="intent" value="suspend" />
+            <Button type="submit" variant="outline">
+              <Lock size={14} /> Suspend
+            </Button>
           </Form>
-        </div>
+        )}
+        <Form method="post" onSubmit={handleDelete}>
+          <input type="hidden" name="intent" value="delete" />
+          <Button type="submit" variant="danger">
+            <Trash2 size={14} /> Delete
+          </Button>
+        </Form>
       </div>
 
       {updated ? (
-        <div className="mb-4 rounded-lg border border-green-300 bg-green-50 p-3 text-sm text-green-800 dark:border-green-700 dark:bg-green-950/40 dark:text-green-200">
-          API key diperbarui.
+        <div className="mb-4 rounded-lg border border-success/30 bg-success/10 p-3 text-sm text-foreground">
+          API key updated.
         </div>
       ) : null}
 
       {editing ? <EditKeyForm data={key} /> : null}
 
       {rotated ? (
-        <div className="mb-4 rounded-lg border border-yellow-300 bg-yellow-50 p-4 text-sm dark:border-yellow-700 dark:bg-yellow-950/40">
-          <p className="font-semibold text-yellow-800 dark:text-yellow-200">
-            Key baru — salin sekarang (tidak tampil lagi):
+        <div className="mb-4 rounded-lg border border-warning/30 bg-warning/10 p-4 text-sm">
+          <p className="font-semibold text-foreground">
+            New key — copy it now (it won't be shown again):
           </p>
           <div className="mt-2 flex items-center gap-2">
-            <code className="break-all rounded bg-white px-3 py-2 font-mono text-xs text-gray-800 dark:bg-gray-900 dark:text-gray-100">
+            <code className="break-all rounded bg-surface-2 px-3 py-2 font-mono text-xs text-foreground">
               {rotated.key}
             </code>
-            <button
-              type="button"
-              onClick={() => navigator.clipboard?.writeText(rotated.key)}
-              className="flex items-center gap-1 rounded border border-gray-300 px-2 py-1 text-xs text-gray-600 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-300"
-            >
-              <Copy size={12} /> Copy
-            </button>
+            <CopyButton text={rotated.key} label="Copy" />
           </div>
         </div>
       ) : null}
@@ -294,8 +320,10 @@ export default function KeyDetail({ loaderData, actionData }: Route.ComponentPro
       </div>
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-        <section className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-gray-900">
-          <h2 className="mb-3 text-lg font-semibold text-gray-900 dark:text-white">Usage Overview</h2>
+        <Card>
+          <CardHeader>
+            <CardTitle>Usage Overview</CardTitle>
+          </CardHeader>
           <div className="space-y-2 text-sm">
             <Row label="Total Requests (month)" value={month.requests.toLocaleString()} />
             <Row label="Tokens (month)" value={(month.promptTokens + month.completionTokens).toLocaleString()} />
@@ -308,23 +336,20 @@ export default function KeyDetail({ loaderData, actionData }: Route.ComponentPro
           {usagePct !== null ? (
             <div className="mt-4">
               <div className="mb-1 flex items-center justify-between text-sm">
-                <span className="text-gray-600 dark:text-gray-300">Monthly Budget</span>
-                <span className="font-medium text-gray-900 dark:text-white">
+                <span className="text-muted-foreground">Monthly Budget</span>
+                <span className="font-medium text-foreground">
                   ${month.cost.toFixed(2)} / ${budget!.toFixed(2)} ({usagePct}%)
                 </span>
               </div>
-              <div className="h-2.5 w-full overflow-hidden rounded-full bg-gray-200 dark:bg-gray-700">
-                <div
-                  className={`h-full ${usagePct >= 80 ? "bg-red-500" : usagePct >= 50 ? "bg-yellow-500" : "bg-blue-500"}`}
-                  style={{ width: `${usagePct}%` }}
-                />
-              </div>
+              <UsageBar value={usagePct} max={100} tone={usageTone(usagePct)} />
             </div>
           ) : null}
-        </section>
+        </Card>
 
-        <section className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-gray-900">
-          <h2 className="mb-3 text-lg font-semibold text-gray-900 dark:text-white">Permissions &amp; Security</h2>
+        <Card>
+          <CardHeader>
+            <CardTitle>Permissions &amp; Security</CardTitle>
+          </CardHeader>
           <div className="space-y-2 text-sm">
             <Row label="Allowed models" value={key.allowed_models?.join(", ") || "all"} />
             <Row label="Blocked models" value={key.blocked_models?.join(", ") || "none"} />
@@ -339,70 +364,70 @@ export default function KeyDetail({ loaderData, actionData }: Route.ComponentPro
             <Row label="Webhook" value={key.webhook_url ?? "none"} />
             <Row label="Groups" value={groups.map((g) => g.name).join(", ") || "none"} />
           </div>
-        </section>
+        </Card>
       </div>
 
-      <section className="mt-6 rounded-xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-gray-900">
-        <h2 className="mb-3 text-lg font-semibold text-gray-900 dark:text-white">
-          Recent Activity (audit trail)
-        </h2>
-        <div className="table-wrap">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b text-left text-xs uppercase text-gray-400 dark:border-gray-700">
-                <th className="py-2 pr-4">Time</th>
-                <th className="py-2 pr-4">Action</th>
-                <th className="py-2 pr-4">Model</th>
-                <th className="py-2 pr-4">Provider</th>
-                <th className="py-2 pr-4">Status</th>
-                <th className="py-2 pr-4">Tokens</th>
-                <th className="py-2">Cost</th>
+      <Card className="mt-6">
+        <CardHeader>
+          <CardTitle>Recent Activity (audit trail)</CardTitle>
+        </CardHeader>
+        {audit.length === 0 ? (
+          <EmptyState
+            icon={<Activity size={20} />}
+            title="No activity yet"
+            description="No audit events recorded for this key."
+          />
+        ) : (
+          <Table>
+            <THead>
+              <tr>
+                <THeadCell>Time</THeadCell>
+                <THeadCell>Action</THeadCell>
+                <THeadCell>Model</THeadCell>
+                <THeadCell>Provider</THeadCell>
+                <THeadCell>Status</THeadCell>
+                <THeadCell>Tokens</THeadCell>
+                <THeadCell className="pr-0">Cost</THeadCell>
               </tr>
-            </thead>
+            </THead>
             <tbody>
               {audit.map((a) => (
-                <tr key={a.id} className="border-b border-gray-100 dark:border-gray-800">
-                  <td className="py-2 pr-4 text-xs text-gray-500 dark:text-gray-400">{fmtTs(a.created_at)}</td>
-                  <td className="py-2 pr-4">{shortAction(a)}</td>
-                  <td className="py-2 pr-4">{a.model ?? "—"}</td>
-                  <td className="py-2 pr-4">{a.provider_id ?? "—"}</td>
-                  <td className="py-2 pr-4">{a.status ?? "—"}</td>
-                  <td className="py-2 pr-4">{a.tokens ?? "—"}</td>
-                  <td className="py-2">{a.cost != null ? `$${a.cost.toFixed(6)}` : "—"}</td>
-                </tr>
+                <TRow key={a.id}>
+                  <TCell className="text-xs text-muted-foreground">{fmtTs(a.created_at)}</TCell>
+                  <TCell className="text-foreground">{shortAction(a)}</TCell>
+                  <TCell className="text-foreground">{a.model ?? "—"}</TCell>
+                  <TCell className="text-foreground">{a.provider_id ?? "—"}</TCell>
+                  <TCell className="text-foreground">{a.status ?? "—"}</TCell>
+                  <TCell className="text-foreground">{a.tokens ?? "—"}</TCell>
+                  <TCell className="pr-0 text-foreground">{a.cost != null ? `$${a.cost.toFixed(6)}` : "—"}</TCell>
+                </TRow>
               ))}
-              {audit.length === 0 ? (
-                <tr>
-                  <td colSpan={7} className="py-6 text-center text-gray-400 dark:text-gray-500">
-                    Belum ada aktivitas.
-                  </td>
-                </tr>
-              ) : null}
             </tbody>
-          </table>
-        </div>
+          </Table>
+        )}
         {byDay.length > 0 ? (
           <DailyBar data={byDay} />
         ) : null}
-      </section>
+      </Card>
+      {dialog}
     </div>
   );
 }
 
 function InfoCard({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-800 dark:bg-gray-900">
-      <p className="text-xs uppercase text-gray-400 dark:text-gray-500">{label}</p>
-      <p className="mt-1 text-sm font-medium text-gray-900 dark:text-white">{value}</p>
-    </div>
+    <Card>
+      <p className="text-xs uppercase text-muted-foreground">{label}</p>
+      <p className="mt-1 text-sm font-medium text-foreground">{value}</p>
+    </Card>
   );
 }
 
 function Row({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex justify-between gap-4">
-      <span className="text-gray-500 dark:text-gray-400">{label}</span>
-      <span className="text-right font-medium text-gray-900 dark:text-white">{value}</span>
+      <span className="text-muted-foreground">{label}</span>
+      <span className="text-right font-medium text-foreground">{value}</span>
     </div>
   );
 }
@@ -410,16 +435,21 @@ function Row({ label, value }: { label: string; value: string }) {
 function DailyBar({ data }: { data: Array<{ date: string; requests: number; cost: number }> }) {
   return (
     <div className="mt-4">
-      <h3 className="mb-2 text-sm font-semibold text-gray-700 dark:text-gray-200">
-        Requests — 30 hari terakhir
+      <h3 className="mb-2 text-sm font-semibold text-muted-foreground">
+        Requests — last 30 days
       </h3>
-      <svg viewBox="0 0 560 120" className="w-full" role="img">
+      <svg
+        viewBox="0 0 560 120"
+        className="w-full"
+        role="img"
+        aria-label="Daily request volume for the last 30 days"
+      >
         {data.map((d, i) => {
           const max = Math.max(1, ...data.map((x) => x.requests));
           const h = (d.requests / max) * 96;
           return (
             <g key={d.date}>
-              <rect x={i * 18} y={108 - h} width={12} height={h} rx={2} fill="#3b82f6">
+              <rect x={i * 18} y={108 - h} width={12} height={h} rx={2} className="fill-primary">
                 <title>{`${d.date}: ${d.requests} req $${d.cost.toFixed(4)}`}</title>
               </rect>
             </g>
@@ -430,129 +460,119 @@ function DailyBar({ data }: { data: Array<{ date: string; requests: number; cost
   );
 }
 
-const editInput =
-  "w-full rounded-lg border border-gray-300 px-3 py-1.5 text-sm text-gray-900 dark:border-gray-600 dark:bg-gray-800 dark:text-white";
-const editLabel = "mb-1 block text-xs font-medium text-gray-600 dark:text-gray-300";
-
-/** Form kelola (edit) API key — prefill dari data existing. */
 function EditKeyForm({ data }: { data: ClientKey }) {
   return (
     <Form
       method="post"
-      className="mb-6 grid grid-cols-1 gap-3 rounded-xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-gray-900 sm:grid-cols-2"
+      className="mb-6 grid grid-cols-1 gap-3 rounded-xl border border-border bg-surface p-5 shadow-sm sm:grid-cols-2"
     >
       <input type="hidden" name="intent" value="update" />
       <div>
-        <label className={editLabel}>Name</label>
-        <input name="name" className={editInput} defaultValue={data.name} />
+        <Label htmlFor="edit-name">Name</Label>
+        <Input id="edit-name" name="name" defaultValue={data.name} autoComplete="off" />
       </div>
       <div>
-        <label className={editLabel}>Description</label>
-        <input name="description" className={editInput} defaultValue={data.description ?? ""} />
+        <Label htmlFor="edit-description">Description</Label>
+        <Input id="edit-description" name="description" defaultValue={data.description ?? ""} autoComplete="off" />
       </div>
       <div>
-        <label className={editLabel}>Allowed Models (empty = all)</label>
-        <textarea name="allowed_models" className={editInput} rows={2} defaultValue={data.allowed_models?.join(", ") ?? ""} />
+        <Label htmlFor="edit-allowed-models">Allowed Models (empty = all)</Label>
+        <Textarea id="edit-allowed-models" name="allowed_models" rows={2} defaultValue={data.allowed_models?.join(", ") ?? ""} />
       </div>
       <div>
-        <label className={editLabel}>Blocked Models</label>
-        <textarea name="blocked_models" className={editInput} rows={2} defaultValue={data.blocked_models?.join(", ") ?? ""} />
+        <Label htmlFor="edit-blocked-models">Blocked Models</Label>
+        <Textarea id="edit-blocked-models" name="blocked_models" rows={2} defaultValue={data.blocked_models?.join(", ") ?? ""} />
       </div>
       <div>
-        <label className={editLabel}>Allowed Providers</label>
-        <input name="allowed_providers" className={editInput} defaultValue={data.allowed_providers?.join(", ") ?? ""} />
+        <Label htmlFor="edit-allowed-providers">Allowed Providers</Label>
+        <Input id="edit-allowed-providers" name="allowed_providers" defaultValue={data.allowed_providers?.join(", ") ?? ""} autoComplete="off" />
       </div>
       <div>
-        <label className={editLabel}>Blocked Providers</label>
-        <input name="blocked_providers" className={editInput} defaultValue={data.blocked_providers?.join(", ") ?? ""} />
+        <Label htmlFor="edit-blocked-providers">Blocked Providers</Label>
+        <Input id="edit-blocked-providers" name="blocked_providers" defaultValue={data.blocked_providers?.join(", ") ?? ""} autoComplete="off" />
       </div>
       <div>
-        <label className={editLabel}>Monthly Budget (USD)</label>
-        <input name="budget_monthly" type="number" step="any" className={editInput} defaultValue={data.budget?.monthly ?? ""} />
+        <Label htmlFor="edit-budget-monthly">Monthly Budget (USD)</Label>
+        <Input id="edit-budget-monthly" name="budget_monthly" type="number" step="any" defaultValue={data.budget?.monthly ?? ""} autoComplete="off" />
       </div>
       <div>
-        <label className={editLabel}>Daily Budget (USD)</label>
-        <input name="budget_daily" type="number" step="any" className={editInput} defaultValue={data.budget?.daily ?? ""} />
+        <Label htmlFor="edit-budget-daily">Daily Budget (USD)</Label>
+        <Input id="edit-budget-daily" name="budget_daily" type="number" step="any" defaultValue={data.budget?.daily ?? ""} autoComplete="off" />
       </div>
       <div>
-        <label className={editLabel}>Per-request (USD)</label>
-        <input name="budget_per_request" type="number" step="any" className={editInput} defaultValue={data.budget?.per_request ?? ""} />
+        <Label htmlFor="edit-budget-per-request">Per-request (USD)</Label>
+        <Input id="edit-budget-per-request" name="budget_per_request" type="number" step="any" defaultValue={data.budget?.per_request ?? ""} autoComplete="off" />
       </div>
       <div>
-        <label className={editLabel}>Tokens/Month</label>
-        <input name="quota_tokens" type="number" className={editInput} defaultValue={data.quota?.tokens_per_month ?? ""} />
+        <Label htmlFor="edit-quota-tokens">Tokens/Month</Label>
+        <Input id="edit-quota-tokens" name="quota_tokens" type="number" defaultValue={data.quota?.tokens_per_month ?? ""} autoComplete="off" />
       </div>
       <div>
-        <label className={editLabel}>Requests/Day</label>
-        <input name="quota_req_day" type="number" className={editInput} defaultValue={data.quota?.requests_per_day ?? ""} />
+        <Label htmlFor="edit-quota-req-day">Requests/Day</Label>
+        <Input id="edit-quota-req-day" name="quota_req_day" type="number" defaultValue={data.quota?.requests_per_day ?? ""} autoComplete="off" />
       </div>
       <div>
-        <label className={editLabel}>Concurrent</label>
-        <input name="quota_concurrent" type="number" className={editInput} defaultValue={data.quota?.concurrent_requests ?? ""} />
+        <Label htmlFor="edit-quota-concurrent">Concurrent</Label>
+        <Input id="edit-quota-concurrent" name="quota_concurrent" type="number" defaultValue={data.quota?.concurrent_requests ?? ""} autoComplete="off" />
       </div>
       <div>
-        <label className={editLabel}>Requests/Min</label>
-        <input name="quota_rpm" type="number" className={editInput} defaultValue={data.quota?.rpm ?? ""} />
+        <Label htmlFor="edit-quota-rpm">Requests/Min</Label>
+        <Input id="edit-quota-rpm" name="quota_rpm" type="number" defaultValue={data.quota?.rpm ?? ""} autoComplete="off" />
       </div>
       <div>
-        <label className={editLabel}>Tokens/Min</label>
-        <input name="quota_tpm" type="number" className={editInput} defaultValue={data.quota?.tpm ?? ""} />
+        <Label htmlFor="edit-quota-tpm">Tokens/Min</Label>
+        <Input id="edit-quota-tpm" name="quota_tpm" type="number" defaultValue={data.quota?.tpm ?? ""} autoComplete="off" />
       </div>
       <div>
-        <label className={editLabel}>Alert at (0..1)</label>
-        <input name="alert_threshold" type="number" step="any" min="0" max="1" className={editInput} defaultValue={data.alert_threshold ?? ""} />
+        <Label htmlFor="edit-alert-threshold">Alert at (0..1)</Label>
+        <Input id="edit-alert-threshold" name="alert_threshold" type="number" step="any" min="0" max="1" defaultValue={data.alert_threshold ?? ""} autoComplete="off" />
       </div>
       <div>
-        <label className={editLabel}>Expires</label>
-        <input name="expires_at" type="date" className={editInput} defaultValue={data.expires_at ? toDateInput(new Date(data.expires_at * 1000)) : ""} />
+        <Label htmlFor="edit-expires-at">Expires</Label>
+        <Input id="edit-expires-at" name="expires_at" type="date" defaultValue={data.expires_at ? toDateInput(new Date(data.expires_at * 1000)) : ""} />
       </div>
       <div>
-        <label className={editLabel}>Rotation interval (days)</label>
-        <input name="rotation_interval_days" type="number" className={editInput} defaultValue={data.rotation_interval_days ?? ""} />
+        <Label htmlFor="edit-rotation-interval">Rotation interval (days)</Label>
+        <Input id="edit-rotation-interval" name="rotation_interval_days" type="number" defaultValue={data.rotation_interval_days ?? ""} autoComplete="off" />
       </div>
       <div>
-        <label className={editLabel}>Grace period (days)</label>
-        <input name="grace_period_days" type="number" className={editInput} defaultValue={data.grace_period_days ?? ""} />
+        <Label htmlFor="edit-grace-period">Grace period (days)</Label>
+        <Input id="edit-grace-period" name="grace_period_days" type="number" defaultValue={data.grace_period_days ?? ""} autoComplete="off" />
       </div>
       <div>
-        <label className={editLabel}>Webhook URL</label>
-        <input name="webhook_url" type="url" className={editInput} defaultValue={data.webhook_url ?? ""} />
+        <Label htmlFor="edit-webhook-url">Webhook URL</Label>
+        <Input id="edit-webhook-url" name="webhook_url" type="url" defaultValue={data.webhook_url ?? ""} autoComplete="off" />
       </div>
       <div>
-        <label className={editLabel}>IP Whitelist</label>
-        <input name="ip_whitelist" className={editInput} defaultValue={data.ip_whitelist?.join(", ") ?? ""} />
+        <Label htmlFor="edit-ip-whitelist">IP Whitelist</Label>
+        <Input id="edit-ip-whitelist" name="ip_whitelist" defaultValue={data.ip_whitelist?.join(", ") ?? ""} autoComplete="off" />
       </div>
       <div>
-        <label className={editLabel}>IP Blacklist</label>
-        <input name="ip_blacklist" className={editInput} defaultValue={data.ip_blacklist?.join(", ") ?? ""} />
+        <Label htmlFor="edit-ip-blacklist">IP Blacklist</Label>
+        <Input id="edit-ip-blacklist" name="ip_blacklist" defaultValue={data.ip_blacklist?.join(", ") ?? ""} autoComplete="off" />
       </div>
       <div className="sm:col-span-1">
-        <label className={editLabel}>Access hours (HH:mm / timezone / days)</label>
+        <Label>Access hours (HH:mm / timezone / days)</Label>
         <div className="grid grid-cols-2 gap-2">
-          <input name="access_start" type="time" className={editInput} defaultValue={data.access_hours?.start_time ?? ""} />
-          <input name="access_end" type="time" className={editInput} defaultValue={data.access_hours?.end_time ?? ""} />
-          <input name="access_timezone" className={editInput} placeholder="Timezone" defaultValue={data.access_hours?.timezone ?? ""} />
-          <input name="access_days" className={editInput} placeholder="monday, tuesday, …" defaultValue={data.access_hours?.allowed_days?.join(", ") ?? ""} />
+          <Input id="edit-access-start" name="access_start" type="time" defaultValue={data.access_hours?.start_time ?? ""} />
+          <Input id="edit-access-end" name="access_end" type="time" defaultValue={data.access_hours?.end_time ?? ""} />
+          <Input id="edit-access-timezone" name="access_timezone" placeholder="Timezone" defaultValue={data.access_hours?.timezone ?? ""} autoComplete="off" />
+          <Input id="edit-access-days" name="access_days" placeholder="monday, tuesday, …" defaultValue={data.access_hours?.allowed_days?.join(", ") ?? ""} autoComplete="off" />
         </div>
       </div>
       <div className="flex flex-col gap-2 justify-start sm:col-span-2 sm:flex-row">
         <label className="flex items-center gap-2 text-sm">
-          <input type="checkbox" name="auto_block" value="1" defaultChecked={data.auto_block === 1} /> Auto-block when budget exceeded
+          <Checkbox name="auto_block" value="1" defaultChecked={data.auto_block === 1} /> Auto-block when budget exceeded
         </label>
         <label className="flex items-center gap-2 text-sm">
-          <input type="checkbox" name="strict_ip" value="1" defaultChecked={data.strict_ip === 1} /> Strict IP
+          <Checkbox name="strict_ip" value="1" defaultChecked={data.strict_ip === 1} /> Strict IP
         </label>
         <label className="flex items-center gap-2 text-sm">
-          <input type="checkbox" name="access_enabled" value="1" defaultChecked={data.access_hours?.enabled === true} /> Enable access hours
+          <Checkbox name="access_enabled" value="1" defaultChecked={data.access_hours?.enabled === true} /> Enable access hours
         </label>
       </div>
       <div className="sm:col-span-2 flex justify-end gap-2">
-        <button
-          type="submit"
-          className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
-        >
-          Save Changes
-        </button>
+        <Button type="submit">Save Changes</Button>
       </div>
     </Form>
   );

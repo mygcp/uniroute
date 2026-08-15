@@ -2,7 +2,6 @@ import { Form } from "react-router";
 import { useState, type ReactNode } from "react";
 import type { Route } from "./+types/api-manager._index";
 import {
-  Copy,
   Download,
   KeyRound,
   Lock,
@@ -17,7 +16,6 @@ import { computeStatus, type KeyStatus } from "../.server/key-enforce";
 import {
   usageThisMonth,
   usageToday,
-  type UsageSummary,
 } from "../.server/key-usage";
 import {
   deleteKey,
@@ -27,6 +25,18 @@ import {
 } from "../.server/key-ops";
 import { applyBulk, type BulkAction } from "../.server/key-bulk";
 import { decryptKey } from "../.server/key-crypto";
+import { PageHeader } from "../components/ui/page-header";
+import { Card } from "../components/ui/card";
+import { Badge, type BadgeTone } from "../components/ui/badge";
+import { Button } from "../components/ui/button";
+import { Input, Select, Label, Checkbox } from "../components/ui/field";
+import { CopyButton } from "../components/ui/copy-button";
+import { EmptyState } from "../components/ui/empty-state";
+import { Table, THead, THeadCell, TRow, TCell } from "../components/ui/table";
+import { StatCard } from "../components/ui/stat-card";
+import { UsageBar } from "../components/ui/usage-bar";
+import { Tooltip } from "../components/ui/tooltip";
+import { useConfirm } from "../components/ui/confirm-dialog";
 
 export function loader() {
   const keys = listClientKeys().map((k) => {
@@ -54,7 +64,6 @@ type Result =
 export async function action({ request }: Route.ActionArgs) {
   const form = await request.formData();
   const intent = String(form.get("intent"));
-  const has = (name: string) => form.get(name) !== null && form.get(name) !== "";
 
   if (intent === "require") {
     setRequireApiKey(form.get("enabled") === "1");
@@ -117,11 +126,18 @@ export async function action({ request }: Route.ActionArgs) {
   return null;
 }
 
-const STATUS_STYLE: Record<KeyStatus, { label: string; cls: string }> = {
-  active: { label: "🟢 Active", cls: "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300" },
-  near_limit: { label: "🟡 Near Limit", cls: "bg-yellow-100 text-yellow-700 dark:bg-yellow-900/40 dark:text-yellow-300" },
-  suspended: { label: "🔒 Locked", cls: "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300" },
-  expired: { label: "⚠️ Expired", cls: "bg-gray-200 text-gray-600 dark:bg-gray-800 dark:text-gray-300" },
+const STATUS_TONE: Record<KeyStatus, BadgeTone> = {
+  active: "success",
+  near_limit: "warning",
+  suspended: "danger",
+  expired: "neutral",
+};
+
+const STATUS_LABEL: Record<KeyStatus, string> = {
+  active: "Active",
+  near_limit: "Near Limit",
+  suspended: "Locked",
+  expired: "Expired",
 };
 
 function masked(key: Row["key"]): string {
@@ -131,6 +147,10 @@ function masked(key: Row["key"]): string {
 function pct(value: number, total: number): number {
   if (!total) return 0;
   return Math.min(100, Math.round((value / total) * 100));
+}
+
+function usageTone(p: number): "success" | "warning" | "danger" {
+  return p >= 80 ? "danger" : p >= 50 ? "warning" : "success";
 }
 
 export default function ApiManager({ loaderData, actionData }: Route.ComponentProps) {
@@ -160,113 +180,110 @@ export default function ApiManager({ loaderData, actionData }: Route.ComponentPr
 
   return (
     <div>
-      <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="flex items-center gap-2 text-2xl font-bold text-gray-900 dark:text-white">
-            <KeyRound size={24} /> API Manager
-          </h1>
-          <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
-            Kelola API key untuk semua aplikasi &amp; client.
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <a
-            href="/api-manager/templates"
-            className="rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-800"
-          >
-            Templates
-          </a>
-          <a
-            href="/api-manager/groups"
-            className="rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-800"
-          >
-            Groups
-          </a>
-          <a
-            href="/api-manager/create"
-            className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
-          >
-            <Plus size={16} /> Create New Key
-          </a>
-        </div>
-      </div>
+      <PageHeader
+        title="API Manager"
+        icon={<KeyRound size={20} />}
+        subtitle="Manage API keys for all applications & clients."
+        actions={
+          <>
+            <a
+              href="/api-manager/templates"
+              className="inline-flex items-center rounded-lg border border-border px-3 py-1.5 text-sm text-foreground hover:bg-muted"
+            >
+              Templates
+            </a>
+            <a
+              href="/api-manager/groups"
+              className="inline-flex items-center rounded-lg border border-border px-3 py-1.5 text-sm text-foreground hover:bg-muted"
+            >
+              Groups
+            </a>
+            <a
+              href="/api-manager/create"
+              className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+            >
+              <Plus size={16} /> Create New Key
+            </a>
+          </>
+        }
+      />
 
       {rotated && rotated.length > 0 ? (
-        <div className="mb-4 rounded-lg border border-yellow-300 bg-yellow-50 p-4 text-sm dark:border-yellow-700 dark:bg-yellow-950/40">
-          <p className="font-semibold text-yellow-800 dark:text-yellow-200">
-            Key baru berikut DITAMPILKAN SEKALI — salin sekarang:
+        <div className="mb-4 rounded-lg border border-warning/30 bg-warning/10 p-4 text-sm">
+          <p className="font-semibold text-foreground">
+            New keys below are shown only once — copy them now:
           </p>
           {rotated.map((r) => (
             <div key={r.id} className="mt-2 flex items-center gap-2">
-              <code className="break-all rounded bg-white px-3 py-2 font-mono text-xs text-gray-800 dark:bg-gray-900 dark:text-gray-100">
+              <code className="break-all rounded bg-surface-2 px-3 py-2 font-mono text-xs text-foreground">
                 {r.key}
               </code>
-              <CopyButton value={r.key} />
+              <CopyButton text={r.key} label="Copy" />
             </div>
           ))}
         </div>
       ) : null}
 
       {reveal ? (
-        <div className="mb-4 rounded-lg border border-yellow-300 bg-yellow-50 p-4 text-sm dark:border-yellow-700 dark:bg-yellow-950/40">
-          <p className="font-semibold text-yellow-800 dark:text-yellow-200">
+        <div className="mb-4 rounded-lg border border-warning/30 bg-warning/10 p-4 text-sm">
+          <p className="font-semibold text-foreground">
             Full key (key #{reveal.id}):
           </p>
           <div className="mt-2 flex items-center gap-2">
-            <code className="break-all rounded bg-white px-3 py-2 font-mono text-xs text-gray-800 dark:bg-gray-900 dark:text-gray-100">
+            <code className="break-all rounded bg-surface-2 px-3 py-2 font-mono text-xs text-foreground">
               {reveal.key}
             </code>
-            <CopyButton value={reveal.key} />
+            <CopyButton text={reveal.key} label="Copy" />
           </div>
         </div>
       ) : null}
 
       <div className="mb-6 grid grid-cols-2 gap-4 lg:grid-cols-4">
-        <StatCard label="Total Keys" value={counts.total} />
-        <StatCard label="Active Keys" value={counts.active} />
-        <StatCard label="Restricted Keys" value={counts.restricted} />
-        <StatCard label="Requests (month)" value={counts.totalRequests.toLocaleString()} />
+        <StatCard title="Total Keys" value={counts.total} />
+        <StatCard title="Active Keys" value={counts.active} accent="bg-success" />
+        <StatCard title="Restricted Keys" value={counts.restricted} accent="bg-warning" />
+        <StatCard title="Requests (month)" value={counts.totalRequests.toLocaleString()} accent="bg-info" />
       </div>
 
-      <div className="mb-4 flex flex-wrap items-center gap-3 rounded-xl border border-gray-200 bg-white p-3 shadow-sm dark:border-gray-800 dark:bg-gray-900">
-        <input
+      <Card padded={false} className="mb-4 flex flex-wrap items-center gap-3 p-3">
+        <Input
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="🔍 Search…"
-          className="w-full rounded-lg border border-gray-300 px-3 py-1.5 text-sm text-gray-900 dark:border-gray-600 dark:bg-gray-800 dark:text-white sm:w-64"
+          placeholder="Search…"
+          aria-label="Search keys"
+          autoComplete="off"
+          className="sm:w-64"
         />
-        <select
+        <Select
           value={statusFilter}
           onChange={(e) => setStatusFilter(e.target.value)}
-          className="rounded-lg border border-gray-300 px-3 py-1.5 text-sm text-gray-900 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+          aria-label="Filter by status"
+          className="sm:w-48"
         >
           <option value="any">All status</option>
           <option value="active">Active</option>
           <option value="near_limit">Near Limit</option>
           <option value="suspended">Locked</option>
           <option value="expired">Expired</option>
-        </select>
+        </Select>
 
         <Form method="post" className="flex items-center gap-2">
           <input type="hidden" name="intent" value="require" />
           <input type="hidden" name="enabled" value={requireApiKey ? "0" : "1"} />
-          <button
+          <Button
             type="submit"
-            className={`rounded-lg px-3 py-1.5 text-sm font-medium ${
-              requireApiKey
-                ? "bg-green-600 text-white hover:bg-green-700"
-                : "bg-gray-200 text-gray-700 hover:bg-gray-300 dark:bg-gray-700 dark:text-gray-300"
-            }`}
-            title="Master switch: wajibkan API key untuk semua request"
+            size="sm"
+            variant={requireApiKey ? "primary" : "outline"}
+            title="Master switch: require an API key for all requests"
           >
             Require API key: {requireApiKey ? "ON" : "OFF"}
-          </button>
+          </Button>
         </Form>
-      </div>
+      </Card>
 
       {selected.size > 0 ? (
-        <div className="mb-4 rounded-xl border border-blue-200 bg-blue-50 p-3 text-sm dark:border-blue-800 dark:bg-blue-950/40">
-          <span className="font-medium text-blue-900 dark:text-blue-100">
+        <div className="mb-4 rounded-xl border border-primary/30 bg-primary/5 p-3 text-sm">
+          <span className="font-medium text-foreground">
             {selected.size} selected —{" "}
           </span>
           <BulkRow ids={selected} setSelected={setSelected} />
@@ -275,173 +292,135 @@ export default function ApiManager({ loaderData, actionData }: Route.ComponentPr
 
       <ExportBar />
 
-      <div className="table-wrap">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="border-b text-left text-xs uppercase text-gray-400 dark:border-gray-700">
-              <th className="py-2 pr-2">
-                <input
-                  type="checkbox"
-                  checked={filtered.length > 0 && filtered.every((r) => selected.has(r.key.id))}
-                  onChange={(e) =>
-                    setSelected(
-                      e.target.checked
-                        ? new Set(filtered.map((r) => r.key.id))
-                        : new Set(),
-                    )
-                  }
-                />
-              </th>
-              <th className="py-2 pr-4">Name</th>
-              <th className="py-2 pr-4">Key</th>
-              <th className="py-2 pr-4">Status</th>
-              <th className="py-2 pr-4">Usage</th>
-              <th className="py-2 pr-4">Budget</th>
-              <th className="py-2">Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {filtered.map((r) => {
-              const st = STATUS_STYLE[r.status];
-              const budget = r.key.budget?.monthly;
-              const usagePct =
-                budget && budget > 0 ? pct(r.month.cost, budget) : null;
-              return (
-                <tr key={r.key.id} className="border-b border-gray-100 dark:border-gray-800">
-                  <td className="py-2 pr-2">
-                    <input
-                      type="checkbox"
-                      checked={selected.has(r.key.id)}
-                      onChange={() => toggle(r.key.id)}
-                    />
-                  </td>
-                  <td className="py-2 pr-4">
-                    <a
-                      href={`/api-manager/${r.key.id}`}
-                      className="font-medium text-blue-600 hover:underline dark:text-blue-400"
-                    >
-                      {r.key.name}
-                    </a>
-                    {r.key.description ? (
-                      <p className="text-xs text-gray-500 dark:text-gray-400">{r.key.description}</p>
-                    ) : null}
-                  </td>
-                  <td className="py-2 pr-4 font-mono text-xs text-gray-500 dark:text-gray-400">
-                    {masked(r.key)}
-                  </td>
-                  <td className="py-2 pr-4">
-                    <span className={`rounded-full px-2 py-0.5 text-xs ${st.cls}`}>{st.label}</span>
-                  </td>
-                  <td className="py-2 pr-4 text-xs text-gray-600 dark:text-gray-300">
-                    {r.month.requests.toLocaleString()} req · {r.month.cost.toFixed(4)} USD
-                  </td>
-                  <td className="py-2 pr-4">
-                    {usagePct !== null ? (
-                      <div className="w-24">
-                        <div className="h-1.5 w-full overflow-hidden rounded-full bg-gray-200 dark:bg-gray-700">
-                          <div
-                            className={`h-full ${usagePct >= 80 ? "bg-red-500" : usagePct >= 50 ? "bg-yellow-500" : "bg-blue-500"}`}
-                            style={{ width: `${usagePct}%` }}
-                          />
-                        </div>
-                        <span className="text-[10px] text-gray-500 dark:text-gray-400">{usagePct}%</span>
-                      </div>
-                    ) : (
-                      <span className="text-xs text-gray-400">—</span>
-                    )}
-                  </td>
-                  <td className="py-2">
-                    <div className="flex items-center gap-1">
-                      <CopyButton value={masked(r.key)} label="Copy" small />
-                      <Form method="post" className="contents">
-                        <input type="hidden" name="intent" value="reveal" />
-                        <input type="hidden" name="id" value={r.key.id} />
-                        <button
-                          type="submit"
-                          disabled={!revealAllowed || !r.revealable}
-                          title="Reveal full key"
-                          className="rounded border border-gray-300 p-1 text-gray-600 hover:bg-gray-50 disabled:opacity-30 dark:border-gray-600 dark:text-gray-300"
-                        >
-                          <LockOpen size={14} />
-                        </button>
-                      </Form>
-                      <RowAction intent="rotate" id={r.key.id} title="Rotate" icon={<RotateCw size={14} />} />
-                      {r.status === "suspended" ? (
-                        <RowAction intent="reactivate" id={r.key.id} title="Reactivate" icon={<LockOpen size={14} />} />
-                      ) : (
-                        <RowAction intent="suspend" id={r.key.id} title="Suspend" icon={<Lock size={14} />} />
-                      )}
-                      <RowAction intent="delete" id={r.key.id} title="Delete" icon={<Trash2 size={14} />} danger />
+      {filtered.length === 0 ? (
+        <Card>
+          <EmptyState
+            icon={<KeyRound size={20} />}
+            title="No API keys yet"
+            description="Create a key to start routing requests."
+          />
+        </Card>
+      ) : (
+        <Card padded={false}>
+          <Table>
+            <THead>
+              <tr>
+                <THeadCell className="pr-2">
+                  <Checkbox
+                    aria-label="Select all keys"
+                    checked={filtered.length > 0 && filtered.every((r) => selected.has(r.key.id))}
+                    onChange={(e) =>
+                      setSelected(
+                        e.target.checked
+                          ? new Set(filtered.map((r) => r.key.id))
+                          : new Set(),
+                      )
+                    }
+                  />
+                </THeadCell>
+                <THeadCell>Name</THeadCell>
+                <THeadCell>Key</THeadCell>
+                <THeadCell>Status</THeadCell>
+                <THeadCell>Usage</THeadCell>
+                <THeadCell>Budget</THeadCell>
+                <THeadCell className="pr-0">Actions</THeadCell>
+              </tr>
+            </THead>
+            <tbody>
+              {filtered.map((r) => {
+                const budget = r.key.budget?.monthly;
+                const usagePct =
+                  budget && budget > 0 ? pct(r.month.cost, budget) : null;
+                return (
+                  <TRow key={r.key.id}>
+                    <TCell className="pr-2">
+                      <Checkbox
+                        aria-label={`Select ${r.key.name}`}
+                        checked={selected.has(r.key.id)}
+                        onChange={() => toggle(r.key.id)}
+                      />
+                    </TCell>
+                    <TCell>
                       <a
                         href={`/api-manager/${r.key.id}`}
-                        title="Manage / Edit"
-                        className="rounded border border-gray-300 p-1 text-gray-600 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-300"
+                        className="font-medium text-primary hover:underline"
                       >
-                        <Settings size={14} />
+                        {r.key.name}
                       </a>
-                    </div>
-                  </td>
-                </tr>
-              );
-            })}
-            {filtered.length === 0 ? (
-              <tr>
-                <td colSpan={7} className="py-8 text-center text-gray-400 dark:text-gray-500">
-                  Tidak ada API key.
-                </td>
-              </tr>
-            ) : null}
-          </tbody>
-        </table>
-      </div>
+                      {r.key.description ? (
+                        <p className="text-xs text-muted-foreground">{r.key.description}</p>
+                      ) : null}
+                    </TCell>
+                    <TCell className="font-mono text-xs text-muted-foreground">
+                      {masked(r.key)}
+                    </TCell>
+                    <TCell>
+                      <Badge tone={STATUS_TONE[r.status]}>{STATUS_LABEL[r.status]}</Badge>
+                    </TCell>
+                    <TCell className="text-xs text-muted-foreground">
+                      {r.month.requests.toLocaleString()} req · {r.month.cost.toFixed(4)} USD
+                    </TCell>
+                    <TCell>
+                      {usagePct !== null ? (
+                        <div className="w-24">
+                          <UsageBar value={usagePct} max={100} tone={usageTone(usagePct)} />
+                          <span className="text-[10px] text-muted-foreground">{usagePct}%</span>
+                        </div>
+                      ) : (
+                        <span className="text-xs text-muted-foreground">—</span>
+                      )}
+                    </TCell>
+                    <TCell className="pr-0">
+                      <div className="flex items-center gap-1">
+                        <CopyButton text={masked(r.key)} label="Copy key" />
+                        <Form method="post">
+                          <input type="hidden" name="intent" value="reveal" />
+                          <input type="hidden" name="id" value={r.key.id} />
+                          <Tooltip
+                            label={
+                              !revealAllowed
+                                ? "Reveal is disabled — set ALLOW_API_KEY_REVEAL=1 to enable"
+                                : !r.revealable
+                                  ? "This key has no stored secret to reveal"
+                                  : "Reveal full key"
+                            }
+                          >
+                            <Button
+                              type="submit"
+                              variant="ghost"
+                              size="icon"
+                              disabled={!revealAllowed || !r.revealable}
+                              aria-label="Reveal full key"
+                            >
+                              <LockOpen size={14} />
+                            </Button>
+                          </Tooltip>
+                        </Form>
+                        <RowAction intent="rotate" id={r.key.id} title="Rotate" icon={<RotateCw size={14} />} />
+                        {r.status === "suspended" ? (
+                          <RowAction intent="reactivate" id={r.key.id} title="Reactivate" icon={<LockOpen size={14} />} />
+                        ) : (
+                          <RowAction intent="suspend" id={r.key.id} title="Suspend" icon={<Lock size={14} />} />
+                        )}
+                        <RowAction intent="delete" id={r.key.id} title="Delete" icon={<Trash2 size={14} />} danger />
+                        <a
+                          href={`/api-manager/${r.key.id}`}
+                          title="Manage / Edit"
+                          aria-label="Manage / Edit"
+                          className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted hover:text-foreground"
+                        >
+                          <Settings size={14} />
+                        </a>
+                      </div>
+                    </TCell>
+                  </TRow>
+                );
+              })}
+            </tbody>
+          </Table>
+        </Card>
+      )}
     </div>
-  );
-}
-
-function StatCard({ label, value }: { label: string; value: string | number }) {
-  return (
-    <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-800 dark:bg-gray-900">
-      <p className="text-xs uppercase text-gray-400 dark:text-gray-500">{label}</p>
-      <p className="mt-1 text-2xl font-bold text-gray-900 dark:text-white">{value}</p>
-    </div>
-  );
-}
-
-function CopyButton({ value, label, small }: { value: string; label?: string; small?: boolean }) {
-  const [copied, setCopied] = useState(false);
-  const copy = async () => {
-    try {
-      await navigator.clipboard?.writeText(value);
-    } catch {
-      // Fallback untuk konteks non-HTTPS (LAN).
-      const ta = document.createElement("textarea");
-      ta.value = value;
-      ta.style.position = "fixed";
-      ta.style.opacity = "0";
-      document.body.appendChild(ta);
-      ta.select();
-      try {
-        document.execCommand("copy");
-      } catch {
-        /* ignore */
-      }
-      document.body.removeChild(ta);
-    }
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
-  };
-  return (
-    <button
-      type="button"
-      onClick={copy}
-      className={`flex items-center gap-1 rounded border border-gray-300 text-gray-600 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-300 ${
-        small ? "p-1" : "px-2 py-1 text-xs"
-      }`}
-      title={label ?? "Copy"}
-    >
-      <Copy size={small ? 14 : 12} />
-      {label && <span>{copied ? "Copied" : label}</span>}
-    </button>
   );
 }
 
@@ -458,40 +437,41 @@ function RowAction({
   icon: ReactNode;
   danger?: boolean;
 }) {
+  const { dialog, confirm } = useConfirm();
   const confirmMsg =
     intent === "delete"
-      ? "Hapus API key ini? Tindakan tidak bisa dibatalkan."
+      ? { title: "Delete this API key?", description: "This action cannot be undone.", confirmLabel: "Delete", variant: "danger" as const }
       : intent === "rotate"
-        ? "Rotasi key ini? Key lama tetap valid selama grace period."
+        ? { title: "Rotate this key?", description: "The old key stays valid for the grace period.", confirmLabel: "Rotate", variant: "primary" as const }
         : intent === "suspend"
-          ? "Suspend API key ini? Request dengan key ini akan ditolak."
+          ? { title: "Suspend this API key?", description: "Requests with this key will be rejected.", confirmLabel: "Suspend", variant: "primary" as const }
           : null;
+
+  const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
+    if (!confirmMsg) return;
+    e.preventDefault();
+    const form = e.currentTarget;
+    const ok = await confirm(confirmMsg);
+    if (ok) form.submit();
+  };
+
   return (
-    <Form
-      method="post"
-      className="contents"
-      onSubmit={
-        confirmMsg
-          ? (e) => {
-              if (!window.confirm(confirmMsg)) e.preventDefault();
-            }
-          : undefined
-      }
-    >
-      <input type="hidden" name="intent" value={intent} />
-      <input type="hidden" name="id" value={id} />
-      <button
-        type="submit"
-        title={title}
-        className={
-          danger
-            ? "rounded border border-red-200 p-1 text-red-500 hover:bg-red-50 dark:border-red-900"
-            : "rounded border border-gray-300 p-1 text-gray-600 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-300"
-        }
-      >
-        {icon}
-      </button>
-    </Form>
+    <>
+      <Form method="post" onSubmit={handleSubmit}>
+        <input type="hidden" name="intent" value={intent} />
+        <input type="hidden" name="id" value={id} />
+        <Button
+          type="submit"
+          variant={danger ? "danger" : "ghost"}
+          size="icon"
+          title={title}
+          aria-label={title}
+        >
+          {icon}
+        </Button>
+      </Form>
+      {dialog}
+    </>
   );
 }
 
@@ -502,46 +482,50 @@ function BulkRow({
   ids: Set<number>;
   setSelected: (s: Set<number>) => void;
 }) {
-  const confirmFor = (action: string): string | null => {
-    if (action === "delete") return `Hapus ${ids.size} API key? Tindakan tidak bisa dibatalkan.`;
-    if (action === "suspend") return `Suspend ${ids.size} API key?`;
-    if (action === "rotate") return `Rotasi ${ids.size} API key?`;
-    return null;
+  const { dialog, confirm } = useConfirm();
+
+  const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
+    const action = String((e.currentTarget.elements.namedItem("bulk_action") as HTMLButtonElement | null)?.value ?? "");
+    const msg =
+      action === "delete"
+        ? { title: `Delete ${ids.size} API keys?`, description: "This action cannot be undone.", confirmLabel: "Delete", variant: "danger" as const }
+        : action === "suspend"
+          ? { title: `Suspend ${ids.size} API keys?`, description: "Requests with these keys will be rejected.", confirmLabel: "Suspend", variant: "primary" as const }
+          : action === "rotate"
+            ? { title: `Rotate ${ids.size} API keys?`, description: "The old keys stay valid for the grace period.", confirmLabel: "Rotate", variant: "primary" as const }
+            : null;
+    if (!msg) return;
+    e.preventDefault();
+    const form = e.currentTarget;
+    const ok = await confirm(msg);
+    if (ok) form.submit();
   };
+
   return (
-    <Form
-      method="post"
-      className="inline-flex flex-wrap items-center gap-2"
-      onSubmit={(e) => {
-        const target = (e.target as HTMLFormElement).elements.namedItem(
-          "bulk_action",
-        ) as HTMLButtonElement | null;
-        const action = target?.value ?? "";
-        const msg = confirmFor(action);
-        if (msg && !window.confirm(msg)) e.preventDefault();
-      }}
-    >
-      <input type="hidden" name="intent" value="bulk" />
-      <input type="hidden" name="selected_ids" value={Array.from(ids).join(",")} />
-      {["suspend", "reactivate", "rotate", "delete", "export"].map((a) => (
-        <button
-          key={a}
-          type="submit"
-          name="bulk_action"
-          value={a}
-          className="rounded-lg bg-blue-600 px-3 py-1 text-xs font-medium text-white hover:bg-blue-700"
-        >
-          {a}
-        </button>
-      ))}
-      <button
-        type="button"
-        onClick={() => setSelected(new Set())}
-        className="rounded-lg border border-gray-300 px-3 py-1 text-xs text-gray-600 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-300"
+    <>
+      <Form
+        method="post"
+        className="inline-flex flex-wrap items-center gap-2"
+        onSubmit={handleSubmit}
       >
-        Clear
-      </button>
-    </Form>
+        <input type="hidden" name="intent" value="bulk" />
+        <input type="hidden" name="selected_ids" value={Array.from(ids).join(",")} />
+        {["suspend", "reactivate", "rotate", "delete", "export"].map((a) => (
+          <Button key={a} type="submit" name="bulk_action" value={a} size="sm">
+            {a}
+          </Button>
+        ))}
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          onClick={() => setSelected(new Set())}
+        >
+          Clear
+        </Button>
+      </Form>
+      {dialog}
+    </>
   );
 }
 
@@ -550,37 +534,32 @@ function ExportBar() {
     <Form
       method="get"
       action="/api-manager/export"
-      className="mb-4 flex flex-wrap items-center gap-2 rounded-xl border border-gray-200 bg-white p-3 text-sm shadow-sm dark:border-gray-800 dark:bg-gray-900"
+      className="mb-4 flex flex-wrap items-end gap-3 rounded-xl border border-border bg-surface p-3 text-sm shadow-sm"
     >
-      <select
-        name="status"
-        className="rounded-lg border border-gray-300 px-2 py-1.5 text-sm dark:border-gray-600 dark:bg-gray-800 dark:text-white"
-      >
-        <option value="any">All status</option>
-        <option value="active">Active</option>
-        <option value="suspended">Locked</option>
-        <option value="expired">Expired</option>
-      </select>
-      <input
-        type="date"
-        name="created_before"
-        title="Created before (optional)"
-        className="rounded-lg border border-gray-300 px-2 py-1.5 text-sm dark:border-gray-600 dark:bg-gray-800 dark:text-white"
-      />
-      <select
-        name="format"
-        className="rounded-lg border border-gray-300 px-2 py-1.5 text-sm dark:border-gray-600 dark:bg-gray-800 dark:text-white"
-      >
-        <option value="csv">CSV</option>
-        <option value="json">JSON</option>
-      </select>
-      <button
-        type="submit"
-        className="flex items-center gap-1 rounded-lg border border-gray-300 px-3 py-1.5 text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-800"
-      >
+      <div>
+        <Label htmlFor="export-status">Status</Label>
+        <Select id="export-status" name="status" className="sm:w-44">
+          <option value="any">All status</option>
+          <option value="active">Active</option>
+          <option value="suspended">Locked</option>
+          <option value="expired">Expired</option>
+        </Select>
+      </div>
+      <div>
+        <Label htmlFor="export-before">Created before</Label>
+        <Input type="date" id="export-before" name="created_before" className="sm:w-44" />
+      </div>
+      <div>
+        <Label htmlFor="export-format">Format</Label>
+        <Select id="export-format" name="format" className="sm:w-44">
+          <option value="csv">CSV</option>
+          <option value="json">JSON</option>
+        </Select>
+      </div>
+      <Button type="submit" variant="outline">
         <Download size={14} /> Export
-      </button>
-      <span className="text-xs text-gray-400">download CSV/JSON by filter</span>
+      </Button>
+      <span className="text-xs text-muted-foreground">Download CSV/JSON by filter</span>
     </Form>
   );
 }

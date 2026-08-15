@@ -13,6 +13,13 @@ import {
   type KeyGroup,
 } from "../.server/key-groups";
 import { listClientKeys } from "../.server/client-key";
+import { PageHeader } from "../components/ui/page-header";
+import { Card } from "../components/ui/card";
+import { Button } from "../components/ui/button";
+import { Input, Label, Checkbox } from "../components/ui/field";
+import { EmptyState } from "../components/ui/empty-state";
+import { UsageBar } from "../components/ui/usage-bar";
+import { useConfirm } from "../components/ui/confirm-dialog";
 
 export function loader() {
   const keys = listClientKeys().map((k) => ({ id: k.id, name: k.name, masked: `${k.key_prefix}…${k.key_hash.slice(0, 4)}` }));
@@ -71,123 +78,143 @@ export async function action({ request }: Route.ActionArgs) {
   return null;
 }
 
-const inputClass =
-  "w-full rounded-lg border border-gray-300 px-3 py-1.5 text-sm text-gray-900 dark:border-gray-600 dark:bg-gray-800 dark:text-white";
-const labelClass = "mb-1 block text-xs font-medium text-gray-600 dark:text-gray-300";
-
 export default function Groups({ loaderData }: Route.ComponentProps) {
   const { keys, groups } = loaderData;
   const [creating, setCreating] = useState(false);
 
   return (
     <div className="mx-auto max-w-4xl">
-      <div className="mb-6 flex items-center justify-between">
-        <h1 className="flex items-center gap-2 text-2xl font-bold text-gray-900 dark:text-white">
-          <Users size={24} /> API Key Groups / Teams
-        </h1>
-        <button
-          type="button"
-          onClick={() => setCreating((v) => !v)}
-          className="flex items-center gap-2 rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700"
-        >
-          <Plus size={16} /> New Group
-        </button>
-      </div>
+      <PageHeader
+        title="API Key Groups / Teams"
+        icon={<Users size={20} />}
+        subtitle="Group keys to share budgets and quotas."
+        actions={
+          <Button type="button" onClick={() => setCreating((v) => !v)}>
+            <Plus size={16} /> New Group
+          </Button>
+        }
+      />
 
       {creating ? (
-        <Form method="post" className="mb-6 space-y-3 rounded-xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-gray-900">
-          <input type="hidden" name="intent" value="create" />
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className={labelClass}>Group name</label>
-              <input name="name" required className={inputClass} placeholder="engineering-team" />
+        <Card className="mb-6">
+          <Form method="post" className="space-y-3">
+            <input type="hidden" name="intent" value="create" />
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <div>
+                <Label htmlFor="group-name">Group name</Label>
+                <Input id="group-name" name="name" required placeholder="engineering-team" autoComplete="off" />
+              </div>
+              <div>
+                <Label htmlFor="group-description">Description</Label>
+                <Input id="group-description" name="description" autoComplete="off" />
+              </div>
+              <div>
+                <Label htmlFor="group-budget">Shared budget ($/month)</Label>
+                <Input id="group-budget" name="budget" type="number" step="any" autoComplete="off" />
+              </div>
+              <div>
+                <Label htmlFor="group-tokens">Shared tokens/month</Label>
+                <Input id="group-tokens" name="tokens" type="number" autoComplete="off" />
+              </div>
             </div>
             <div>
-              <label className={labelClass}>Description</label>
-              <input name="description" className={inputClass} />
+              <Label>Members</Label>
+              <MemberSelect name="member_ids" keys={keys} />
             </div>
-            <div>
-              <label className={labelClass}>Shared budget ($/month)</label>
-              <input name="budget" type="number" step="any" className={inputClass} />
-            </div>
-            <div>
-              <label className={labelClass}>Shared tokens/month</label>
-              <input name="tokens" type="number" className={inputClass} />
-            </div>
-          </div>
-          <div>
-            <label className={labelClass}>Members</label>
-            <MemberSelect name="member_ids" keys={keys} />
-          </div>
-          <button type="submit" className="rounded-lg bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-700">
-            Create Group
-          </button>
-        </Form>
+            <Button type="submit">Create Group</Button>
+          </Form>
+        </Card>
       ) : null}
 
-      <div className="space-y-4">
-        {groups.map(({ group, members, usage }) => {
-          const quota = group.shared_quota;
-          const budgetPct =
-            quota?.monthly_budget && quota.monthly_budget > 0
-              ? Math.min(100, Math.round((usage.cost / quota.monthly_budget) * 100))
-              : null;
-          const tokensPct =
-            quota?.tokens_per_month && quota.tokens_per_month > 0
-              ? Math.min(100, Math.round(((usage.promptTokens + usage.completionTokens) / quota.tokens_per_month) * 100))
-              : null;
-          return (
-            <div key={group.id} className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-gray-900">
-              <div className="mb-3 flex items-start justify-between gap-3">
-                <div>
-                  <h2 className="text-lg font-semibold text-gray-900 dark:text-white">{group.name}</h2>
-                  {group.description ? (
-                    <p className="text-sm text-gray-500 dark:text-gray-400">{group.description}</p>
-                  ) : null}
+      {groups.length === 0 ? (
+        <Card>
+          <EmptyState
+            icon={<Users size={20} />}
+            title="No groups yet"
+            description="Create a group to share budgets across keys."
+          />
+        </Card>
+      ) : (
+        <div className="space-y-4">
+          {groups.map(({ group, members, usage }) => {
+            const quota = group.shared_quota;
+            const budgetPct =
+              quota?.monthly_budget && quota.monthly_budget > 0
+                ? Math.min(100, Math.round((usage.cost / quota.monthly_budget) * 100))
+                : null;
+            const tokensPct =
+              quota?.tokens_per_month && quota.tokens_per_month > 0
+                ? Math.min(100, Math.round(((usage.promptTokens + usage.completionTokens) / quota.tokens_per_month) * 100))
+                : null;
+            return (
+              <Card key={group.id}>
+                <div className="mb-3 flex items-start justify-between gap-3">
+                  <div>
+                    <h2 className="text-lg font-semibold text-foreground">{group.name}</h2>
+                    {group.description ? (
+                      <p className="text-sm text-muted-foreground">{group.description}</p>
+                    ) : null}
+                  </div>
+                  <DeleteGroupButton id={group.id} />
                 </div>
-                <Form method="post">
-                  <input type="hidden" name="intent" value="delete" />
+
+                <div className="mb-3 grid grid-cols-1 gap-3 text-sm sm:grid-cols-2">
+                  <QuotaBox label="Shared budget" pct={budgetPct} text={quota?.monthly_budget != null ? `$${usage.cost.toFixed(2)} / $${quota.monthly_budget}` : "not set"} />
+                  <QuotaBox label="Shared tokens/mo" pct={tokensPct} text={quota?.tokens_per_month != null ? `${(usage.promptTokens + usage.completionTokens).toLocaleString()} / ${quota.tokens_per_month.toLocaleString()}` : "not set"} />
+                </div>
+
+                <Form method="post" className="flex flex-wrap items-center gap-2">
+                  <input type="hidden" name="intent" value="members" />
                   <input type="hidden" name="id" value={group.id} />
-                  <button className="rounded border border-red-200 p-1 text-red-500 hover:bg-red-50 dark:border-red-900">
-                    <Trash2 size={14} />
-                  </button>
+                  <MemberSelect name="member_ids" keys={keys} defaultValue={members} />
+                  <Button type="submit" variant="outline" size="sm">
+                    Save members
+                  </Button>
                 </Form>
-              </div>
-
-              <div className="mb-3 grid grid-cols-2 gap-3 text-sm">
-                <QuotaBox label="Shared budget" pct={budgetPct} text={quota?.monthly_budget != null ? `$${usage.cost.toFixed(2)} / $${quota.monthly_budget}` : "not set"} />
-                <QuotaBox label="Shared tokens/mo" pct={tokensPct} text={quota?.tokens_per_month != null ? `${(usage.promptTokens + usage.completionTokens).toLocaleString()} / ${quota.tokens_per_month.toLocaleString()}` : "not set"} />
-              </div>
-
-              <Form method="post" className="flex flex-wrap items-center gap-2">
-                <input type="hidden" name="intent" value="members" />
-                <input type="hidden" name="id" value={group.id} />
-                <MemberSelect name="member_ids" keys={keys} defaultValue={members} />
-                <button type="submit" className="rounded-lg bg-gray-200 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-300 dark:bg-gray-700 dark:text-gray-200 dark:hover:bg-gray-600">
-                  Save members
-                </button>
-              </Form>
-            </div>
-          );
-        })}
-        {groups.length === 0 ? (
-          <div className="rounded-xl border border-gray-200 bg-white p-8 text-center text-gray-400 shadow-sm dark:border-gray-800 dark:bg-gray-900">
-            Belum ada group.
-          </div>
-        ) : null}
-      </div>
+              </Card>
+            );
+          })}
+        </div>
+      )}
     </div>
+  );
+}
+
+function DeleteGroupButton({ id }: { id: number }) {
+  const { dialog, confirm } = useConfirm();
+  const handleDelete = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    const form = e.currentTarget;
+    const ok = await confirm({
+      title: "Delete group?",
+      description: "This removes the group and its shared quota.",
+      confirmLabel: "Delete",
+      variant: "danger",
+    });
+    if (ok) form.submit();
+  };
+  return (
+    <>
+      <Form method="post" onSubmit={handleDelete}>
+        <input type="hidden" name="intent" value="delete" />
+        <input type="hidden" name="id" value={id} />
+        <Button type="submit" variant="danger" size="icon" aria-label="Delete group">
+          <Trash2 size={14} />
+        </Button>
+      </Form>
+      {dialog}
+    </>
   );
 }
 
 function QuotaBox({ label, pct, text }: { label: string; pct: number | null; text: string }) {
   return (
-    <div className="rounded-lg border border-gray-100 p-3 dark:border-gray-800">
-      <p className="mb-1 text-xs uppercase text-gray-400 dark:text-gray-500">{label}</p>
-      <p className="text-sm font-medium text-gray-900 dark:text-white">{text}</p>
+    <div className="rounded-lg border border-border p-3">
+      <p className="mb-1 text-xs uppercase text-muted-foreground">{label}</p>
+      <p className="text-sm font-medium text-foreground">{text}</p>
       {pct !== null ? (
-        <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-gray-200 dark:bg-gray-700">
-          <div className={`h-full ${pct >= 80 ? "bg-red-500" : pct >= 50 ? "bg-yellow-500" : "bg-blue-500"}`} style={{ width: `${pct}%` }} />
+        <div className="mt-2">
+          <UsageBar value={pct} max={100} tone={pct >= 80 ? "danger" : pct >= 50 ? "warning" : "success"} />
         </div>
       ) : null}
     </div>
@@ -215,13 +242,13 @@ function MemberSelect({
     <div>
       <div className="flex flex-wrap gap-2">
         {keys.map((k) => (
-          <label key={k.id} className="flex items-center gap-1 rounded-full border border-gray-300 px-2 py-1 text-xs dark:border-gray-600">
-            <input
-              type="checkbox"
+          <label key={k.id} className="flex items-center gap-1 rounded-full border border-border bg-surface-2 px-2 py-1 text-xs">
+            <Checkbox
               checked={selected.has(k.id)}
               onChange={() => toggle(k.id)}
+              aria-label={`Toggle ${k.name}`}
             />
-            {k.name} <span className="text-gray-400">{k.masked}</span>
+            {k.name} <span className="text-muted-foreground">{k.masked}</span>
           </label>
         ))}
       </div>
