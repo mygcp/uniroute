@@ -18,7 +18,14 @@ import {
   validateComboInput,
   type ComboStep,
 } from "../.server/combo";
-import { Combobox } from "../components/combobox";
+import { Combobox } from "../components/ui/combobox";
+import { PageHeader } from "../components/ui/page-header";
+import { Card } from "../components/ui/card";
+import { Badge } from "../components/ui/badge";
+import { Button } from "../components/ui/button";
+import { Input, Label, Select } from "../components/ui/field";
+import { EmptyState } from "../components/ui/empty-state";
+import { useConfirm } from "../components/ui/confirm-dialog";
 import { query } from "../.server/db";
 
 type ProviderOption = { id: string; name: string };
@@ -27,25 +34,23 @@ type AccountOption = { id: number; provider_id: string; label: string | null };
 
 export function loader() {
   const combos = listCombos();
-  const providers = (
-    query("SELECT id, name FROM providers ORDER BY id").all() as unknown as ProviderOption[]
-  ) ?? [];
-  const modelRows = (
-    query(
+  const providers =
+    (query("SELECT id, name FROM providers ORDER BY id").all() as unknown as ProviderOption[]) ??
+    [];
+  const modelRows =
+    (query(
       "SELECT model_name, provider_id FROM models WHERE is_active = 1 ORDER BY model_name",
-    ).all() as unknown as ModelOption[]
-  ) ?? [];
-  const accounts = (
-    query(
+    ).all() as unknown as ModelOption[]) ?? [];
+  const accounts =
+    (query(
       "SELECT id, provider_id, label FROM provider_credentials WHERE is_active = 1 ORDER BY provider_id, id",
-    ).all() as unknown as AccountOption[]
-  ) ?? [];
+    ).all() as unknown as AccountOption[]) ?? [];
   return { combos, providers, modelRows, accounts };
 }
 
 type ActionMsg = { error?: string; saved?: string };
 
-/** Resolusi input akun multi-value ("key 1, key 2") → daftar credential id. */
+/** Resolve comma-separated account input ("key 1, key 2") into credential ids. */
 function resolveAccountIds(providerId: string, raw: string | null): number[] {
   const text = (raw ?? "").trim();
   if (!text) return [];
@@ -90,7 +95,9 @@ export async function action({ request }: Route.ActionArgs) {
       steps.push({
         modelIds,
         providerId,
-        accountIds: providerId ? resolveAccountIds(providerId, String(form.get(`step_account_${i}`) ?? "")) : [],
+        accountIds: providerId
+          ? resolveAccountIds(providerId, String(form.get(`step_account_${i}`) ?? ""))
+          : [],
         prompt: String(form.get(`step_prompt_${i}`) ?? "").trim() || null,
       });
     }
@@ -104,10 +111,10 @@ export async function action({ request }: Route.ActionArgs) {
     try {
       if (section === "create") {
         const combo = createCombo(input);
-        return { saved: `Combo combo:${combo.name} dibuat` } satisfies ActionMsg;
+        return { saved: `Combo "${combo.name}" created` } satisfies ActionMsg;
       }
       updateCombo(id!, input);
-      return { saved: `Combo combo:${input.name} diperbarui` } satisfies ActionMsg;
+      return { saved: `Combo "${input.name}" updated` } satisfies ActionMsg;
     } catch (err) {
       return { error: err instanceof Error ? err.message : String(err) } satisfies ActionMsg;
     }
@@ -116,8 +123,8 @@ export async function action({ request }: Route.ActionArgs) {
   return null;
 }
 
-const inputClass =
-  "w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 dark:border-gray-600 dark:bg-gray-800 dark:text-white";
+const comboInputClass =
+  "w-full rounded-lg border border-border bg-surface-2 px-3 text-sm text-foreground placeholder:text-muted-foreground transition-colors focus:border-primary focus:outline-none focus:ring-2 focus:ring-ring/40 disabled:opacity-50";
 
 function modelsForProvider(modelRows: ModelOption[], providerId: string): string[] {
   return modelRows.filter((m) => m.provider_id === providerId).map((m) => m.model_name);
@@ -165,7 +172,7 @@ function StepEditor({
     return base.map((s) => draftFromStep(s, accounts));
   });
 
-  // Semua model terpakai di seluruh step (untuk mencegah duplikat antar step).
+  // All models used across steps (prevents duplicates between steps).
   const taken = useMemo(() => {
     const set = new Set<string>();
     for (const s of steps) for (const m of s.models) set.add(m);
@@ -186,16 +193,12 @@ function StepEditor({
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
-        <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300">
+        <h3 className="text-sm font-medium text-muted-foreground">
           Models in combo ({steps.length})
         </h3>
-        <button
-          type="button"
-          onClick={addStep}
-          className="flex items-center gap-1 rounded border border-gray-300 px-2 py-1 text-xs text-gray-600 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-800"
-        >
+        <Button variant="outline" size="sm" onClick={addStep}>
           <Plus size={12} /> Step
-        </button>
+        </Button>
       </div>
 
       {steps.map((s, i) => {
@@ -204,62 +207,59 @@ function StepEditor({
           (p) => p.id === s.provider || p.name === s.provider,
         );
         const providerId = providerOpt?.id ?? "";
-        const modelOpts = modelsForProvider(modelRows, providerId);
-        // Model yang sudah dipakai step lain tidak boleh dipilih lagi.
-        const thisStepTaken = s.models;
-        const availableModels = modelOpts.filter(
-          (m) => thisStepTaken.includes(m) || (!taken.has(m)),
+        const availableModels = modelsForProvider(modelRows, providerId).filter(
+          (m) => !taken.has(m),
         );
         const accountOpts = accountsForProvider(accounts, providerId);
-
         return (
-          <div key={i} className="rounded-lg border border-gray-200 p-3 dark:border-gray-700">
-            <div className="mb-2 flex items-center justify-between">
+          <Card key={i} padded={false} className="p-3">
+            <div className="flex items-center justify-between">
               <span className="flex items-center gap-2">
-                <span className="rounded bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-700 dark:bg-blue-900/40 dark:text-blue-300">
-                  Step {i + 1}
+                <span className="flex h-5 w-5 items-center justify-center rounded-full bg-surface-2 text-xs font-semibold text-muted-foreground">
+                  {i + 1}
                 </span>
+                <span className="text-xs font-medium text-muted-foreground">Step {i + 1}</span>
                 {providerOpt ? (
-                  <span className="rounded bg-gray-100 px-2 py-0.5 text-xs text-gray-600 dark:bg-gray-800 dark:text-gray-300">
+                  <Badge tone="info" style="subtle">
                     {providerOpt.name || providerOpt.id}
-                  </span>
+                  </Badge>
                 ) : null}
               </span>
               <div className="flex items-center gap-1">
-                <span className="rounded bg-gray-100 px-2 py-0.5 text-xs text-gray-600 dark:bg-gray-800 dark:text-gray-300">
-                  {s.models.length} model
-                </span>
-                <button
-                  type="button"
+                <Badge tone="neutral" style="subtle">
+                  {s.models.length} {s.models.length === 1 ? "model" : "models"}
+                </Badge>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-6 gap-1 px-2 text-xs text-danger"
                   onClick={() => removeStep(i)}
-                  title="Hapus step ini"
-                  className="flex items-center gap-1 rounded border border-red-300 px-2 py-1 text-xs text-red-600 hover:bg-red-50 dark:border-red-700 dark:text-red-300 dark:hover:bg-red-950/40"
+                  title="Delete this step"
+                  aria-label="Delete this step"
                 >
                   <Trash2 size={12} /> Delete
-                </button>
+                </Button>
               </div>
             </div>
 
-            <div className="grid gap-3 md:grid-cols-3">
+            <div className="mt-3 grid gap-3 md:grid-cols-3">
               <div>
-                <label className="mb-1 block text-xs text-gray-500 dark:text-gray-400">
-                  Provider (search)
-                </label>
+                <Label htmlFor={`${prefix}_provider_${i}`}>Provider (search)</Label>
                 <Combobox
+                  id={`${prefix}_provider_${i}`}
                   name={`${prefix}_provider_${i}`}
                   options={providerIds}
                   value={s.provider}
                   onChange={(v) => updateStep(i, { provider: v, models: [], accountText: "" })}
-                  placeholder="ketik nama provider…"
-                  className={inputClass}
+                  placeholder="Type a provider name…"
+                  className={comboInputClass}
                 />
               </div>
 
               <div>
-                <label className="mb-1 block text-xs text-gray-500 dark:text-gray-400">
-                  Models (search, multi)
-                </label>
+                <Label htmlFor={`${prefix}_models_${i}`}>Models (search, multi-select)</Label>
                 <ModelAdder
+                  id={`${prefix}_models_${i}`}
                   options={availableModels}
                   selected={s.models}
                   disabled={!providerId}
@@ -267,59 +267,48 @@ function StepEditor({
                   onRemove={(m) => updateStep(i, { models: s.models.filter((x) => x !== m) })}
                 />
                 {!providerId ? (
-                  <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
-                    Pilih provider dulu.
-                  </p>
+                  <p className="mt-1 text-xs text-warning">Select a provider first.</p>
                 ) : null}
               </div>
 
               <div>
-                <label className="mb-1 block text-xs text-gray-500 dark:text-gray-400">
-                  <UserRound size={11} className="mr-1 inline" />
-                  Account (multi)
-                </label>
+                <Label htmlFor={`${prefix}_account_${i}`}>
+                  <UserRound size={11} className="mr-1 inline" /> Account (multi)
+                </Label>
                 <KeyAdder
+                  id={`${prefix}_account_${i}`}
                   name={`${prefix}_account_${i}`}
                   options={accountOpts.map((a) => a.label || `#${a.id}`)}
                   value={s.accountText}
                   onChange={(v) => updateStep(i, { accountText: v })}
                   disabled={!providerId}
-                  placeholder={providerId ? "ketik akun lalu Enter…" : "pilih provider dulu"}
+                  placeholder="Type an account, then press Enter…"
                 />
                 {accountOpts.length === 0 && providerId ? (
-                  <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
-                    Provider ini belum punya akun.
-                  </p>
+                  <p className="mt-1 text-xs text-warning">This provider has no accounts yet.</p>
                 ) : null}
               </div>
             </div>
 
             <div className="mt-3">
-              <label className="mb-1 block text-xs text-gray-500 dark:text-gray-400">
-                Instruksi step (opsional)
-              </label>
-              <input
+              <Label htmlFor={`${prefix}_prompt_${i}`}>Step instructions (optional)</Label>
+              <Input
+                id={`${prefix}_prompt_${i}`}
                 name={`${prefix}_prompt_${i}`}
                 value={s.prompt}
                 onChange={(e) => updateStep(i, { prompt: e.target.value })}
-                placeholder="Periksa & perbaiki hasil sebelumnya"
-                className={inputClass}
+                placeholder="Review and fix previous output"
               />
             </div>
-          </div>
+          </Card>
         );
       })}
 
       <input type="hidden" name="step_count" value={steps.length} />
-      {/* Model ids dikirim sebagai checkbox hidden agar form.getAll() bekerja. */}
+      {/* Model ids are submitted as hidden inputs so form.getAll() works. */}
       {steps.map((s, i) =>
         s.models.map((m) => (
-          <input
-            key={`${i}-${m}`}
-            type="hidden"
-            name={`step_model_ids_${i}`}
-            value={m}
-          />
+          <input key={`${i}-${m}`} type="hidden" name={`step_model_ids_${i}`} value={m} />
         )),
       )}
     </div>
@@ -327,12 +316,14 @@ function StepEditor({
 }
 
 function ModelAdder({
+  id,
   options,
   selected,
   disabled,
   onAdd,
   onRemove,
 }: {
+  id?: string;
   options: string[];
   selected: string[];
   disabled?: boolean;
@@ -340,87 +331,54 @@ function ModelAdder({
   onRemove: (m: string) => void;
 }) {
   const [query, setQuery] = useState("");
-  const [open, setOpen] = useState(false);
-  const matches = options
-    .filter((m) => m.toLowerCase().includes(query.trim().toLowerCase()))
-    .slice(0, 30);
 
-  const commit = (raw: string) => {
-    const val = raw.trim();
-    if (!val || selected.includes(val)) return;
-    if (options.includes(val) || options.some((o) => o.toLowerCase() === val.toLowerCase())) {
-      const exact = options.find((o) => o.toLowerCase() === val.toLowerCase()) ?? val;
+  const handleChange = (v: string) => {
+    const exact = options.find((o) => o.toLowerCase() === v.trim().toLowerCase());
+    if (exact && !selected.includes(exact)) {
       onAdd(exact);
+      setQuery("");
+    } else {
+      setQuery(v);
     }
-    setQuery("");
   };
 
   return (
-    <div>
-      <div className="relative">
-        <input
+    <>
+      {disabled ? (
+        <Input id={id} value="" disabled placeholder="Select a provider first" />
+      ) : (
+        <Combobox
+          id={id}
+          options={options}
           value={query}
-          disabled={disabled}
-          onFocus={() => setOpen(true)}
-          onChange={(e) => {
-            setQuery(e.target.value);
-            setOpen(true);
-          }}
-          onBlur={() => setTimeout(() => setOpen(false), 150)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" || e.key === ",") {
-              e.preventDefault();
-              commit(query);
-            } else if (e.key === "Backspace" && !query && selected.length > 0) {
-              onRemove(selected[selected.length - 1]);
-            } else if (e.key === "Escape") {
-              setOpen(false);
-            }
-          }}
-          placeholder={disabled ? "pilih provider dulu" : "ketik model lalu Enter…"}
-          className={inputClass}
+          onChange={handleChange}
+          placeholder="Type a model, then press Enter…"
+          className={comboInputClass}
         />
-        {open && !disabled && matches.length > 0 ? (
-          <ul className="absolute z-20 mt-1 max-h-48 w-full overflow-auto rounded-lg border border-gray-300 bg-white py-1 text-sm shadow-lg dark:border-gray-600 dark:bg-gray-800">
-            {matches.map((m) => (
-              <li key={m}>
-                <button
-                  type="button"
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => commit(m)}
-                  className="block w-full px-3 py-1.5 text-left font-mono text-xs text-gray-900 hover:bg-blue-50 dark:text-white dark:hover:bg-blue-950/50"
-                >
-                  {m}
-                </button>
-              </li>
-            ))}
-          </ul>
-        ) : null}
-      </div>
+      )}
       {selected.length > 0 ? (
         <div className="mt-1 flex flex-wrap gap-1">
           {selected.map((m) => (
-            <span
-              key={m}
-              className="flex items-center gap-1 rounded bg-blue-100 px-2 py-0.5 font-mono text-xs text-blue-700 dark:bg-blue-900/40 dark:text-blue-300"
-            >
+            <Badge key={m} tone="info" style="subtle" className="gap-1 font-mono">
               {m}
               <button
                 type="button"
                 onClick={() => onRemove(m)}
-                className="text-blue-500 hover:text-blue-700 dark:text-blue-300 dark:hover:text-blue-100"
+                className="text-info/70 hover:text-info"
+                aria-label={`Remove ${m}`}
               >
                 <X size={11} />
               </button>
-            </span>
+            </Badge>
           ))}
         </div>
       ) : null}
-    </div>
+    </>
   );
 }
 
 function KeyAdder({
+  id,
   options,
   value,
   onChange,
@@ -428,6 +386,7 @@ function KeyAdder({
   disabled,
   placeholder,
 }: {
+  id?: string;
   options: string[];
   value: string;
   onChange: (v: string) => void;
@@ -436,100 +395,62 @@ function KeyAdder({
   placeholder?: string;
 }) {
   const [query, setQuery] = useState("");
-  const [open, setOpen] = useState(false);
 
   const parts = value
     .split(",")
     .map((t) => t.trim())
     .filter((t) => t.length > 0 && t.toLowerCase() !== "dynamic");
-  const matches = options
-    .filter((o) => o.toLowerCase().includes(query.trim().toLowerCase()))
-    .slice(0, 30);
 
-  const commit = (raw: string) => {
-    const val = raw.trim();
-    if (!val) return;
-    const exact = options.find((o) => o.toLowerCase() === val.toLowerCase()) ?? val;
-    if (!parts.includes(exact)) {
+  const handleChange = (v: string) => {
+    const exact = options.find((o) => o.toLowerCase() === v.trim().toLowerCase());
+    if (exact && !parts.includes(exact)) {
       onChange([...parts, exact].join(", "));
+      setQuery("");
+    } else {
+      setQuery(v);
     }
-    setQuery("");
   };
+
   const remove = (label: string) => {
     const next = parts.filter((p) => p !== label);
     onChange(next.length === 0 ? "dynamic" : next.join(", "));
   };
 
   return (
-    <div>
+    <>
       <input type="hidden" name={name} value={value || "dynamic"} />
-      <div className="relative">
-        <input
+      {disabled ? (
+        <Input id={id} value="" disabled placeholder="Select a provider first" />
+      ) : (
+        <Combobox
+          id={id}
+          options={options}
           value={query}
-          disabled={disabled}
-          onFocus={() => setOpen(true)}
-          onChange={(e) => {
-            setQuery(e.target.value);
-            setOpen(true);
-          }}
-          onBlur={() => setTimeout(() => setOpen(false), 150)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" || e.key === ",") {
-              e.preventDefault();
-              commit(query);
-            } else if (e.key === "Backspace" && !query && parts.length > 0) {
-              remove(parts[parts.length - 1]);
-            } else if (e.key === "Escape") {
-              setOpen(false);
-            }
-          }}
-          placeholder={
-            placeholder ?? (disabled ? "pilih provider dulu" : "ketik akun lalu Enter…")
-          }
-          className={inputClass}
+          onChange={handleChange}
+          placeholder={placeholder}
+          className={comboInputClass}
         />
-        {open && !disabled && matches.length > 0 ? (
-          <ul className="absolute z-20 mt-1 max-h-48 w-full overflow-auto rounded-lg border border-gray-300 bg-white py-1 text-sm shadow-lg dark:border-gray-600 dark:bg-gray-800">
-            {matches.map((o) => (
-              <li key={o}>
-                <button
-                  type="button"
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => {
-                    commit(o);
-                    setOpen(false);
-                  }}
-                  className="block w-full px-3 py-1.5 text-left text-xs text-gray-900 hover:bg-blue-50 dark:text-white dark:hover:bg-blue-950/50"
-                >
-                  {o}
-                </button>
-              </li>
-            ))}
-          </ul>
-        ) : null}
-      </div>
+      )}
       {parts.length > 0 ? (
         <div className="mt-1 flex flex-wrap gap-1">
           {parts.map((p) => (
-            <span
-              key={p}
-              className="flex items-center gap-1 rounded bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-700 dark:bg-blue-900/40 dark:text-blue-300"
-            >
+            <Badge key={p} tone="info" style="subtle" className="gap-1">
               {p}
               <button
                 type="button"
                 onClick={() => remove(p)}
-                className="text-blue-500 hover:text-blue-700 dark:text-blue-300 dark:hover:text-blue-100"
+                className="text-info/70 hover:text-info"
+                aria-label={`Remove ${p}`}
               >
                 <X size={11} />
               </button>
-            </span>
+            </Badge>
           ))}
         </div>
       ) : (
-        <p className="mt-1 text-xs text-gray-400">dynamic = semua akun otomatis.</p>
+        <p className="mt-1 text-xs text-muted-foreground">dynamic = use all accounts.</p>
       )}
-    </div>
+    </>
   );
 }
 
@@ -538,11 +459,12 @@ export default function Combo({ loaderData }: Route.ComponentProps) {
   const msg = useActionData<ActionMsg>();
   const [editingId, setEditingId] = useState<number | null>(null);
   const [showAdd, setShowAdd] = useState(false);
+  const { dialog, confirm } = useConfirm();
 
   const renderEditForm = (c: (typeof combos)[number]) => {
     return (
-      <div className="mt-4 rounded-lg border border-blue-200 bg-blue-50/50 p-4 dark:border-blue-900 dark:bg-blue-950/20">
-        <h3 className="mb-3 text-sm font-semibold text-gray-800 dark:text-gray-200">
+      <div className="mt-4 rounded-lg border border-primary/30 bg-primary/5 p-4">
+        <h3 className="mb-3 text-sm font-semibold text-foreground">
           Edit <code className="font-mono">combo:{c.name}</code>
         </h3>
         <Form method="post" className="space-y-4">
@@ -550,19 +472,22 @@ export default function Combo({ loaderData }: Route.ComponentProps) {
           <input type="hidden" name="id" value={c.id} />
           <div className="grid gap-4 md:grid-cols-2">
             <div>
-              <label className="mb-1 block text-xs text-gray-500 dark:text-gray-400">Combo Name</label>
-              <input name="name" required defaultValue={c.name} className={inputClass} />
+              <Label htmlFor="edit-name">Combo Name</Label>
+              <Input id="edit-name" name="name" required defaultValue={c.name} />
             </div>
             <div>
-              <label className="mb-1 block text-xs text-gray-500 dark:text-gray-400">
-                Rotation Method
-              </label>
-              <select name="strategy" defaultValue={c.strategy} className={inputClass}>
+              <Label htmlFor={`edit-strategy-${c.id}`}>Rotation Method</Label>
+              <Select
+                id={`edit-strategy-${c.id}`}
+                name="strategy"
+                defaultValue={c.strategy}
+              >
                 <option value="priority">Priority (fallback chain)</option>
                 <option value="pipeline">Pipeline (sequential chaining)</option>
-              </select>
+              </Select>
             </div>
           </div>
+
           <StepEditor
             prefix="step"
             initialSteps={c.steps}
@@ -570,20 +495,14 @@ export default function Combo({ loaderData }: Route.ComponentProps) {
             modelRows={modelRows}
             accounts={accounts}
           />
+
           <div className="flex gap-2">
-            <button
-              type="submit"
-              className="flex items-center gap-1 rounded-lg bg-blue-600 px-4 py-2 text-sm text-white"
-            >
-              Simpan Perubahan
-            </button>
-            <button
-              type="button"
-              onClick={() => setEditingId(null)}
-              className="rounded-lg border border-gray-300 px-4 py-2 text-sm text-gray-600 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-800"
-            >
-              Batal
-            </button>
+            <Button type="submit" className="items-center gap-1">
+              Save Changes
+            </Button>
+            <Button type="button" variant="outline" onClick={() => setEditingId(null)}>
+              Cancel
+            </Button>
           </div>
         </Form>
       </div>
@@ -592,67 +511,62 @@ export default function Combo({ loaderData }: Route.ComponentProps) {
 
   return (
     <div>
-      <h1 className="mb-6 flex items-center gap-2 text-2xl font-bold text-gray-900 dark:text-white">
-        <GitBranch size={24} /> Combo
-      </h1>
+      <PageHeader
+        title="Combo"
+        icon={<GitBranch size={24} />}
+        subtitle="Combine multiple models into a single synthetic model."
+      />
 
       {msg?.saved ? (
-        <div className="mb-4 rounded-lg border border-green-300 bg-green-50 p-4 text-sm text-green-800 dark:border-green-700 dark:bg-green-950/40 dark:text-green-200">
+        <p className="mb-4 rounded-lg border border-success/30 bg-success/10 p-4 text-sm text-success">
           {msg.saved}
-        </div>
+        </p>
       ) : null}
       {msg?.error ? (
-        <div className="mb-4 rounded-lg border border-red-300 bg-red-50 p-4 text-sm text-red-800 dark:border-red-700 dark:bg-red-950/40 dark:text-red-200">
+        <p className="mb-4 rounded-lg border border-danger/30 bg-danger/10 p-4 text-sm text-danger">
           {msg.error}
-        </div>
+        </p>
       ) : null}
 
-      <p className="mb-6 max-w-2xl text-sm text-gray-600 dark:text-gray-400">
-        Combo menggabungkan beberapa model menjadi satu model sintetis via{" "}
-        <code className="font-mono">combo:&lt;nama&gt;</code>. Setiap step: pilih provider →
-        pilih 1+ model milik provider itu → atur akun (dynamic = semua akun, atau isi
-        "key 1, key 2" untuk akun tertentu). Model tidak bisa dipakai di dua step
-        berbeda. <strong>Priority</strong> = fallback otomatis; <strong>Pipeline</strong> =
-        output step diteruskan ke step berikutnya.
+      <p className="mb-6 max-w-2xl text-sm text-muted-foreground">
+        Combos combine several models into one synthetic model reached via{" "}
+        <code className="font-mono">combo:&lt;name&gt;</code>. Each step: pick a provider →
+        pick 1+ of that provider's models → set accounts ("dynamic" = all accounts, or enter
+        "key 1, key 2" for specific accounts). A model cannot be reused across steps.{" "}
+        <strong>Priority</strong> = automatic fallback; <strong>Pipeline</strong> = each step's
+        output is forwarded to the next step.
       </p>
 
-      {/* Daftar semua combo — tampil pertama */}
       <div className="mb-6 flex items-center justify-between">
-        <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
+        <h2 className="text-lg font-semibold text-foreground">
           All Combos ({combos.length})
         </h2>
-        <button
-          type="button"
-          onClick={() => setShowAdd((s) => !s)}
-          className="flex items-center gap-1 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
-        >
+        <Button onClick={() => setShowAdd((s) => !s)} className="items-center gap-1">
           <Plus size={16} /> {showAdd ? "Close Form" : "Add Combo"}
-        </button>
+        </Button>
       </div>
 
       {showAdd ? (
-        <div className="mb-8 rounded-xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-gray-900">
-          <h2 className="mb-3 text-lg font-semibold text-gray-900 dark:text-white">Add Combo</h2>
+        <Card className="mb-8">
+          <h2 className="mb-3 text-lg font-semibold text-foreground">Add Combo</h2>
           <Form method="post" className="space-y-4">
             <input type="hidden" name="section" value="create" />
             <div className="grid gap-4 md:grid-cols-2">
               <div>
-                <label className="mb-1 block text-xs text-gray-500 dark:text-gray-400">Combo Name</label>
-                <input name="name" required placeholder="coding-fallback" className={inputClass} />
-                <p className="mt-1 text-xs text-gray-400">
-                  Dipanggil via model <code className="font-mono">combo:coding-fallback</code>
+                <Label htmlFor="add-name">Combo Name</Label>
+                <Input id="add-name" name="name" required placeholder="coding-fallback" />
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Called via model <code className="font-mono">combo:coding-fallback</code>
                 </p>
               </div>
               <div>
-                <label className="mb-1 block text-xs text-gray-500 dark:text-gray-400">
-                  Rotation Method
-                </label>
-                <select name="strategy" defaultValue="priority" className={inputClass}>
+                <Label htmlFor="add-strategy">Rotation Method</Label>
+                <Select id="add-strategy" name="strategy" defaultValue="priority">
                   <option value="priority">Priority (fallback chain)</option>
                   <option value="pipeline">Pipeline (sequential chaining)</option>
-                </select>
-                <p className="mt-1 text-xs text-gray-400">
-                  Pilih metode rotasi antar step/model di dalam combo.
+                </Select>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Choose the rotation method between the steps/models in the combo.
                 </p>
               </div>
             </div>
@@ -665,71 +579,67 @@ export default function Combo({ loaderData }: Route.ComponentProps) {
             />
 
             <div className="flex items-center justify-end gap-2">
-              <button
-                type="submit"
-                className="flex items-center gap-1 rounded-lg bg-blue-600 px-4 py-2 text-sm text-white"
-              >
-                <Plus size={15} /> Simpan Combo
-              </button>
+              <Button type="submit" className="items-center gap-1">
+                <Plus size={15} /> Save Combo
+              </Button>
             </div>
           </Form>
-        </div>
+        </Card>
       ) : null}
 
       {combos.length === 0 ? (
-        <div className="rounded-xl border border-dashed border-gray-300 bg-white p-10 text-center shadow-sm dark:border-gray-700 dark:bg-gray-900">
-          <Link2 size={32} className="mx-auto mb-3 text-gray-300 dark:text-gray-600" />
-          <p className="text-gray-500 dark:text-gray-400">
-            Belum ada combo. Buat satu via "Add Combo".
-          </p>
-        </div>
+        <Card padded={false}>
+          <EmptyState
+            icon={<Link2 size={32} />}
+            title="No combos yet"
+            description='Create one with "Add Combo".'
+          />
+        </Card>
       ) : (
         <div className="space-y-4">
           {combos.map((c) => (
-            <div
-              key={c.id}
-              className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-gray-900"
-            >
+            <Card key={c.id}>
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div className="flex flex-wrap items-center gap-3">
-                  <span className="text-base font-semibold text-gray-900 dark:text-white">
+                  <span className="text-base font-semibold text-foreground">
                     <code className="font-mono">combo:{c.name}</code>
                   </span>
-                  <span
-                    className={`rounded px-2 py-0.5 text-xs font-medium ${
-                      c.strategy === "pipeline"
-                        ? "bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300"
-                        : "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300"
-                    }`}
-                  >
+                  <Badge tone={c.strategy === "pipeline" ? "primary" : "info"} style="subtle">
                     {c.strategy === "pipeline" ? "pipeline" : "priority"}
-                  </span>
-                  <span className="rounded bg-gray-100 px-2 py-0.5 text-xs text-gray-600 dark:bg-gray-800 dark:text-gray-300">
-                    {c.steps.reduce((n, s) => n + s.modelIds.length, 0)} model
-                  </span>
+                  </Badge>
+                  <Badge tone="neutral" style="subtle">
+                    {c.steps.reduce((n, s) => n + s.modelIds.length, 0)}{" "}
+                    {c.steps.reduce((n, s) => n + s.modelIds.length, 0) === 1 ? "model" : "models"}
+                  </Badge>
                 </div>
                 <div className="flex gap-2">
-                  <button
-                    type="button"
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="gap-1"
                     onClick={() => setEditingId(editingId === c.id ? null : c.id)}
-                    className="flex items-center gap-1 rounded border border-gray-300 px-2 py-1 text-xs text-gray-600 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-800"
                   >
                     <Pencil size={12} /> Edit
-                  </button>
+                  </Button>
                   <Form
                     method="post"
-                    onSubmit={(e) => {
-                      if (!confirm(`Hapus combo ${c.name}?`)) e.preventDefault();
+                    onSubmit={async (e) => {
+                      if (
+                        !(await confirm({
+                          title: "Delete combo?",
+                          description: `combo:${c.name} will be permanently removed.`,
+                          confirmLabel: "Delete",
+                          variant: "danger",
+                        }))
+                      )
+                        e.preventDefault();
                     }}
                   >
                     <input type="hidden" name="section" value="delete" />
                     <input type="hidden" name="id" value={c.id} />
-                    <button
-                      type="submit"
-                      className="flex items-center gap-1 rounded border border-red-300 px-2 py-1 text-xs text-red-600 hover:bg-red-50 dark:border-red-700 dark:text-red-300 dark:hover:bg-red-950/40"
-                    >
+                    <Button type="submit" size="sm" variant="danger" className="gap-1">
                       <Trash2 size={12} /> Delete
-                    </button>
+                    </Button>
                   </Form>
                 </div>
               </div>
@@ -740,14 +650,14 @@ export default function Combo({ loaderData }: Route.ComponentProps) {
                   return (
                     <div
                       key={s.id}
-                      className="flex flex-wrap items-center gap-2 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-700 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300"
+                      className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-surface-2/50 px-3 py-2 text-xs text-muted-foreground"
                     >
-                      <span className="font-semibold">{i + 1}.</span>
-                      <span className="rounded bg-blue-100 px-1.5 py-0.5 font-medium text-blue-700 dark:bg-blue-900/40 dark:text-blue-300">
+                      <span className="font-semibold text-foreground">{i + 1}.</span>
+                      <Badge tone="info" style="subtle">
                         {s.providerId || "any"}
-                      </span>
+                      </Badge>
                       <code className="font-mono">{s.modelIds.join(", ")}</code>
-                      <span className="flex items-center gap-1 text-gray-500 dark:text-gray-400">
+                      <span className="flex items-center gap-1">
                         <UserRound size={11} />
                         {s.accountIds.length === 0
                           ? "dynamic"
@@ -756,14 +666,12 @@ export default function Combo({ loaderData }: Route.ComponentProps) {
                               .join(", ")}
                       </span>
                       {s.prompt ? (
-                        <span className="max-w-xs truncate italic text-gray-400" title={s.prompt}>
-                          "{s.prompt}"
+                        <span className="max-w-xs truncate italic" title={s.prompt}>
+                          &ldquo;{s.prompt}&rdquo;
                         </span>
                       ) : null}
                       {i < c.steps.length - 1 ? (
-                        <span className="text-gray-300 dark:text-gray-600">
-                          {c.strategy === "pipeline" ? "→" : "|"}
-                        </span>
+                        <span>{c.strategy === "pipeline" ? "→" : "|"}</span>
                       ) : null}
                     </div>
                   );
@@ -771,10 +679,12 @@ export default function Combo({ loaderData }: Route.ComponentProps) {
               </div>
 
               {editingId === c.id ? renderEditForm(c) : null}
-            </div>
+            </Card>
           ))}
         </div>
       )}
+
+      {dialog}
     </div>
   );
 }
