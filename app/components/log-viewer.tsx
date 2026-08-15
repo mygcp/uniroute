@@ -1,58 +1,73 @@
-import type { ReactNode } from "react";
+import { type ReactNode } from "react";
 import type { LogEvent } from "../hooks/use-realtime-logs";
+import { Badge } from "./ui/badge";
 
 type Props = {
   logs: LogEvent[];
   paused: boolean;
-  setPaused: (v: boolean) => void;
+  onTogglePause: () => void;
+  connected: boolean;
+  type: "request" | "proxy";
   scrollRef: React.RefObject<HTMLDivElement | null>;
+  emptyMessage: string;
   renderRow: (event: LogEvent) => ReactNode;
 };
 
 export function LogViewer({
   logs,
   paused,
-  setPaused,
+  onTogglePause,
+  connected,
   scrollRef,
+  emptyMessage,
   renderRow,
 }: Props) {
   return (
-    <div className="flex h-[calc(100vh-280px)] flex-col rounded-xl border border-gray-200 bg-white shadow-sm dark:border-gray-800 dark:bg-gray-900 sm:h-[calc(100vh-220px)]">
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-gray-200 px-3 py-2 dark:border-gray-800 sm:px-4 sm:py-3">
-        <div className="flex items-center gap-2 sm:gap-3">
-          <span className="text-sm font-medium text-gray-700 dark:text-gray-200">
-            {logs.length} event
-          </span>
-          <span
-            className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium ${
-              paused ? "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300" : "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300"
-            }`}
-          >
-            <span
-              className={`h-1.5 w-1.5 rounded-full ${
-                paused ? "bg-amber-500" : "bg-green-500 animate-pulse"
-              }`}
-            />
-            {paused ? "paused" : "live"}
-          </span>
+    <>
+      {!connected ? (
+        <div className="mb-3 rounded-lg border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-warning">
+          Connection to live logs lost — reconnecting…
         </div>
-        <button
-          type="button"
-          onClick={() => setPaused(!paused)}
-          className="rounded-lg border border-gray-300 px-3 py-1 text-sm font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-800"
-        >
-          {paused ? "Resume" : "Pause"}
-        </button>
+      ) : null}
+
+      <div className="flex h-[calc(100vh-330px)] flex-col rounded-xl border border-border bg-surface shadow-sm sm:h-[calc(100vh-290px)]">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-3 py-2 sm:px-4 sm:py-3">
+          <div className="flex items-center gap-2 sm:gap-3">
+            <span className="text-sm font-medium text-muted-foreground">
+              {logs.length} event
+            </span>
+            <Badge
+              tone={paused ? "warning" : "success"}
+              className="inline-flex items-center gap-1.5"
+            >
+              <span
+                className={`h-1.5 w-1.5 rounded-full ${paused ? "bg-warning" : "bg-success animate-pulse"}`}
+              />
+              {paused ? "paused" : "live"}
+            </Badge>
+          </div>
+          <button
+            type="button"
+            onClick={onTogglePause}
+            aria-label={paused ? "Resume" : "Pause"}
+            className="rounded-lg border border-border px-3 py-1 text-sm font-medium text-foreground hover:bg-muted"
+          >
+            {paused ? "Resume" : "Pause"}
+          </button>
+        </div>
+
+        <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-2">
+          {logs.length === 0 ? (
+            <p className="py-10 text-center text-sm text-muted-foreground">
+              {emptyMessage}
+            </p>
+          ) : (
+            logs.map((log, i) => (
+              <div key={`${log.created_at}-${i}`}>{renderRow(log)}</div>
+            ))
+          )}
+        </div>
       </div>
-      <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-2">
-        {logs.length === 0 ? (
-          <p className="py-10 text-center text-sm text-gray-400 dark:text-gray-500">
-            Belum ada event. Coba trigger request proxy...
-          </p>
-        ) : (
-          logs.map((log, i) => <div key={`${log.created_at}-${i}`}>{renderRow(log)}</div>)
-        )}
-      </div>
-    </div>
+    </>
   );
 }

@@ -8,6 +8,9 @@ import {
   type LogEvent,
 } from "../hooks/use-realtime-logs";
 import { useToast } from "../components/ui/toast";
+import { useConfirm } from "../components/ui/confirm-dialog";
+import { Badge } from "../components/ui/badge";
+import { LogViewer } from "../components/log-viewer";
 
 const COLS = `id, level, source, message, metadata, created_at`;
 
@@ -36,11 +39,11 @@ function fmtTs(ts: number): string {
   return new Date(ms).toLocaleString();
 }
 
-const LEVEL_COLORS: Record<string, string> = {
-  info: "bg-blue-100 text-blue-700 dark:bg-blue-500/15 dark:text-blue-300",
-  warn: "bg-amber-100 text-amber-700 dark:bg-amber-500/15 dark:text-amber-300",
-  error: "bg-red-100 text-red-700 dark:bg-red-500/15 dark:text-red-300",
-  debug: "bg-gray-200 text-gray-600 dark:bg-gray-800 dark:text-gray-300",
+const LEVEL_TONE: Record<string, "success" | "warning" | "danger" | "info" | "neutral"> = {
+  info: "info",
+  warn: "warning",
+  error: "danger",
+  debug: "neutral",
 };
 
 const OPTIONS = {
@@ -49,19 +52,19 @@ const OPTIONS = {
     [...new Set(logs.map((l) => String(l.source ?? "")).filter(Boolean))].sort(),
 };
 
-function Detail({ event }: { event: LogEvent }) {
-  const printable = (entry: unknown): string => {
-    if (entry === null || entry === undefined) return "—";
-    if (typeof entry === "string" || typeof entry === "number" || typeof entry === "boolean") {
-      return String(entry);
-    }
-    try {
-      return JSON.stringify(entry, null, 2);
-    } catch {
-      return String(entry);
-    }
-  };
+function printable(entry: unknown): string {
+  if (entry === null || entry === undefined) return "—";
+  if (typeof entry === "string" || typeof entry === "number" || typeof entry === "boolean") {
+    return String(entry);
+  }
+  try {
+    return JSON.stringify(entry, null, 2);
+  } catch {
+    return String(entry);
+  }
+}
 
+function Detail({ event }: { event: LogEvent }) {
   let metadata: Record<string, unknown> | null = null;
   if (typeof event.metadata === "string") {
     try {
@@ -82,16 +85,16 @@ function Detail({ event }: { event: LogEvent }) {
   ];
 
   return (
-    <div className="mt-2 rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 dark:border-gray-800 dark:bg-gray-950">
-      <h3 className="mb-2 text-sm font-semibold text-gray-900 dark:text-white">Proxy log detail</h3>
+    <div className="mt-2 rounded-lg border border-border bg-muted px-4 py-3">
+      <h3 className="mb-2 text-sm font-semibold text-foreground">Proxy log detail</h3>
       <dl className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
         {fields.map(([k, v]) => (
           <div key={k} className="flex gap-2">
-            <dt className="shrink-0 text-xs font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500">
+            <dt className="shrink-0 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
               {k}
             </dt>
             <dd
-              className="min-w-0 truncate text-xs text-gray-700 dark:text-gray-300"
+              className="min-w-0 truncate text-xs text-muted-foreground"
               title={printable(v)}
             >
               {printable(v)}
@@ -101,10 +104,10 @@ function Detail({ event }: { event: LogEvent }) {
       </dl>
       {metadata ? (
         <details className="mt-3">
-          <summary className="cursor-pointer text-xs font-semibold text-gray-500 dark:text-gray-400">
+          <summary className="cursor-pointer text-xs font-semibold text-muted-foreground">
             Metadata
           </summary>
-          <pre className="mt-2 max-h-72 overflow-auto rounded-lg bg-gray-100 p-3 text-xs text-gray-800 dark:bg-gray-900 dark:text-gray-200">
+          <pre className="mt-2 max-h-72 overflow-auto rounded-lg bg-muted px-3 py-2 text-xs text-foreground">
             {JSON.stringify(metadata, null, 2)}
           </pre>
         </details>
@@ -127,25 +130,21 @@ function Row({
   return (
     <div
       onClick={onSelect}
-      className={`cursor-pointer border-b border-gray-100 px-3 py-2 text-sm transition-colors hover:bg-gray-50 dark:border-gray-800 dark:hover:bg-gray-800/60 ${
-        selected ? "bg-blue-50 dark:bg-blue-950/40" : ""
+      className={`cursor-pointer border-b border-border px-3 py-2 text-sm transition-colors hover:bg-muted ${
+        selected ? "bg-primary/10" : ""
       }`}
     >
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-        <span className="w-full text-xs text-gray-400 sm:w-24 sm:shrink-0">
+        <span className="w-full text-xs text-muted-foreground sm:w-24 sm:shrink-0">
           {fmtTs(event.created_at)}
         </span>
-        <span
-          className={`rounded-full px-2 py-0.5 text-xs font-medium uppercase ${
-            LEVEL_COLORS[String(event.level)] ?? "bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-300"
-          }`}
-        >
+        <Badge tone={LEVEL_TONE[String(event.level)] ?? "neutral"}>
           {String(event.level)}
-        </span>
-        <span className="rounded bg-gray-100 px-2 py-0.5 text-xs text-gray-600 dark:bg-gray-800 dark:text-gray-300">
+        </Badge>
+        <span className="rounded bg-muted px-2 py-0.5 text-xs text-muted-foreground">
           {String(event.source)}
         </span>
-        <span className="min-w-0 flex-1 truncate text-gray-800 dark:text-gray-200">
+        <span className="min-w-0 flex-1 truncate text-foreground">
           {String(event.message)}
         </span>
         <button
@@ -155,18 +154,19 @@ function Row({
             e.stopPropagation();
             onSelect();
           }}
-          className="rounded border border-gray-300 px-1.5 text-xs text-gray-500 hover:bg-gray-100 dark:border-gray-600 dark:text-gray-400 dark:hover:bg-gray-700"
+          className="rounded border border-border px-1.5 text-xs text-muted-foreground hover:bg-muted"
         >
           {selected ? "▾" : "▸"}
         </button>
         <button
           type="button"
           title="Delete"
+          aria-label="Delete"
           onClick={(e) => {
             e.stopPropagation();
             onDelete();
           }}
-          className="rounded border border-gray-300 px-1.5 text-xs text-red-500 hover:bg-red-50 dark:border-gray-600 dark:hover:bg-red-950"
+          className="rounded border border-border px-1.5 text-xs text-danger hover:bg-danger/10"
         >
           ✕
         </button>
@@ -184,6 +184,7 @@ export default function LogsProxy({ loaderData }: Route.ComponentProps) {
   const clearFetcher = useFetcher();
   const deleteFetcher = useFetcher();
   const { toast } = useToast();
+  const { confirm, dialog } = useConfirm();
   const { logs, connected, paused, setPaused, scrollRef, remove, reset } =
     useRealtimeLogs((l) => l.type === "proxy", loaderData.initial);
 
@@ -198,16 +199,28 @@ export default function LogsProxy({ loaderData }: Route.ComponentProps) {
     });
   }, [logs, level, source]);
 
-  function handleDelete(id: number, type: "proxy") {
+  async function handleClear() {
+    const ok = await confirm({
+      title: "Clear all proxy logs?",
+      description: "This removes every proxy log from the active view. This action cannot be undone.",
+      variant: "danger",
+    });
+    if (!ok) return;
+    clearFetcher.submit({ scope: "proxy" }, { method: "POST", action: "/api/logs/clear" });
+  }
+
+  async function handleDelete(id: number, type: "proxy") {
+    const ok = await confirm({
+      title: "Delete this log?",
+      description: "This proxy log will be removed from the active view.",
+      variant: "danger",
+    });
+    if (!ok) return;
     setPendingDelete({ id, type });
     deleteFetcher.submit(
       { id: String(id), type },
       { method: "POST", action: "/api/logs/delete" },
     );
-  }
-
-  function handleClear() {
-    clearFetcher.submit({ scope: "proxy" }, { method: "POST", action: "/api/logs/clear" });
   }
 
   useEffect(() => {
@@ -220,18 +233,24 @@ export default function LogsProxy({ loaderData }: Route.ComponentProps) {
     }
   }, [deleteFetcher.state, deleteFetcher.data, pendingDelete]);
 
+  useEffect(() => {
+    if (clearFetcher.state === "idle" && clearFetcher.data) {
+      reset([]);
+    }
+  }, [clearFetcher.state, clearFetcher.data]);
+
   const activeFilters = Boolean(level || source);
 
   return (
     <div>
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <h1 className="text-xl font-bold text-gray-900 dark:text-white">Proxy Logs</h1>
+        <h1 className="text-xl font-bold text-foreground">Proxy Logs</h1>
         <div className="flex items-center gap-2">
-          <span className="text-sm text-gray-500 dark:text-gray-400">{filtered.length} shown</span>
+          <span className="text-sm text-muted-foreground">{filtered.length} shown</span>
           <button
             type="button"
             onClick={handleClear}
-            className="rounded-lg border border-red-300 px-2.5 py-1 text-xs font-medium text-red-600 hover:bg-red-50 dark:border-red-900 dark:text-red-400 dark:hover:bg-red-950"
+            className="rounded-lg border border-danger/30 px-2.5 py-1 text-xs font-medium text-danger hover:bg-danger/10"
           >
             Clear
           </button>
@@ -244,14 +263,14 @@ export default function LogsProxy({ loaderData }: Route.ComponentProps) {
           value={level}
           onChange={setLevel}
           placeholder="Level"
-          className="w-32 rounded-lg border border-gray-300 px-3 py-1.5 text-sm text-gray-900 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+          className="w-32 rounded-lg border border-border px-3 py-1.5 text-sm text-foreground"
         />
         <Combobox
           options={options.source}
           value={source}
           onChange={setSource}
           placeholder="Search source…"
-          className="w-40 rounded-lg border border-gray-300 px-3 py-1.5 text-sm text-gray-900 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+          className="w-40 rounded-lg border border-border px-3 py-1.5 text-sm text-foreground"
         />
         {activeFilters ? (
           <button
@@ -260,66 +279,35 @@ export default function LogsProxy({ loaderData }: Route.ComponentProps) {
               setLevel("");
               setSource("");
             }}
-            className="rounded-lg border border-gray-300 px-2.5 py-1.5 text-xs font-medium text-gray-500 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-400 dark:hover:bg-gray-800"
+            className="rounded-lg border border-border px-2.5 py-1.5 text-xs font-medium text-muted-foreground hover:bg-muted"
           >
             Clear filters
           </button>
         ) : null}
       </div>
 
-      {!connected ? (
-        <div className="mb-3 rounded-lg border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-warning">
-          Connection to live logs lost — reconnecting…
-        </div>
-      ) : null}
-      <div className="flex h-[calc(100vh-330px)] flex-col rounded-xl border border-gray-200 bg-white shadow-sm dark:border-gray-800 dark:bg-gray-900 sm:h-[calc(100vh-290px)]">
-        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-gray-200 px-3 py-2 dark:border-gray-800 sm:px-4 sm:py-3">
-          <div className="flex items-center gap-2 sm:gap-3">
-            <span className="text-sm font-medium text-gray-700 dark:text-gray-200">
-              {filtered.length} event
-            </span>
-            <span
-              className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium ${
-                paused
-                  ? "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300"
-                  : "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300"
-              }`}
-            >
-              <span
-                className={`h-1.5 w-1.5 rounded-full ${paused ? "bg-amber-500" : "bg-green-500 animate-pulse"}`}
-              />
-              {paused ? "paused" : "live"}
-            </span>
-          </div>
-          <button
-            type="button"
-            onClick={() => setPaused(!paused)}
-            className="rounded-lg border border-gray-300 px-3 py-1 text-sm font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-800"
-          >
-            {paused ? "Resume" : "Pause"}
-          </button>
-        </div>
-        <div ref={scrollRef} className="flex-1 overflow-y-auto">
-          {filtered.length === 0 ? (
-            <p className="py-10 text-center text-sm text-gray-400 dark:text-gray-500">
-              No proxy logs yet. They appear here as requests are routed through the proxy.
-            </p>
-          ) : (
-            filtered.map((e) => {
-              const key = `${e.id ?? e.created_at}`;
-              return (
-                <Row
-                  key={key}
-                  event={e}
-                  selected={selectedId === key}
-                  onSelect={() => setSelectedId(selectedId === key ? null : key)}
-                  onDelete={() => handleDelete(Number(e.id), "proxy")}
-                />
-              );
-            })
-          )}
-        </div>
-      </div>
+      {dialog}
+
+      <LogViewer
+        logs={filtered}
+        paused={paused}
+        onTogglePause={() => setPaused(!paused)}
+        connected={connected}
+        type="proxy"
+        scrollRef={scrollRef}
+        emptyMessage="No proxy logs yet. They appear here as requests are routed through the proxy."
+        renderRow={(event) => {
+          const key = `${event.id ?? event.created_at}`;
+          return (
+            <Row
+              event={event}
+              selected={selectedId === key}
+              onSelect={() => setSelectedId(selectedId === key ? null : key)}
+              onDelete={() => handleDelete(Number(event.id), "proxy")}
+            />
+          );
+        }}
+      />
     </div>
   );
 }
