@@ -1,5 +1,7 @@
 import { Form, redirect } from "react-router";
 import type { Route } from "./+types/login";
+import { Button } from "../components/ui/button";
+import { Input, Label } from "../components/ui/field";
 import {
   createSession,
   setSessionCookie,
@@ -21,7 +23,7 @@ export async function action({ request }: Route.ActionArgs) {
   const next = String(form.get("next") ?? "/home");
 
   if (!verifyPassword(password)) {
-    return { error: "Password salah", next };
+    return { error: "Invalid password", next };
   }
 
   const token = createSession();
@@ -37,37 +39,29 @@ export default function Login({ loaderData, actionData }: Route.ComponentProps) 
     actionData && "error" in actionData ? String(actionData.error) : null;
 
   return (
-    <main className="flex min-h-screen items-center justify-center bg-gray-50 dark:bg-gray-950">
-      <div className="mx-4 w-full max-w-sm rounded-2xl border border-gray-200 bg-white p-6 shadow-sm dark:border-gray-800 dark:bg-gray-900 sm:p-8">
-        <h1 className="mb-1 text-2xl font-bold text-gray-900 dark:text-white">UniRoute</h1>
-        <p className="mb-6 text-sm text-gray-500 dark:text-gray-400">
-          AI Gateway Admin — masuk dengan password.
+    <main className="flex min-h-screen items-center justify-center bg-muted">
+      <div className="mx-4 w-full max-w-sm rounded-2xl border border-border bg-surface p-6 shadow-sm sm:p-8">
+        <h1 className="mb-1 text-2xl font-bold text-foreground">UniRoute</h1>
+        <p className="mb-6 text-sm text-muted-foreground">
+          AI Gateway Admin — sign in with your password.
         </p>
         <Form method="post" className="flex flex-col gap-4">
           <input type="hidden" name="next" value={next} />
           <div>
-            <label
-              htmlFor="password"
-              className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300"
-            >
-              Password
-            </label>
-            <input
+            <Label htmlFor="password">Password</Label>
+            <Input
               id="password"
               name="password"
               type="password"
               required
               autoFocus
-              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 dark:border-gray-600 dark:bg-gray-800 dark:text-white focus:border-blue-500 focus:outline-none"
+              autoComplete="current-password"
             />
           </div>
-          {error ? <p className="text-sm text-red-600 dark:text-red-400">{error}</p> : null}
-          <button
-            type="submit"
-            className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
-          >
+          {error ? <p className="text-sm text-danger">{error}</p> : null}
+          <Button type="submit" className="w-full">
             Login
-          </button>
+          </Button>
         </Form>
       </div>
     </main>
