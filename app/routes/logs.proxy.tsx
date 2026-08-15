@@ -211,14 +211,12 @@ export default function LogsProxy({ loaderData }: Route.ComponentProps) {
   }
 
   useEffect(() => {
-    if (deleteFetcher.state === "idle" && deleteFetcher.data) {
-      const d = deleteFetcher.data as { ok?: boolean };
-      if (d.ok !== true) {
-        toast({ title: "Delete failed", variant: "error" });
-      } else if (pendingDelete) {
-        remove(pendingDelete.id, pendingDelete.type);
-      }
-      setPendingDelete(null);
+    if (deleteFetcher.state !== "idle" || !deleteFetcher.data || !pendingDelete) return;
+    setPendingDelete(null);
+    if (deleteFetcher.data.ok !== true) {
+      toast({ title: "Delete failed", variant: "error" });
+    } else {
+      remove(pendingDelete.id, pendingDelete.type);
     }
   }, [deleteFetcher.state, deleteFetcher.data, pendingDelete]);
 

@@ -249,13 +249,14 @@ export default function ProviderDetail({ loaderData }: Route.ComponentProps) {
 
   const handleDelete = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
+    const form = e.currentTarget;
     const ok = await confirm({
       title: "Delete provider?",
       description: "This permanently removes the provider and its models.",
       confirmLabel: "Delete",
       variant: "danger",
     });
-    if (ok) e.currentTarget.submit();
+    if (ok) form.submit();
   };
 
   if (!provider) {
