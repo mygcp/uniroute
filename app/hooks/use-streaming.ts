@@ -100,7 +100,11 @@ export function useStreaming() {
 			setStreaming(false);
 			setDone(true);
 		} catch (err) {
-			if (err instanceof DOMException && err.name === "AbortError") return;
+			if (err instanceof DOMException && err.name === "AbortError") {
+				setStreaming(false);
+				setDone(true);
+				return;
+			}
 			setError(err instanceof Error ? err.message : String(err));
 			setStreaming(false);
 		}
