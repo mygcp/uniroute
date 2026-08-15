@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useFetcher } from "react-router";
 import type { Route } from "./+types/logs.proxy";
 import { query } from "../.server/db";
@@ -7,6 +7,7 @@ import {
   useRealtimeLogs,
   type LogEvent,
 } from "../hooks/use-realtime-logs";
+import { useToast } from "../components/ui/toast";
 
 const COLS = `id, level, source, message, metadata, created_at`;
 
@@ -182,6 +183,7 @@ export default function LogsProxy({ loaderData }: Route.ComponentProps) {
   const [pendingDelete, setPendingDelete] = useState<{ id: number; type: "proxy" } | null>(null);
   const clearFetcher = useFetcher();
   const deleteFetcher = useFetcher();
+  const { toast } = useToast();
   const { logs, connected, paused, setPaused, scrollRef, remove, reset } =
     useRealtimeLogs((l) => l.type === "proxy", loaderData.initial);
 
@@ -207,6 +209,18 @@ export default function LogsProxy({ loaderData }: Route.ComponentProps) {
   function handleClear() {
     clearFetcher.submit({ scope: "proxy" }, { method: "POST", action: "/api/logs/clear" });
   }
+
+  useEffect(() => {
+    if (deleteFetcher.state === "idle" && deleteFetcher.data) {
+      const d = deleteFetcher.data as { ok?: boolean };
+      if (d.ok !== true) {
+        toast({ title: "Delete failed", variant: "error" });
+      } else if (pendingDelete) {
+        remove(pendingDelete.id, pendingDelete.type);
+      }
+      setPendingDelete(null);
+    }
+  }, [deleteFetcher.state, deleteFetcher.data, pendingDelete]);
 
   const activeFilters = Boolean(level || source);
 

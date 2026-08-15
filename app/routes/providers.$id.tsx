@@ -16,6 +16,7 @@ import { reload } from "../.server/registry";
 import { useStreaming } from "../hooks/use-streaming";
 import { MessageInput } from "../components/message-input";
 import { StreamingResponse } from "../components/streaming-response";
+import { useConfirm } from "../components/ui/confirm-dialog";
 import {
   ArrowLeft,
   KeyRound,
@@ -244,6 +245,18 @@ export default function ProviderDetail({ loaderData }: Route.ComponentProps) {
   );
   const [prompt, setPrompt] = useState("");
   const stream = useStreaming();
+  const { dialog, confirm } = useConfirm();
+
+  const handleDelete = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    const ok = await confirm({
+      title: "Delete provider?",
+      description: "This permanently removes the provider and its models.",
+      confirmLabel: "Delete",
+      variant: "danger",
+    });
+    if (ok) e.currentTarget.submit();
+  };
 
   if (!provider) {
     return (
@@ -586,16 +599,16 @@ export default function ProviderDetail({ loaderData }: Route.ComponentProps) {
         </div>
       )}
 
-      <Form method="post" className="mt-6 sm:mt-8">
+      <Form method="post" className="mt-6 sm:mt-8" onSubmit={handleDelete}>
         <input type="hidden" name="intent" value="delete-provider" />
         <button
           type="submit"
-          onClick={() => confirm(`Hapus provider ${provider.id}?`)}
           className="rounded-lg border border-red-200 px-4 py-2 text-sm text-red-600 hover:bg-red-50 dark:border-red-900 dark:text-red-400 dark:hover:bg-red-950/40"
         >
           Hapus provider ini
         </button>
       </Form>
+      {dialog}
     </div>
   );
 }

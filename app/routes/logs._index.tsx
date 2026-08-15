@@ -7,6 +7,7 @@ import {
   useRealtimeLogs,
   type LogEvent,
 } from "../hooks/use-realtime-logs";
+import { useToast } from "../components/ui/toast";
 
 const REQUEST_COLS =
   `id, model, provider_id, strategy_used, rule_applied, duration_ms,
@@ -199,6 +200,7 @@ export default function Logs({ loaderData }: Route.ComponentProps) {
   const [pendingDelete, setPendingDelete] = useState<{ id: number; type: "request" } | null>(null);
   const clearFetcher = useFetcher();
   const deleteFetcher = useFetcher();
+  const { toast } = useToast();
   const { logs, connected, paused, setPaused, scrollRef, remove, reset } =
     useRealtimeLogs((l) => l.type === "request", loaderData.initial);
 
@@ -237,14 +239,13 @@ export default function Logs({ loaderData }: Route.ComponentProps) {
   }
 
   useEffect(() => {
-    const d = deleteFetcher.data;
-    if (
-      deleteFetcher.state === "idle" &&
-      d &&
-      (d as { ok?: boolean }).ok &&
-      pendingDelete
-    ) {
-      remove(pendingDelete.id, pendingDelete.type);
+    if (deleteFetcher.state === "idle" && deleteFetcher.data) {
+      const d = deleteFetcher.data as { ok?: boolean };
+      if (d.ok !== true) {
+        toast({ title: "Delete failed", variant: "error" });
+      } else if (pendingDelete) {
+        remove(pendingDelete.id, pendingDelete.type);
+      }
       setPendingDelete(null);
     }
   }, [deleteFetcher.state, deleteFetcher.data, pendingDelete]);
