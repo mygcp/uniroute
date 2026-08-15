@@ -12,6 +12,7 @@ import { useState } from "react";
 import type { Route } from "./+types/root";
 import { Header } from "./components/header";
 import { Sidebar } from "./components/sidebar";
+import { ToastProvider } from "./components/ui/toast";
 import { ThemeProvider, useTheme } from "./hooks/use-theme";
 import { getSessionToken, isValid } from "./.server/auth";
 import "./app.css";
@@ -69,7 +70,7 @@ function ThemedHtml({ children }: { children: React.ReactNode }) {
   );
 }
 
-export default function App() {
+function AppShell() {
   const { pathname } = useLocation();
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
@@ -86,6 +87,14 @@ export default function App() {
         </main>
       </div>
     </div>
+  );
+}
+
+export default function App() {
+  return (
+    <ToastProvider>
+      <AppShell />
+    </ToastProvider>
   );
 }
 
