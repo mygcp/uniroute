@@ -10,8 +10,12 @@ export type ExecutorOptions = {
 	signal?: AbortSignal;
 	/** Client API key's proxy pool (highest priority). */
 	apiKeyPoolId?: number;
-	/** Provider's proxy pool (second priority). */
+	/** Provider credential's proxy pool (second priority). */
+	accountPoolId?: number;
+	/** Provider's proxy pool (third priority). */
 	providerPoolId?: number;
+	/** Combo's proxy pool (fourth priority). */
+	comboPoolId?: number;
 	/** Provider id, used only for diagnostics. */
 	providerId?: string;
 	streamTransformer?: StreamTransformer;
@@ -32,7 +36,9 @@ async function attempt(options: ExecutorOptions): Promise<AttemptResult> {
 		body,
 		signal,
 		apiKeyPoolId,
+		accountPoolId,
 		providerPoolId,
+		comboPoolId,
 		providerId,
 	} = options;
 	const controller = new AbortController();
@@ -49,7 +55,9 @@ async function attempt(options: ExecutorOptions): Promise<AttemptResult> {
 				controller.signal,
 			]),
 			apiKeyPoolId,
+			accountPoolId,
 			providerPoolId,
+			comboPoolId,
 			providerId,
 		});
 

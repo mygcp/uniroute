@@ -203,6 +203,11 @@ function initSchema(): void {
   password_enc TEXT,
   is_active    INTEGER NOT NULL DEFAULT 1,
   last_used_at INTEGER DEFAULT 0,
+  success_count INTEGER NOT NULL DEFAULT 0,
+  fail_count    INTEGER NOT NULL DEFAULT 0,
+  last_ok_at    INTEGER,
+  last_latency_ms INTEGER,
+  last_error    TEXT,
   created_at   INTEGER DEFAULT (unixepoch()),
   updated_at   INTEGER DEFAULT (unixepoch())
 );`);
@@ -409,9 +414,15 @@ CREATE INDEX IF NOT EXISTS idx_audit_key ON key_audit_logs (key_id, created_at);
   error TEXT
 );`);
 
-	ensureColumn("combo_steps", "model_ids", "model_ids TEXT");
-	ensureColumn("combo_steps", "account_id", "account_id INTEGER");
-	ensureColumn("combo_steps", "account_ids", "account_ids TEXT");
+  ensureColumn("combo_steps", "model_ids", "model_ids TEXT");
+  ensureColumn("combo_steps", "account_id", "account_id INTEGER");
+  ensureColumn("combo_steps", "account_ids", "account_ids TEXT");
+	ensureColumn("provider_credentials", "proxy_pool_id", "proxy_pool_id INTEGER");
+	ensureColumn("outbound_proxies", "success_count", "success_count INTEGER NOT NULL DEFAULT 0");
+	ensureColumn("outbound_proxies", "fail_count", "fail_count INTEGER NOT NULL DEFAULT 0");
+	ensureColumn("outbound_proxies", "last_ok_at", "last_ok_at INTEGER");
+	ensureColumn("outbound_proxies", "last_latency_ms", "last_latency_ms INTEGER");
+	ensureColumn("outbound_proxies", "last_error", "last_error TEXT");
 
 	// Migrate legacy single-key table (provider_id PRIMARY KEY) to multi-key schema.
 	{

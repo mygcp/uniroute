@@ -5,6 +5,7 @@ export type ApiKeyRow = {
   provider_id: string;
   label: string | null;
   api_key: string;
+  proxy_pool_id: number | null;
   is_active: number;
   is_routing: number;
   created_at: number;
@@ -13,8 +14,8 @@ export type ApiKeyRow = {
 
 export function listApiKeys(providerId: string): ApiKeyRow[] {
   return query(
-    `SELECT id, provider_id, label, api_key, is_active, is_routing, created_at, updated_at
-     FROM provider_credentials WHERE provider_id = ? ORDER BY id`,
+    `SELECT id, provider_id, label, api_key, proxy_pool_id, is_active, is_routing, created_at, updated_at
+      FROM provider_credentials WHERE provider_id = ? ORDER BY id`,
   ).all(providerId) as unknown as ApiKeyRow[];
 }
 
@@ -109,5 +110,26 @@ export function getRoutingCredential(
   const fallback = query(
     "SELECT api_key FROM provider_credentials WHERE provider_id = ? AND is_active = 1 ORDER BY id LIMIT 1",
   ).get(providerId) as { api_key: string } | undefined;
+  return fallback ?? null;
+}
+
+/** Set proxy pool assigned to one provider credential (API key). Null clears it. */
+export function setApiKeyProxyPool(id: number, poolId: number | null): void {
+  query(
+    "UPDATE provider_credentials SET proxy_pool_id = ?, updated_at = unixepoch() WHERE id = ?",
+  ).run(poolId, id);
+}
+
+/** Full row of the credential getApiKey() would resolve (routing, else first active). */
+export function getApiKeyRow(providerId: string): ApiKeyRow | null {
+  const cols =
+    "id, provider_id, label, api_key, proxy_pool_id, is_active, is_routing, created_at, updated_at";
+  const routing = query(
+    `SELECT ${cols} FROM provider_credentials WHERE provider_id = ? AND is_routing = 1 AND is_active = 1 ORDER BY id LIMIT 1`,
+  ).get(providerId) as ApiKeyRow | undefined;
+  if (routing) return routing;
+  const fallback = query(
+    `SELECT ${cols} FROM provider_credentials WHERE provider_id = ? AND is_active = 1 ORDER BY id LIMIT 1`,
+  ).get(providerId) as ApiKeyRow | undefined;
   return fallback ?? null;
 }

@@ -12,6 +12,7 @@ import { useState } from "react";
 import type { Route } from "./+types/root";
 import { Header } from "./components/header";
 import { Sidebar } from "./components/sidebar";
+import { ThemeProvider, useTheme } from "./hooks/use-theme";
 import { getSessionToken, isValid } from "./.server/auth";
 import "./app.css";
 
@@ -38,7 +39,16 @@ export async function loader({ request }: Route.LoaderArgs) {
 
 export function Layout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
+    <ThemeProvider>
+      <ThemedHtml>{children}</ThemedHtml>
+    </ThemeProvider>
+  );
+}
+
+function ThemedHtml({ children }: { children: React.ReactNode }) {
+  const { theme } = useTheme();
+  return (
+    <html lang="en" className={theme === "dark" ? "dark" : undefined} suppressHydrationWarning>
       <head>
         <meta charSet="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />

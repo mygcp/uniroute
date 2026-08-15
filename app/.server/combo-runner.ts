@@ -1,7 +1,7 @@
 import { transformRequest } from "./adapter";
 import { beginConnection, endConnection, selectProvider } from "./balancer";
 import { modelAllowed, type ClientKey } from "./client-key";
-import { listApiKeys } from "./credential";
+import { listApiKeys, type ApiKeyRow } from "./credential";
 import {
 	extractUpstreamText,
 	recordComboMetric,
@@ -126,7 +126,7 @@ function resolveStepPool(
 function resolveAccountApiKey(
 	step: ComboStep,
 	providerId: string,
-): string | null {
+): ApiKeyRow | null {
 	const keys = listApiKeys(providerId).filter((k) => k.is_active === 1);
 	if (keys.length === 0) return null;
 	// Dynamic (kosong) = semua akun aktif provider ini.
@@ -137,7 +137,7 @@ function resolveAccountApiKey(
 	if (wanted.length === 0) return null;
 	// Rotasi sederhana merata antar akun terpilih.
 	const idx = Math.floor(Math.random() * wanted.length);
-	return wanted[idx].api_key;
+	return wanted[idx];
 }
 
 function logFailure(ctx: RunContext, model: string, error: string): void {
@@ -216,7 +216,10 @@ async function executeOneModel(
 	const apiKey = resolveAccountApiKey(step, provider.id);
 	try {
 		providerBody = toProvider(providerFormat, stepCanonical);
-		transformed = transformRequest(providerBody, provider, { model, apiKey });
+		transformed = transformRequest(providerBody, provider, {
+			model,
+			apiKey: apiKey?.api_key ?? null,
+		});
 	} catch (err) {
 		const error = err instanceof Error ? err.message : String(err);
 		logFailure(ctx, model, error);

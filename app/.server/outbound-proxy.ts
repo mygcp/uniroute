@@ -15,6 +15,11 @@ export interface ProxyConfig {
 	password_enc: string | null;
 	is_active: boolean;
 	last_used_at: number;
+	success_count: number;
+	fail_count: number;
+	last_ok_at: number | null;
+	last_latency_ms: number | null;
+	last_error: string | null;
 	created_at: number;
 	updated_at: number;
 }
@@ -75,6 +80,11 @@ interface ProxyRow {
 	password_enc: string | null;
 	is_active: number;
 	last_used_at: number;
+	success_count: number;
+	fail_count: number;
+	last_ok_at: number | null;
+	last_latency_ms: number | null;
+	last_error: string | null;
 	created_at: number;
 	updated_at: number;
 }
@@ -107,6 +117,11 @@ function mapProxy(row: ProxyRow): ProxyConfig {
 		password_enc: row.password_enc,
 		is_active: row.is_active === 1,
 		last_used_at: row.last_used_at,
+		success_count: row.success_count ?? 0,
+		fail_count: row.fail_count ?? 0,
+		last_ok_at: row.last_ok_at ?? null,
+		last_latency_ms: row.last_latency_ms ?? null,
+		last_error: row.last_error ?? null,
 		created_at: row.created_at,
 		updated_at: row.updated_at,
 	};
@@ -475,4 +490,32 @@ export function setGlobalProxyPool(poolId: number | null): void {
 			"INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
 		).run(GLOBAL_POOL_SETTING, String(poolId));
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Result tracking
+// ---------------------------------------------------------------------------
+
+export interface ProxyResultInput {
+	ok: boolean;
+	latencyMs: number;
+	error?: string;
+}
+
+/** Update usage stats for a proxy after a fetch attempt. */
+export function recordProxyResult(id: number, input: ProxyResultInput): void {
+	if (id <= 0) return;
+	if (input.ok) {
+		query(
+			"UPDATE outbound_proxies SET success_count = success_count + 1, last_ok_at = ?, last_latency_ms = ?, last_error = NULL WHERE id = ?",
+		).run(Date.now(), input.latencyMs, id);
+	} else {
+		query(
+			"UPDATE outbound_proxies SET fail_count = fail_count + 1, last_error = ?, last_latency_ms = ? WHERE id = ?",
+		).run(input.error ?? "unknown error", input.latencyMs, id);
+	}
+	const nowSec = Math.floor(Date.now() / 1000);
+	query(
+		"UPDATE outbound_proxies SET last_used_at = ?, updated_at = ? WHERE id = ?",
+	).run(nowSec, nowSec, id);
 }

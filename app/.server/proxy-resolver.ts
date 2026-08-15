@@ -10,15 +10,19 @@ import {
 	getProxy,
 	type ProxyConfig,
 	type ProxyPool,
+	recordProxyResult,
 } from "./outbound-proxy";
 
 /**
  * Outbound Proxy Engine — single egress point for all upstream HTTP/S traffic.
  *
  * Selection hierarchy (spec 4.1):
- *   1. API key pool  (client_api_keys assigned pool)
- *   2. Provider pool (providers assigned pool)
- *   3. Direct connection (no pool → plain fetch)
+ *   1. API keypool          (client_api_keys assigned pool)
+ *   2. Provider API keypool (provider_credentials.proxy_pool_id)
+ *  3. Provider pool         (providers assigned pool)
+ *  4. Combo pool            (combo config proxy_pool_id)
+ *  5. Global pool           (getGlobalProxyPool)
+ *  6. Direct connection     (no pool → plain fetch)
  *
  * Within a pool, proxies are picked round-robin by `last_used_at`
  * (same pattern as balancer.ts). Connection errors and retryable HTTP
@@ -34,8 +38,12 @@ export interface ResolvedProxy {
 export interface FetchUpstreamInit extends RequestInit {
 	/** Pool assigned to the client API key (highest priority). */
 	apiKeyPoolId?: number;
-	/** Pool assigned to the provider (second priority). */
+	/** Pool assigned to the provider credential (second priority). */
+	accountPoolId?: number;
+	/** Pool assigned to the provider (third priority). */
 	providerPoolId?: number;
+	/** Pool assigned to the combo (fourth priority). */
+	comboPoolId?: number;
 	/** Explicit pool override (skips resolution priority). */
 	proxyPoolId?: number;
 	/** Provider id, used only for diagnostics. */
@@ -52,12 +60,16 @@ const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
 
 export function resolveProxyPool(params: {
 	apiKeyPoolId?: number;
+	accountPoolId?: number;
 	providerPoolId?: number;
+	comboPoolId?: number;
 	globalPoolId?: number;
 }): ResolvedProxy[] | null {
 	let pool: ProxyPool | null = null;
 	if (params.apiKeyPoolId) pool = getPool(params.apiKeyPoolId);
+	if (!pool && params.accountPoolId) pool = getPool(params.accountPoolId);
 	if (!pool && params.providerPoolId) pool = getPool(params.providerPoolId);
+	if (!pool && params.comboPoolId) pool = getPool(params.comboPoolId);
 	if (!pool && params.globalPoolId) pool = getPool(params.globalPoolId);
 	if (!pool || !pool.is_active || pool.proxy_ids.length === 0) return null;
 
@@ -95,7 +107,9 @@ export async function fetchUpstream(
 ): Promise<Response> {
 	const {
 		apiKeyPoolId,
+		accountPoolId,
 		providerPoolId,
+		comboPoolId,
 		proxyPoolId,
 		providerId,
 		onProxyUsed,
@@ -105,7 +119,7 @@ export async function fetchUpstream(
 	let chain =
 		proxyPoolId != null
 			? resolveProxyPool({ apiKeyPoolId: proxyPoolId })
-			: resolveProxyPool({ apiKeyPoolId, providerPoolId });
+			: resolveProxyPool({ apiKeyPoolId, accountPoolId, providerPoolId, comboPoolId });
 	if (!chain) {
 		const globalPool = getGlobalProxyPool();
 		if (globalPool) chain = resolveProxyPool({ globalPoolId: globalPool.id });
@@ -130,12 +144,26 @@ export async function fetchUpstream(
 			const resp = await proxyFetch(url, fetchInit, resolved.proxy);
 			if (resp.status === 401 || resp.status === 407) {
 				// Authentication failures never trigger failover.
+				recordProxyResult(resolved.proxy.id, {
+					ok: false,
+					latencyMs: Date.now() - started,
+					error: `auth failed (HTTP ${resp.status})`,
+				});
 				return resp;
 			}
 			if (resp.ok || !RETRYABLE_STATUS.has(resp.status)) {
+				recordProxyResult(resolved.proxy.id, {
+					ok: true,
+					latencyMs: Date.now() - started,
+				});
 				return resp;
 			}
 			lastResponse = resp;
+			recordProxyResult(resolved.proxy.id, {
+				ok: false,
+				latencyMs: Date.now() - started,
+				error: `retryable status ${resp.status}`,
+			});
 			recordProxyLog({
 				level: "warn",
 				source: "proxy-resolver",
@@ -149,6 +177,11 @@ export async function fetchUpstream(
 			});
 		} catch (err) {
 			lastError = err instanceof Error ? err.message : String(err);
+			recordProxyResult(resolved.proxy.id, {
+				ok: false,
+				latencyMs: Date.now() - started,
+				error: lastError ?? "connection failed",
+			});
 			recordProxyLog({
 				level: "error",
 				source: "proxy-resolver",
@@ -717,6 +750,12 @@ export async function testProxyConnection(
 		);
 		// Reading the body fully also validates the tunnel for streaming.
 		await resp.arrayBuffer().catch(() => undefined);
+		if (proxy.id > 0) {
+			recordProxyResult(proxy.id, {
+				ok: true,
+				latencyMs: Date.now() - started,
+			});
+		}
 		return { ok: true, latencyMs: Date.now() - started, status: resp.status };
 	} catch (err) {
 		recordProxyLog({
@@ -725,6 +764,13 @@ export async function testProxyConnection(
 			message: `proxy test failed: ${err instanceof Error ? err.message : String(err)}`,
 			metadata: { proxy: `${proxy.host}:${proxy.port}`, testUrl },
 		});
+		if (proxy.id > 0) {
+			recordProxyResult(proxy.id, {
+				ok: false,
+				latencyMs: Date.now() - started,
+				error: err instanceof Error ? err.message : String(err),
+			});
+		}
 		return { ok: false, latencyMs: Date.now() - started, status: null };
 	}
 }

@@ -35,7 +35,12 @@ export function meta() {
 
 type FreeSourceFormat = "text" | "geonode";
 
-const FREE_SOURCES: Array<{ id: string; label: string; url: string; format: FreeSourceFormat }> = [
+const FREE_SOURCES: Array<{
+	id: string;
+	label: string;
+	url: string;
+	format: FreeSourceFormat;
+}> = [
 	{
 		id: "proxyscrape-http",
 		label: "ProxyScrape (HTTP)",
@@ -233,6 +238,11 @@ async function testRows(
 					password_enc: null,
 					is_active: true,
 					last_used_at: 0,
+					success_count: 0,
+					fail_count: 0,
+					last_ok_at: null,
+					last_latency_ms: null,
+					last_error: null,
 					created_at: 0,
 					updated_at: 0,
 				};
@@ -284,6 +294,11 @@ export async function action({ request }: Route.ActionArgs) {
 			password_enc: null,
 			is_active: true,
 			last_used_at: 0,
+			success_count: 0,
+			fail_count: 0,
+			last_ok_at: null,
+			last_latency_ms: null,
+			last_error: null,
 			created_at: 0,
 			updated_at: 0,
 		};

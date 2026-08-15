@@ -97,7 +97,7 @@ function testProvider(providerId: string): Promise<{ connected: number; total: n
 
 export function loader() {
   const rows = query(
-    "SELECT id, name, base_url, auth_type, is_active, weight, priority, current_connections, last_used_at FROM providers ORDER BY id",
+    "SELECT id, name, base_url, auth_type, is_active, weight, priority, current_connections, last_used_at FROM providers ORDER BY is_active DESC, id",
   ).all() as unknown as ProviderRow[];
   const keyRows = query(
     "SELECT provider_id, COUNT(*) AS c FROM provider_credentials WHERE is_active = 1 GROUP BY provider_id",
@@ -236,35 +236,28 @@ export default function Providers({ loaderData }: Route.ComponentProps) {
                   <p className="font-semibold text-gray-900 dark:text-white">{p.name}</p>
                   <p className="text-xs text-gray-400">{p.id}</p>
                 </div>
-                <AuthBadge auth={p.auth_type} />
-              </div>
+                <div className="flex items-center gap-2">
+                            <label className="flex cursor-pointer items-center gap-1.5 text-xs text-gray-500 dark:text-gray-400">
+                                <input type="checkbox" className="peer sr-only" checked={Boolean(p.is_active)} onChange={() => { const form = document.getElementById(`toggle-${p.id}`) as HTMLFormElement | null; form?.requestSubmit(); }} />
+                                <span className="relative inline-block h-4 w-7 rounded-full bg-gray-300 transition-colors after:absolute after:left-0.5 after:top-0.5 after:h-3 after:w-3 after:rounded-full after:bg-white after:shadow after:transition-transform peer-checked:bg-blue-600 peer-checked:after:translate-x-3 dark:bg-gray-600" />
+                                {p.is_active ? "ON" : "OFF"}
+                            </label>
+                            <AuthBadge auth={p.auth_type} />
+                        </div>
+                        </div>
               <p className="mt-2 truncate text-xs text-gray-500 dark:text-gray-400">{p.base_url}</p>
             </a>
-            <div className="mt-3 flex items-center justify-between">
-              <label className="flex cursor-pointer items-center gap-2 text-sm text-gray-600 dark:text-gray-300">
-                <input
-                  type="checkbox"
-                  className="peer sr-only"
-                  checked={Boolean(p.is_active)}
-                  onChange={() => {
-                    const form = document.getElementById(`toggle-${p.id}`) as HTMLFormElement | null;
-                    form?.requestSubmit();
-                  }}
-                />
-                <span className="relative h-5 w-9 rounded-full bg-gray-300 transition-colors after:absolute after:left-0.5 after:top-0.5 after:h-4 after:w-4 after:rounded-full after:bg-white after:shadow after:transition-transform peer-checked:bg-green-600 peer-checked:after:translate-x-4 dark:bg-gray-600" />
-                {p.is_active ? "Aktif" : "Non-aktif"}
-              </label>
-              <Form id={`toggle-${p.id}`} method="post" className="hidden">
-                <input type="hidden" name="intent" value="toggle" />
-                <input type="hidden" name="id" value={p.id} />
-                <input type="hidden" name="is_active" value={p.is_active} />
-              </Form>
-            </div>
-            <ProviderStatusCard
+                        <Form id={`toggle-${p.id}`} method="post" className="hidden">
+                            <input type="hidden" name="intent" value="toggle" />
+                            <input type="hidden" name="id" value={p.id} />
+                            <input type="hidden" name="is_active" value={p.is_active} />
+                        </Form>
+                        <ProviderStatusCard
               providerId={p.id}
               keyCount={keyCounts[p.id] ?? 0}
               result={testResult && testResult.id === p.id ? testResult : undefined}
               testing={testing}
+      fetcher={fetcher}
             />
           </div>
         ))}
@@ -278,18 +271,20 @@ function ProviderStatusCard({
   keyCount,
   result,
   testing,
+  fetcher,
 }: {
   providerId: string;
   keyCount: number;
   result?: { id: string; connected: number };
   testing: boolean;
+  fetcher: ReturnType<typeof useFetcher>;
 }) {
   const pending = testing;
   let statusText: string;
   let statusClass: string;
 
   if (keyCount === 0) {
-    statusText = "Not connected";
+    statusText = "no connection";
     statusClass = "text-gray-400 dark:text-gray-500";
   } else if (result) {
     if (result.connected > 0) {
@@ -314,7 +309,7 @@ function ProviderStatusCard({
         )}
         {statusText}
       </span>
-      <Form method="post">
+      <fetcher.Form method="post">
         <input type="hidden" name="intent" value="test" />
         <input type="hidden" name="id" value={providerId} />
         <button
@@ -325,7 +320,7 @@ function ProviderStatusCard({
           {pending ? <Loader2 size={14} className="animate-spin" /> : <Plug size={14} />}
           Test
         </button>
-      </Form>
+      </fetcher.Form>
     </div>
   );
 }

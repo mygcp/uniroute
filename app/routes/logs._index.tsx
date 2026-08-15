@@ -38,10 +38,10 @@ function fmtTs(ts: number): string {
 }
 
 const STATUS_COLORS: Record<string, string> = {
-  success: "bg-green-100 text-green-700",
-  error: "bg-red-100 text-red-700",
-  timeout: "bg-amber-100 text-amber-700",
-  denied: "bg-gray-200 text-gray-700",
+  success: "bg-green-100 text-green-700 dark:bg-green-500/15 dark:text-green-300",
+  error: "bg-red-100 text-red-700 dark:bg-red-500/15 dark:text-red-300",
+  timeout: "bg-amber-100 text-amber-700 dark:bg-amber-500/15 dark:text-amber-300",
+  denied: "bg-gray-200 text-gray-700 dark:bg-gray-800 dark:text-gray-300",
 };
 
 /**
@@ -140,7 +140,7 @@ function Row({
         </span>
         <span
           className={`rounded-full px-2 py-0.5 text-xs font-medium ${
-            STATUS_COLORS[String(event.status)] ?? "bg-gray-100 text-gray-600"
+            STATUS_COLORS[String(event.status)] ?? "bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-300"
           }`}
         >
           {String(event.status)}
