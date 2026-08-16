@@ -25,7 +25,7 @@ const Dropdown = memo(function Dropdown({
   return (
     <ul
       role="listbox"
-      className={`absolute z-20 mt-1 max-h-48 w-full origin-top overflow-auto rounded-lg border border-border bg-surface-2 py-1 text-sm shadow-lg transition-[transform,opacity] duration-100 ${
+      className={`absolute z-20 mt-1 max-h-48 w-full origin-top overflow-auto rounded-lg border border-glass-border bg-background/80 py-1 text-sm shadow-[0_8px_24px_rgba(0,0,0,0.35),inset_0_1px_0_var(--glass-highlight)] backdrop-blur-md transition-[transform,opacity] duration-100 ${
         open
           ? "scale-y-100 opacity-100"
           : "pointer-events-none scale-y-90 opacity-0"
@@ -37,8 +37,8 @@ const Dropdown = memo(function Dropdown({
             type="button"
             onMouseDown={(e) => e.preventDefault()}
             onClick={() => onSelect(opt)}
-            className={`block w-full px-3 py-1.5 text-left text-foreground hover:bg-muted ${
-              i === highlight ? "bg-muted" : ""
+            className={`block w-full px-3 py-1.5 text-left text-foreground hover:bg-glass ${
+              i === highlight ? "bg-glass-strong" : ""
             }`}
           >
             {opt}

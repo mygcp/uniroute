@@ -34,7 +34,7 @@ export function useConfirm() {
   const dialog = pending ? (
     <dialog
       ref={dialogRef}
-      className="dialog-pop m-auto w-[min(92vw,420px)] rounded-xl border border-border bg-surface p-5 text-foreground shadow-2xl backdrop:bg-black/60 backdrop:backdrop-blur-sm"
+      className="dialog-pop m-auto w-[min(92vw,420px)] rounded-xl border border-glass-border bg-background/80 p-5 text-foreground shadow-[0_24px_48px_rgba(0,0,0,0.45),inset_0_1px_0_var(--glass-highlight)] backdrop-blur-xl backdrop:bg-black/60 backdrop:backdrop-blur-sm"
       onCancel={(e) => {
         e.preventDefault();
         close(false);

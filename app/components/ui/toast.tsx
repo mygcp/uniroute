@@ -49,7 +49,7 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
           <div
             key={t.id}
             role="status"
-            className={`pointer-events-auto flex items-start gap-2.5 rounded-lg border border-border bg-surface p-3 text-sm text-foreground shadow-lg ${
+            className={`pointer-events-auto flex items-start gap-2.5 rounded-lg border border-glass-border bg-background/80 p-3 text-sm text-foreground shadow-[0_8px_24px_rgba(0,0,0,0.35),inset_0_1px_0_var(--glass-highlight)] backdrop-blur-md ${
               t.leaving ? "animate-toast-out" : "animate-toast-in"
             }`}
           >
