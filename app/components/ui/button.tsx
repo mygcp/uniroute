@@ -13,7 +13,7 @@ const VARIANTS: Record<Variant, string> = {
   danger:
     "border border-danger/25 bg-danger/15 text-danger hover:bg-danger/25",
   outline:
-    "border border-glass-border bg-glass text-foreground hover:bg-glass-strong",
+    "border border-glass-border bg-glass text-foreground hover:bg-glass-hover",
 };
 
 const SIZES: Record<Size, string> = {
