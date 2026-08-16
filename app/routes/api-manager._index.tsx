@@ -1,4 +1,4 @@
-import { Form } from "react-router";
+import { Form, Link } from "react-router";
 import { useState, type ReactNode } from "react";
 import type { Route } from "./+types/api-manager._index";
 import {
@@ -29,7 +29,7 @@ import { decryptKey } from "../.server/key-crypto";
 import { PageHeader } from "../components/ui/page-header";
 import { Card } from "../components/ui/card";
 import { Badge, type BadgeTone } from "../components/ui/badge";
-import { Button } from "../components/ui/button";
+import { Button, buttonClass } from "../components/ui/button";
 import { Input, Select, Label, Checkbox } from "../components/ui/field";
 import { CopyButton } from "../components/ui/copy-button";
 import { EmptyState } from "../components/ui/empty-state";
@@ -208,24 +208,15 @@ export default function ApiManager({
 				subtitle="Manage API keys for all applications & clients."
 				actions={
 					<>
-						<a
-							href="/api-manager/templates"
-							className="inline-flex items-center rounded-lg border border-border px-3 py-1.5 text-sm text-foreground hover:bg-muted"
-						>
+						<Link to="/api-manager/templates" className={buttonClass("outline", "sm")}>
 							Templates
-						</a>
-						<a
-							href="/api-manager/groups"
-							className="inline-flex items-center rounded-lg border border-border px-3 py-1.5 text-sm text-foreground hover:bg-muted"
-						>
+						</Link>
+						<Link to="/api-manager/groups" className={buttonClass("outline", "sm")}>
 							Groups
-						</a>
-						<a
-							href="/api-manager/create"
-							className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90"
-						>
+						</Link>
+						<Link to="/api-manager/create" className={buttonClass("primary", "sm")}>
 							<Plus size={16} /> Create New Key
-						</a>
+						</Link>
 					</>
 				}
 			/>
