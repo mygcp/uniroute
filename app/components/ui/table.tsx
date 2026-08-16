@@ -26,7 +26,7 @@ export function THeadCell({ className = "", ...rest }: ThHTMLAttributes<HTMLTabl
 }
 
 export function TRow({ className = "", ...rest }: HTMLAttributes<HTMLTableRowElement>) {
-  return <tr className={["border-b border-glass-border transition-colors hover:bg-glass", className].join(" ")} {...rest} />;
+  return <tr className={["border-b border-glass-border transition-colors hover:bg-glass-hover", className].join(" ")} {...rest} />;
 }
 
 export function TCell({ className = "", ...rest }: TdHTMLAttributes<HTMLTableCellElement>) {

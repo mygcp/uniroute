@@ -42,7 +42,7 @@ export function Tabs({
               "shrink-0 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 active:scale-[0.97]",
               selected
                 ? "border border-glass-border bg-glass-strong text-foreground shadow-[inset_0_1px_0_var(--glass-highlight)]"
-                : "text-muted-foreground hover:bg-glass hover:text-foreground",
+                : "text-muted-foreground hover:bg-glass-hover hover:text-foreground",
             ].join(" ")}
           >
             {tab}

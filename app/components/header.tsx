@@ -3,7 +3,7 @@ import { useTheme } from "../hooks/use-theme";
 import { Button } from "./ui/button";
 import { Tooltip } from "./ui/tooltip";
 
-const buttonClasses = "border-glass-border text-muted-foreground hover:bg-glass hover:text-foreground";
+const buttonClasses = "border-glass-border text-muted-foreground hover:bg-glass-hover hover:text-foreground";
 
 export function Header({ onMenuClick }: { onMenuClick?: () => void }) {
   const { theme, toggle } = useTheme();

@@ -41,7 +41,7 @@ function linkClass({ isActive }: { isActive: boolean }): string {
     "flex items-center gap-3 rounded-lg border-l-2 px-3 py-2 text-sm font-medium transition-colors",
     isActive
       ? "border-l-primary bg-primary/15 text-primary"
-      : "border-l-transparent text-muted-foreground hover:bg-glass hover:text-foreground",
+      : "border-l-transparent text-muted-foreground hover:bg-glass-hover hover:text-foreground",
   ].join(" ");
 }
 
@@ -168,7 +168,7 @@ export function Sidebar({ open, onClose }: SidebarProps) {
               type="button"
               onClick={onClose}
               aria-label="Close menu"
-              className="rounded-lg p-1.5 text-muted-foreground hover:bg-glass hover:text-foreground"
+              className="rounded-lg p-1.5 text-muted-foreground hover:bg-glass-hover hover:text-foreground"
             >
               <X size={20} />
             </button>

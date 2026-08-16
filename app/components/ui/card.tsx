@@ -8,7 +8,7 @@ export function Card({
   return (
     <div
       className={[
-        "glass-panel transition hover:-translate-y-0.5 hover:border-primary/30 hover:bg-glass-strong",
+        "glass-panel transition hover:-translate-y-0.5 hover:border-primary/30 hover:bg-glass-hover",
         padded ? "p-5" : "",
         className,
       ].join(" ")}

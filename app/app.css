@@ -25,6 +25,7 @@
   --color-glass: var(--glass);
   --color-glass-strong: var(--glass-strong);
   --color-glass-border: var(--glass-border);
+  --color-glass-hover: var(--glass-hover);
 }
 
 :root {
@@ -48,6 +49,7 @@
   --glass-strong: rgba(255, 255, 255, 0.05);
   --glass-border: rgba(255, 255, 255, 0.08);
   --glass-highlight: rgba(255, 255, 255, 0.07);
+  --glass-hover: rgba(255, 255, 255, 0.07);
 }
 
 .light {
@@ -71,6 +73,7 @@
   --glass-strong: rgba(255, 255, 255, 0.7);
   --glass-border: rgba(0, 0, 0, 0.08);
   --glass-highlight: rgba(255, 255, 255, 0.7);
+  --glass-hover: rgba(0, 0, 0, 0.05);
 }
 
 html,

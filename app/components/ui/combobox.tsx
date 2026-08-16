@@ -37,8 +37,8 @@ const Dropdown = memo(function Dropdown({
             type="button"
             onMouseDown={(e) => e.preventDefault()}
             onClick={() => onSelect(opt)}
-            className={`block w-full px-3 py-1.5 text-left text-foreground hover:bg-glass ${
-              i === highlight ? "bg-glass-strong" : ""
+            className={`block w-full px-3 py-1.5 text-left text-foreground hover:bg-glass-hover ${
+              i === highlight ? "bg-glass-hover" : ""
             }`}
           >
             {opt}
