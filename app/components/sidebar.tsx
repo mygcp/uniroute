@@ -146,28 +146,36 @@ export function Sidebar({ open, onClose }: SidebarProps) {
         <SidebarContent />
       </aside>
 
-      {open ? (
-        <div className="fixed inset-0 z-50 md:hidden">
-          <div className="absolute inset-0 bg-background/50" onClick={onClose} />
-          <aside className="absolute inset-y-0 left-0 flex w-72 max-w-[85vw] flex-col border-r border-border bg-surface shadow-xl">
-            <div className="flex items-center justify-between border-b border-border px-4 py-4">
-              <div>
-                <h1 className="text-lg font-bold text-foreground">UniRoute</h1>
-                <p className="text-xs text-muted-foreground">AI Gateway Admin</p>
-              </div>
-              <button
-                type="button"
-                onClick={onClose}
-                aria-label="Close menu"
-                className="rounded-lg p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
-              >
-                <X size={20} />
-              </button>
+      <div
+        inert={!open}
+        className={`fixed inset-0 z-50 transition-opacity md:hidden ${
+          open ? "opacity-100" : "pointer-events-none opacity-0"
+        }`}
+        aria-hidden={!open}
+      >
+        <div className="absolute inset-0 bg-background/50" onClick={onClose} />
+        <aside
+          className={`absolute inset-y-0 left-0 flex w-72 max-w-[85vw] flex-col border-r border-border bg-surface shadow-xl transition-transform duration-200 ease-out ${
+            open ? "translate-x-0" : "-translate-x-full"
+          }`}
+        >
+          <div className="flex items-center justify-between border-b border-border px-4 py-4">
+            <div>
+              <h1 className="text-lg font-bold text-foreground">UniRoute</h1>
+              <p className="text-xs text-muted-foreground">AI Gateway Admin</p>
             </div>
-            <SidebarContent onNavigate={onClose} />
-          </aside>
-        </div>
-      ) : null}
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="Close menu"
+              className="rounded-lg p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+            >
+              <X size={20} />
+            </button>
+          </div>
+          <SidebarContent onNavigate={onClose} />
+        </aside>
+      </div>
     </>
   );
 }

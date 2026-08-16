@@ -21,6 +21,26 @@ export function useRealtimeLogs(
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    let buffer: LogEvent[] = [];
+    let raf: number | null = null;
+
+    // Flush accumulated events to React state at most once per animation frame.
+    const flush = () => {
+      raf = null;
+      if (buffer.length === 0) return;
+      const batch = buffer;
+      buffer = [];
+      setLogs((prev) => {
+        const next = [...prev, ...batch];
+        if (next.length > 1000) return next.slice(next.length - 1000);
+        return next;
+      });
+      requestAnimationFrame(() => {
+        const el = scrollRef.current;
+        if (el) el.scrollTop = el.scrollHeight;
+      });
+    };
+
     const es = new EventSource("/api/logs/stream");
     es.onopen = () => setConnected(true);
     es.onerror = () => {
@@ -32,20 +52,16 @@ export function useRealtimeLogs(
         const data = JSON.parse(ev.data) as LogEvent;
         if (data.type !== "request" && data.type !== "proxy") return;
         if (filterRef.current && !filterRef.current(data)) return;
-        setLogs((prev) => {
-          const next = [...prev, data];
-          if (next.length > 1000) return next.slice(next.length - 1000);
-          return next;
-        });
-        requestAnimationFrame(() => {
-          const el = scrollRef.current;
-          if (el) el.scrollTop = el.scrollHeight;
-        });
+        buffer.push(data);
+        if (raf == null) raf = requestAnimationFrame(flush);
       } catch {
         /* ignore malformed events */
       }
     };
-    return () => es.close();
+    return () => {
+      es.close();
+      if (raf != null) cancelAnimationFrame(raf);
+    };
   }, []);
 
   /** Remove a log locally (after a successful server delete). */

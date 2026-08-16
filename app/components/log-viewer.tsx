@@ -1,4 +1,4 @@
-import { type ReactNode } from "react";
+import { memo, type ReactNode } from "react";
 import type { LogEvent } from "../hooks/use-realtime-logs";
 import { Badge } from "./ui/badge";
 
@@ -12,6 +12,25 @@ type Props = {
   emptyMessage: string;
   renderRow: (event: LogEvent) => ReactNode;
 };
+
+function keyOf(log: LogEvent): string {
+  return String(log.id ?? log.created_at);
+}
+
+/**
+ * Memoized per-row wrapper: during realtime event bursts only rows whose
+ * props actually change (new events, selection toggles) re-render.
+ * `renderRow` must be referentially stable (useCallback in the page).
+ */
+const RowSlot = memo(function RowSlot({
+  render,
+  log,
+}: {
+  render: (e: LogEvent) => ReactNode;
+  log: LogEvent;
+}) {
+  return <div className="[content-visibility:auto]">{render(log)}</div>;
+});
 
 export function LogViewer({
   logs,
@@ -62,8 +81,8 @@ export function LogViewer({
               {emptyMessage}
             </p>
           ) : (
-            logs.map((log, i) => (
-              <div key={`${log.created_at}-${i}`}>{renderRow(log)}</div>
+            logs.map((log) => (
+              <RowSlot key={keyOf(log)} render={renderRow} log={log} />
             ))
           )}
         </div>

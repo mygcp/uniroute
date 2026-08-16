@@ -1,5 +1,5 @@
 import { Form, Link, redirect, useFetcher } from "react-router";
-import { useState } from "react";
+import { memo, useCallback, useRef, useState } from "react";
 import type { Route } from "./+types/proxies";
 import { query } from "../.server/db";
 import {
@@ -474,6 +474,244 @@ export async function action({ request }: Route.ActionArgs) {
 }
 
 //---------------------------------------------------------------------------
+// Memoized sub-components
+//
+// Local state (checkbox selections, tab switches, fetcher results) no longer
+// re-renders the entire page — only the affected rows re-render.
+//---------------------------------------------------------------------------
+
+type ProxyRow = Route.ComponentProps["loaderData"]["proxies"][number];
+
+type ConfirmFn = (opts: {
+	title: string;
+	description?: string;
+	confirmLabel?: string;
+	cancelLabel?: string;
+	variant?: "primary" | "danger";
+}) => Promise<boolean>;
+
+const ProxyListRow = memo(function ProxyListRow({
+	proxy,
+	test,
+	onTest,
+	confirm,
+}: {
+	proxy: ProxyRow;
+	test: { id: number; ok: boolean; latencyMs: number } | null;
+	onTest: (id: number) => void;
+	confirm: ConfirmFn;
+}) {
+	return (
+		<TRow key={proxy.id}>
+			<TCell className="px-4 py-3 font-medium text-foreground">
+				<Link to={`/proxies/${proxy.id}`} className="hover:text-primary">
+					{proxy.name}
+				</Link>
+			</TCell>
+			<TCell className="px-4 py-3">
+				<Badge tone="neutral" style="subtle">
+					{proxy.type}
+				</Badge>
+			</TCell>
+			<TCell className="px-4 py-3 font-mono text-xs text-muted-foreground">
+				{proxy.host}:{proxy.port}
+			</TCell>
+			<TCell className="px-4 py-3 text-muted-foreground">
+				{proxy.username ? proxy.username : "—"}
+			</TCell>
+			<TCell className="px-4 py-3 text-muted-foreground">
+				{proxy.last_used_at
+					? new Date(proxy.last_used_at).toLocaleString()
+					: "never"}
+			</TCell>
+			<TCell className="px-4 py-3">
+				<Badge
+					tone={proxy.is_active ? "success" : "danger"}
+					style="subtle"
+				>
+					{proxy.is_active ? "Active" : "Inactive"}
+				</Badge>
+			</TCell>
+			<TCell className="px-4 py-3">
+				<div className="flex items-center justify-end gap-2">
+					<Button
+						size="icon"
+						variant="ghost"
+						type="button"
+						title="Test connection"
+						aria-label="Test connection"
+						onClick={() => onTest(proxy.id)}
+					>
+						<Plug size={15} />
+					</Button>
+					<Toggle
+						checked={Boolean(proxy.is_active)}
+						label={`${proxy.is_active ? "Deactivate" : "Activate"} proxy ${proxy.name}`}
+						onChange={() => {
+							const form = document.getElementById(
+								`toggle-proxy-${proxy.id}`,
+							) as HTMLFormElement | null;
+							form?.requestSubmit();
+						}}
+					/>
+					<Form
+						className="hidden"
+						id={`toggle-proxy-${proxy.id}`}
+						method="post"
+					>
+						<input type="hidden" name="intent" value="toggle" />
+						<input type="hidden" name="id" value={proxy.id} />
+					</Form>
+					<Form
+						method="post"
+						onSubmit={async (e) => {
+							if (
+								!(await confirm({
+									title: "Delete proxy?",
+									description: `Proxy "${proxy.name}" will be permanently removed.`,
+									confirmLabel: "Delete",
+									variant: "danger",
+								}))
+							) {
+								e.preventDefault();
+							}
+						}}
+					>
+						<input type="hidden" name="intent" value="delete" />
+						<input type="hidden" name="id" value={proxy.id} />
+						<Button
+							size="icon"
+							variant="ghost"
+							type="submit"
+							title="Delete proxy"
+							aria-label="Delete proxy"
+							className="text-danger"
+						>
+							<Trash2 size={15} />
+						</Button>
+					</Form>
+				</div>
+				{test && (
+					<div
+						className={`mt-1 text-right text-xs ${
+							test.ok ? "text-success" : "text-danger"
+						}`}
+					>
+						{test.ok ? `OK · ${test.latencyMs}ms` : "failed"}
+					</div>
+				)}
+			</TCell>
+		</TRow>
+	);
+});
+
+const StagingProxyRow = memo(function StagingProxyRow({
+	row,
+	selected,
+	test,
+	onToggle,
+	onTest,
+}: {
+	row: FreeProxyRow;
+	selected: boolean;
+	test: { key: string; ok: boolean; latencyMs: number } | undefined;
+	onToggle: (key: string, checked: boolean) => void;
+	onTest: (row: FreeProxyRow) => void;
+}) {
+	const key = rowKey(row);
+	const status = test ? (test.ok ? "ok" : "fail") : row.status;
+	return (
+		<TRow key={key}>
+			<TCell className="px-2 py-1.5">
+				<Checkbox
+					checked={selected}
+					onChange={(e) => onToggle(key, e.target.checked)}
+				/>
+			</TCell>
+			<TCell className="px-2 py-1.5 font-mono text-xs text-muted-foreground">
+				{row.host}:{row.port}
+			</TCell>
+			<TCell className="px-2 py-1.5 text-xs text-muted-foreground">
+				{row.type}
+			</TCell>
+			<TCell className="px-2 py-1.5">
+				{status === "ok" && (
+					<span className="text-xs font-medium text-success">
+						{test?.latencyMs ?? row.latencyMs}ms
+					</span>
+				)}
+				{status === "fail" && (
+					<span className="text-xs text-danger">failed</span>
+				)}
+				{!status && (
+					<Button
+						type="button"
+						size="sm"
+						variant="ghost"
+						className="text-xs text-primary"
+						onClick={() => onTest(row)}
+					>
+						test
+					</Button>
+				)}
+			</TCell>
+		</TRow>
+	);
+});
+
+const SavedProxyRow = memo(function SavedProxyRow({
+	proxy,
+	selected,
+	onToggle,
+	onTest,
+}: {
+	proxy: ProxyRow;
+	selected: boolean;
+	onToggle: (id: number, checked: boolean) => void;
+	onTest: (id: number) => void;
+}) {
+	return (
+		<TRow key={proxy.id}>
+			<TCell className="px-2 py-1.5">
+				<Checkbox
+					checked={selected}
+					onChange={(e) => onToggle(proxy.id, e.target.checked)}
+				/>
+			</TCell>
+			<TCell className="px-2 py-1.5 text-foreground">
+				{proxy.name}
+			</TCell>
+			<TCell className="px-2 py-1.5 text-xs text-muted-foreground">
+				{proxy.type}
+			</TCell>
+			<TCell className="px-2 py-1.5 font-mono text-xs text-muted-foreground">
+				{proxy.host}:{proxy.port}
+			</TCell>
+			<TCell className="px-2 py-1.5">
+				<Badge
+					tone={proxy.is_active ? "success" : "danger"}
+					style="subtle"
+				>
+					{proxy.is_active ? "Active" : "Inactive"}
+				</Badge>
+			</TCell>
+			<TCell className="px-2 py-1.5 text-right">
+				<Button
+					size="icon"
+					variant="ghost"
+					type="button"
+					title="Test connection"
+					aria-label="Test connection"
+					onClick={() => onTest(proxy.id)}
+				>
+					<Plug size={15} />
+				</Button>
+			</TCell>
+		</TRow>
+	);
+});
+
+//---------------------------------------------------------------------------
 // Component
 //---------------------------------------------------------------------------
 
@@ -517,14 +755,44 @@ export default function Proxies({ loaderData }: Route.ComponentProps) {
 		(batchFetcher.data?.freeTests ?? []).map((t) => [t.key, t]),
 	);
 
-	const markSelected = (key: string, value: boolean) => {
+	const markSelected = useCallback((key: string, value: boolean) => {
 		setSelected((prev) => {
 			const next = new Set(prev);
 			if (value) next.add(key);
 			else next.delete(key);
 			return next;
 		});
-	};
+	}, []);
+
+	const markSavedSelected = useCallback((id: number, checked: boolean) => {
+		setSavedSelected((prev) => {
+			const next = new Set(prev);
+			if (checked) next.add(id);
+			else next.delete(id);
+			return next;
+		});
+	}, []);
+
+	// Route fetcher-driven actions through refs so the callbacks stay stable
+	// across renders (keeps the memoized rows from re-rendering).
+	const testFetcherRef = useRef(testFetcher);
+	testFetcherRef.current = testFetcher;
+	const batchFetcherRef = useRef(batchFetcher);
+	batchFetcherRef.current = batchFetcher;
+
+	const testProxy = useCallback((id: number) => {
+		testFetcherRef.current.submit(
+			{ intent: "test", id: String(id) },
+			{ method: "POST" },
+		);
+	}, []);
+
+	const testStagedRow = useCallback((row: FreeProxyRow) => {
+		batchFetcherRef.current.submit(
+			{ intent: "test-free", rows: JSON.stringify([row]) },
+			{ method: "POST" },
+		);
+	}, []);
 
 	const selectedRows = staging.filter((r) => selected.has(rowKey(r)));
 
@@ -590,112 +858,13 @@ export default function Proxies({ loaderData }: Route.ComponentProps) {
 											? testFetcher.data.test
 											: null;
 									return (
-										<TRow key={p.id}>
-											<TCell className="px-4 py-3 font-medium text-foreground">
-												<Link
-													to={`/proxies/${p.id}`}
-													className="hover:text-primary"
-												>
-													{p.name}
-												</Link>
-											</TCell>
-											<TCell className="px-4 py-3">
-												<Badge tone="neutral" style="subtle">
-													{p.type}
-												</Badge>
-											</TCell>
-											<TCell className="px-4 py-3 font-mono text-xs text-muted-foreground">
-												{p.host}:{p.port}
-											</TCell>
-											<TCell className="px-4 py-3 text-muted-foreground">
-												{p.username ? p.username : "—"}
-											</TCell>
-											<TCell className="px-4 py-3 text-muted-foreground">
-												{p.last_used_at
-													? new Date(p.last_used_at).toLocaleString()
-													: "never"}
-											</TCell>
-											<TCell className="px-4 py-3">
-												<Badge
-													tone={p.is_active ? "success" : "danger"}
-													style="subtle"
-												>
-													{p.is_active ? "Active" : "Inactive"}
-												</Badge>
-											</TCell>
-											<TCell className="px-4 py-3">
-												<div className="flex items-center justify-end gap-2">
-													<testFetcher.Form method="post">
-														<input type="hidden" name="intent" value="test" />
-														<input type="hidden" name="id" value={p.id} />
-														<Button
-															size="icon"
-															variant="ghost"
-															type="submit"
-															title="Test connection"
-															aria-label="Test connection"
-														>
-															<Plug size={15} />
-														</Button>
-													</testFetcher.Form>
-													<Toggle
-														checked={Boolean(p.is_active)}
-														label={`${p.is_active ? "Deactivate" : "Activate"} proxy ${p.name}`}
-														onChange={() => {
-															const form = document.getElementById(
-																`toggle-proxy-${p.id}`,
-															) as HTMLFormElement | null;
-															form?.requestSubmit();
-														}}
-													/>
-													<Form
-														className="hidden"
-														id={`toggle-proxy-${p.id}`}
-														method="post"
-													>
-														<input type="hidden" name="intent" value="toggle" />
-														<input type="hidden" name="id" value={p.id} />
-													</Form>
-													<Form
-														method="post"
-														onSubmit={async (e) => {
-															if (
-																!(await confirm({
-																	title: "Delete proxy?",
-																	description: `Proxy "${p.name}" will be permanently removed.`,
-																	confirmLabel: "Delete",
-																	variant: "danger",
-																}))
-															) {
-																e.preventDefault();
-															}
-														}}
-													>
-														<input type="hidden" name="intent" value="delete" />
-														<input type="hidden" name="id" value={p.id} />
-														<Button
-															size="icon"
-															variant="ghost"
-															type="submit"
-															title="Delete proxy"
-															aria-label="Delete proxy"
-															className="text-danger"
-														>
-															<Trash2 size={15} />
-														</Button>
-													</Form>
-												</div>
-												{test && (
-													<div
-														className={`mt-1 text-right text-xs ${
-															test.ok ? "text-success" : "text-danger"
-														}`}
-													>
-														{test.ok ? `OK · ${test.latencyMs}ms` : "failed"}
-													</div>
-												)}
-											</TCell>
-										</TRow>
+										<ProxyListRow
+											key={p.id}
+											proxy={p}
+											test={test}
+											onTest={testProxy}
+											confirm={confirm}
+										/>
 									);
 								})}
 							</tbody>
@@ -861,55 +1030,15 @@ export default function Proxies({ loaderData }: Route.ComponentProps) {
 									<tbody>
 										{staging.map((r) => {
 											const key = rowKey(r);
-											const test = freeTests.get(key);
-											const status = test ? (test.ok ? "ok" : "fail") : r.status;
 											return (
-												<TRow key={key}>
-													<TCell className="px-2 py-1.5">
-														<Checkbox
-															checked={selected.has(key)}
-															onChange={(e) => markSelected(key, e.target.checked)}
-														/>
-													</TCell>
-													<TCell className="px-2 py-1.5 font-mono text-xs text-muted-foreground">
-														{r.host}:{r.port}
-													</TCell>
-													<TCell className="px-2 py-1.5 text-xs text-muted-foreground">
-														{r.type}
-													</TCell>
-													<TCell className="px-2 py-1.5">
-														{status === "ok" && (
-															<span className="text-xs font-medium text-success">
-																{test?.latencyMs ?? r.latencyMs}ms
-															</span>
-														)}
-														{status === "fail" && (
-															<span className="text-xs text-danger">failed</span>
-														)}
-														{!status && (
-															<batchFetcher.Form method="post">
-																<input
-																	type="hidden"
-																	name="intent"
-																	value="test-free"
-																/>
-																<input
-																	type="hidden"
-																	name="rows"
-																	value={JSON.stringify([r])}
-																/>
-																<Button
-																	type="submit"
-																	size="sm"
-																	variant="ghost"
-																	className="text-xs text-primary"
-																>
-																	test
-																</Button>
-															</batchFetcher.Form>
-														)}
-													</TCell>
-												</TRow>
+												<StagingProxyRow
+													key={key}
+													row={r}
+													selected={selected.has(key)}
+													test={freeTests.get(key)}
+													onToggle={markSelected}
+													onTest={testStagedRow}
+												/>
 											);
 										})}
 									</tbody>
@@ -1046,53 +1175,13 @@ export default function Proxies({ loaderData }: Route.ComponentProps) {
 									</THead>
 									<tbody>
 										{freeSaved.map((p) => (
-											<TRow key={p.id}>
-												<TCell className="px-2 py-1.5">
-													<Checkbox
-														checked={savedSelected.has(p.id)}
-														onChange={(e) => {
-															setSavedSelected((prev) => {
-																const next = new Set(prev);
-																if (e.target.checked) next.add(p.id);
-																else next.delete(p.id);
-																return next;
-															});
-														}}
-													/>
-												</TCell>
-												<TCell className="px-2 py-1.5 text-foreground">
-													{p.name}
-												</TCell>
-												<TCell className="px-2 py-1.5 text-xs text-muted-foreground">
-													{p.type}
-												</TCell>
-												<TCell className="px-2 py-1.5 font-mono text-xs text-muted-foreground">
-													{p.host}:{p.port}
-												</TCell>
-												<TCell className="px-2 py-1.5">
-													<Badge
-														tone={p.is_active ? "success" : "danger"}
-														style="subtle"
-													>
-														{p.is_active ? "Active" : "Inactive"}
-													</Badge>
-												</TCell>
-												<TCell className="px-2 py-1.5 text-right">
-													<testFetcher.Form method="post">
-														<input type="hidden" name="intent" value="test" />
-														<input type="hidden" name="id" value={p.id} />
-														<Button
-															size="icon"
-															variant="ghost"
-															type="submit"
-															title="Test connection"
-															aria-label="Test connection"
-														>
-															<Plug size={15} />
-														</Button>
-													</testFetcher.Form>
-												</TCell>
-											</TRow>
+											<SavedProxyRow
+												key={p.id}
+												proxy={p}
+												selected={savedSelected.has(p.id)}
+												onToggle={markSavedSelected}
+												onTest={testProxy}
+											/>
 										))}
 									</tbody>
 								</Table>

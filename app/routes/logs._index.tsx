@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { useFetcher } from "react-router";
 import type { Route } from "./+types/logs._index";
 import { query } from "../.server/db";
@@ -121,7 +121,7 @@ function Detail({ event }: { event: LogEvent }) {
   );
 }
 
-function Row({
+const Row = memo(function Row({
   event,
   selected,
   onSelect,
@@ -129,12 +129,13 @@ function Row({
 }: {
   event: LogEvent;
   selected: boolean;
-  onSelect: () => void;
-  onDelete: () => void;
+  onSelect: (key: string) => void;
+  onDelete: (id: number) => void;
 }) {
+  const key = `${event.id ?? event.created_at}`;
   return (
     <div
-      onClick={onSelect}
+      onClick={() => onSelect(key)}
       className={`cursor-pointer border-b border-border px-3 py-2 text-sm transition-colors hover:bg-muted ${
         selected ? "bg-primary/10" : ""
       }`}
@@ -163,7 +164,7 @@ function Row({
           title={selected ? "Close details" : "Inspect"}
           onClick={(e) => {
             e.stopPropagation();
-            onSelect();
+            onSelect(key);
           }}
           className="rounded border border-border px-1.5 text-xs text-muted-foreground hover:bg-muted"
         >
@@ -175,7 +176,7 @@ function Row({
           aria-label="Delete"
           onClick={(e) => {
             e.stopPropagation();
-            onDelete();
+            onDelete(Number(event.id));
           }}
           className="rounded border border-border px-1.5 text-xs text-danger hover:bg-danger/10"
         >
@@ -190,7 +191,7 @@ function Row({
       {selected ? <Detail event={event} /> : null}
     </div>
   );
-}
+});
 
 export default function Logs({ loaderData }: Route.ComponentProps) {
   const [model, setModel] = useState("");
@@ -206,6 +207,11 @@ export default function Logs({ loaderData }: Route.ComponentProps) {
   const { logs, connected, paused, setPaused, scrollRef, remove, reset } =
     useRealtimeLogs((l) => l.type === "request", loaderData.initial);
 
+  const deferredModel = useDeferredValue(model);
+  const deferredProvider = useDeferredValue(provider);
+  const deferredStatus = useDeferredValue(status);
+  const deferredSource = useDeferredValue(source);
+
   const options = useMemo(
     () => ({
       model: OPTIONS.models(logs),
@@ -216,17 +222,17 @@ export default function Logs({ loaderData }: Route.ComponentProps) {
   );
 
   const filtered = useMemo(() => {
-    const modelQ = model.trim().toLowerCase();
-    const providerQ = provider.trim().toLowerCase();
-    const sourceQ = source.trim().toLowerCase();
+    const modelQ = deferredModel.trim().toLowerCase();
+    const providerQ = deferredProvider.trim().toLowerCase();
+    const sourceQ = deferredSource.trim().toLowerCase();
     return logs.filter((l) => {
       if (modelQ && !String(l.model ?? "").toLowerCase().includes(modelQ)) return false;
       if (providerQ && !String(l.provider_id ?? "").toLowerCase().includes(providerQ)) return false;
-      if (status && String(l.status ?? "") !== status) return false;
+      if (deferredStatus && String(l.status ?? "") !== deferredStatus) return false;
       if (sourceQ && !sourceLabel(l).toLowerCase().includes(sourceQ)) return false;
       return true;
     });
-  }, [logs, model, provider, status, source]);
+  }, [logs, deferredModel, deferredProvider, deferredStatus, deferredSource]);
 
   async function handleClear() {
     const ok = await confirm({
@@ -238,19 +244,34 @@ export default function Logs({ loaderData }: Route.ComponentProps) {
     clearFetcher.submit({ scope: "request" }, { method: "POST", action: "/api/logs/clear" });
   }
 
-  async function handleDelete(id: number, type: "request") {
-    const ok = await confirm({
-      title: "Delete this log?",
-      description: "This request log will be removed from the active view.",
-      variant: "danger",
-    });
-    if (!ok) return;
-    setPendingDelete({ id, type });
-    deleteFetcher.submit(
-      { id: String(id), type },
-      { method: "POST", action: "/api/logs/delete" },
-    );
-  }
+  const deleteFetcherRef = useRef(deleteFetcher);
+  deleteFetcherRef.current = deleteFetcher;
+
+  const toggleSelect = useCallback((key: string) => {
+    setSelectedId((cur) => (cur === key ? null : key));
+  }, []);
+
+  const handleDelete = useCallback(
+    async (id: number, type: "request") => {
+      const ok = await confirm({
+        title: "Delete this log?",
+        description: "This request log will be removed from the active view.",
+        variant: "danger",
+      });
+      if (!ok) return;
+      setPendingDelete({ id, type });
+      deleteFetcherRef.current.submit(
+        { id: String(id), type },
+        { method: "POST", action: "/api/logs/delete" },
+      );
+    },
+    [confirm, setPendingDelete],
+  );
+
+  const deleteRequest = useCallback(
+    (id: number) => handleDelete(id, "request"),
+    [handleDelete],
+  );
 
   useEffect(() => {
     if (deleteFetcher.state !== "idle" || !deleteFetcher.data || !pendingDelete) return;
@@ -269,6 +290,18 @@ export default function Logs({ loaderData }: Route.ComponentProps) {
   }, [clearFetcher.state, clearFetcher.data]);
 
   const activeFilters = Boolean(model || provider || status || source);
+
+  const renderRow = useCallback(
+    (event: LogEvent) => (
+      <Row
+        event={event}
+        selected={selectedId === `${event.id ?? event.created_at}`}
+        onSelect={toggleSelect}
+        onDelete={deleteRequest}
+      />
+    ),
+    [selectedId, toggleSelect, deleteRequest],
+  );
 
   return (
     <div>
@@ -341,17 +374,7 @@ export default function Logs({ loaderData }: Route.ComponentProps) {
         type="request"
         scrollRef={scrollRef}
         emptyMessage="No matching request logs yet. Route a request through the proxy to see it appear live."
-        renderRow={(event) => {
-          const key = `${event.id ?? event.created_at}`;
-          return (
-            <Row
-              event={event}
-              selected={selectedId === key}
-              onSelect={() => setSelectedId(selectedId === key ? null : key)}
-              onDelete={() => handleDelete(Number(event.id), "request")}
-            />
-          );
-        }}
+        renderRow={renderRow}
       />
     </div>
   );

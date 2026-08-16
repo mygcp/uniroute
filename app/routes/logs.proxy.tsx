@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { useFetcher } from "react-router";
 import type { Route } from "./+types/logs.proxy";
 import { query } from "../.server/db";
@@ -116,7 +116,7 @@ function Detail({ event }: { event: LogEvent }) {
   );
 }
 
-function Row({
+const Row = memo(function Row({
   event,
   selected,
   onSelect,
@@ -124,12 +124,13 @@ function Row({
 }: {
   event: LogEvent;
   selected: boolean;
-  onSelect: () => void;
-  onDelete: () => void;
+  onSelect: (key: string) => void;
+  onDelete: (id: number) => void;
 }) {
+  const key = `${event.id ?? event.created_at}`;
   return (
     <div
-      onClick={onSelect}
+      onClick={() => onSelect(key)}
       className={`cursor-pointer border-b border-border px-3 py-2 text-sm transition-colors hover:bg-muted ${
         selected ? "bg-primary/10" : ""
       }`}
@@ -152,7 +153,7 @@ function Row({
           title={selected ? "Close details" : "Inspect"}
           onClick={(e) => {
             e.stopPropagation();
-            onSelect();
+            onSelect(key);
           }}
           className="rounded border border-border px-1.5 text-xs text-muted-foreground hover:bg-muted"
         >
@@ -164,7 +165,7 @@ function Row({
           aria-label="Delete"
           onClick={(e) => {
             e.stopPropagation();
-            onDelete();
+            onDelete(Number(event.id));
           }}
           className="rounded border border-border px-1.5 text-xs text-danger hover:bg-danger/10"
         >
@@ -174,7 +175,7 @@ function Row({
       {selected ? <Detail event={event} /> : null}
     </div>
   );
-}
+});
 
 export default function LogsProxy({ loaderData }: Route.ComponentProps) {
   const [level, setLevel] = useState("");
@@ -188,16 +189,19 @@ export default function LogsProxy({ loaderData }: Route.ComponentProps) {
   const { logs, connected, paused, setPaused, scrollRef, remove, reset } =
     useRealtimeLogs((l) => l.type === "proxy", loaderData.initial);
 
+  const deferredLevel = useDeferredValue(level);
+  const deferredSource = useDeferredValue(source);
+
   const options = useMemo(() => ({ source: OPTIONS.sources(logs) }), [logs]);
 
   const filtered = useMemo(() => {
-    const sourceQ = source.trim().toLowerCase();
+    const sourceQ = deferredSource.trim().toLowerCase();
     return logs.filter((l) => {
-      if (level && String(l.level ?? "") !== level) return false;
+      if (deferredLevel && String(l.level ?? "") !== deferredLevel) return false;
       if (sourceQ && !String(l.source ?? "").toLowerCase().includes(sourceQ)) return false;
       return true;
     });
-  }, [logs, level, source]);
+  }, [logs, deferredLevel, deferredSource]);
 
   async function handleClear() {
     const ok = await confirm({
@@ -209,19 +213,34 @@ export default function LogsProxy({ loaderData }: Route.ComponentProps) {
     clearFetcher.submit({ scope: "proxy" }, { method: "POST", action: "/api/logs/clear" });
   }
 
-  async function handleDelete(id: number, type: "proxy") {
-    const ok = await confirm({
-      title: "Delete this log?",
-      description: "This proxy log will be removed from the active view.",
-      variant: "danger",
-    });
-    if (!ok) return;
-    setPendingDelete({ id, type });
-    deleteFetcher.submit(
-      { id: String(id), type },
-      { method: "POST", action: "/api/logs/delete" },
-    );
-  }
+  const deleteFetcherRef = useRef(deleteFetcher);
+  deleteFetcherRef.current = deleteFetcher;
+
+  const toggleSelect = useCallback((key: string) => {
+    setSelectedId((cur) => (cur === key ? null : key));
+  }, []);
+
+  const handleDelete = useCallback(
+    async (id: number, type: "proxy") => {
+      const ok = await confirm({
+        title: "Delete this log?",
+        description: "This proxy log will be removed from the active view.",
+        variant: "danger",
+      });
+      if (!ok) return;
+      setPendingDelete({ id, type });
+      deleteFetcherRef.current.submit(
+        { id: String(id), type },
+        { method: "POST", action: "/api/logs/delete" },
+      );
+    },
+    [confirm, setPendingDelete],
+  );
+
+  const deleteLog = useCallback(
+    (id: number) => handleDelete(id, "proxy"),
+    [handleDelete],
+  );
 
   useEffect(() => {
     if (deleteFetcher.state !== "idle" || !deleteFetcher.data || !pendingDelete) return;
@@ -240,6 +259,18 @@ export default function LogsProxy({ loaderData }: Route.ComponentProps) {
   }, [clearFetcher.state, clearFetcher.data]);
 
   const activeFilters = Boolean(level || source);
+
+  const renderRow = useCallback(
+    (event: LogEvent) => (
+      <Row
+        event={event}
+        selected={selectedId === `${event.id ?? event.created_at}`}
+        onSelect={toggleSelect}
+        onDelete={deleteLog}
+      />
+    ),
+    [selectedId, toggleSelect, deleteLog],
+  );
 
   return (
     <div>
@@ -296,17 +327,7 @@ export default function LogsProxy({ loaderData }: Route.ComponentProps) {
         type="proxy"
         scrollRef={scrollRef}
         emptyMessage="No proxy logs yet. They appear here as requests are routed through the proxy."
-        renderRow={(event) => {
-          const key = `${event.id ?? event.created_at}`;
-          return (
-            <Row
-              event={event}
-              selected={selectedId === key}
-              onSelect={() => setSelectedId(selectedId === key ? null : key)}
-              onDelete={() => handleDelete(Number(event.id), "proxy")}
-            />
-          );
-        }}
+        renderRow={renderRow}
       />
     </div>
   );

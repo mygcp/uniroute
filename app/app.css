@@ -40,6 +40,7 @@
   --danger: #ef4444;
   --info: #38bdf8;
   --ring: #3b82f6;
+  --shimmer: rgba(255, 255, 255, 0.08);
 }
 
 .light {
@@ -58,6 +59,7 @@
   --danger: #dc2626;
   --info: #0284c7;
   --ring: #2563eb;
+  --shimmer: rgba(0, 0, 0, 0.06);
 }
 
 html,
@@ -105,7 +107,7 @@ body {
   background: transparent;
 }
 
-/* Page fade-in on route change */
+/* Page fade-in on route change (fallback when View Transitions is unavailable) */
 @keyframes page-in {
   from {
     opacity: 0;
@@ -118,4 +120,127 @@ body {
 }
 .animate-page-in {
   animation: page-in 0.18s ease-out;
+}
+
+/* View Transitions for client-side page navigation */
+.view-transition-page {
+  view-transition-name: page;
+}
+
+@keyframes vt-page-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes vt-page-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+::view-transition-old(page) {
+  animation: vt-page-out 150ms ease-out;
+}
+::view-transition-new(page) {
+  animation: vt-page-in 150ms ease-out;
+}
+
+/* Skeleton shimmer (compositor-friendly: background-position only) */
+@keyframes shimmer {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
+}
+.animate-shimmer {
+  position: relative;
+  overflow: hidden;
+}
+.animate-shimmer::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, var(--shimmer), transparent);
+  animation: shimmer 1.4s infinite;
+}
+
+/* Toast enter / exit (slide in/out from the right edge) */
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateX(100%);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+.animate-toast-in {
+  animation: toast-in 0.2s ease-out;
+}
+
+@keyframes toast-out {
+  from {
+    opacity: 1;
+    transform: translateX(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateX(100%);
+  }
+}
+.animate-toast-out {
+  animation: toast-out 0.25s ease-in forwards;
+}
+
+/* Dialog pop-in (backdrop fade + scale) */
+@keyframes dialog-in {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+@keyframes backdrop-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.dialog-pop[open] {
+  animation: dialog-in 0.15s ease-out;
+}
+.dialog-pop[open]::backdrop {
+  animation: backdrop-in 0.15s ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  ::before,
+  ::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+  ::view-transition-old(page),
+  ::view-transition-new(page) {
+    animation: none !important;
+  }
 }

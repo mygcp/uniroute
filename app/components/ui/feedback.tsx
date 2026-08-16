@@ -6,6 +6,6 @@ export function Spinner({ size = 16, className = "" }: { size?: number; classNam
 
 export function Skeleton({ className = "" }: { className?: string }) {
   return (
-    <div className={`animate-pulse rounded-md bg-muted ${className}`} aria-hidden="true" />
+    <div className={`animate-shimmer rounded-md bg-muted ${className}`} aria-hidden="true" />
   );
 }

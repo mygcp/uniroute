@@ -7,7 +7,7 @@ type ToastInput = {
   variant?: "success" | "error" | "info";
 };
 
-type ToastItem = ToastInput & { id: number };
+type ToastItem = ToastInput & { id: number; leaving?: boolean };
 
 const ToastContext = createContext<{ toast: (t: ToastInput) => void }>({
   toast: () => {},
@@ -19,13 +19,24 @@ const ICONS = {
   info: <Info size={16} className="text-info" />,
 };
 
+const LIFETIME_MS = 4000;
+const EXIT_MS = 250;
+
 export function ToastProvider({ children }: { children: React.ReactNode }) {
   const [items, setItems] = useState<ToastItem[]>([]);
 
   const toast = useCallback((t: ToastInput) => {
     const id = Date.now() + Math.random();
     setItems((prev) => [...prev, { ...t, id }]);
-    setTimeout(() => setItems((prev) => prev.filter((i) => i.id !== id)), 4000);
+    // Play the exit animation first, then unmount.
+    setTimeout(() => {
+      setItems((prev) =>
+        prev.map((i) => (i.id === id ? { ...i, leaving: true } : i)),
+      );
+    }, LIFETIME_MS);
+    setTimeout(() => {
+      setItems((prev) => prev.filter((i) => i.id !== id));
+    }, LIFETIME_MS + EXIT_MS);
   }, []);
 
   const value = useMemo(() => ({ toast }), [toast]);
@@ -38,7 +49,9 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
           <div
             key={t.id}
             role="status"
-            className="pointer-events-auto flex items-start gap-2.5 rounded-lg border border-border bg-surface p-3 text-sm text-foreground shadow-lg animate-page-in"
+            className={`pointer-events-auto flex items-start gap-2.5 rounded-lg border border-border bg-surface p-3 text-sm text-foreground shadow-lg ${
+              t.leaving ? "animate-toast-out" : "animate-toast-in"
+            }`}
           >
             <span className="mt-0.5 shrink-0">{ICONS[t.variant ?? "info"]}</span>
             <div className="min-w-0">

@@ -8,7 +8,7 @@ export function Card({
   return (
     <div
       className={[
-        "rounded-xl border border-border bg-surface shadow-sm",
+        "rounded-xl border border-border bg-surface shadow-sm transition hover:-translate-y-0.5 hover:border-primary/30",
         padded ? "p-5" : "",
         className,
       ].join(" ")}
