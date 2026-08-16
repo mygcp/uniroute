@@ -41,7 +41,7 @@ function linkClass({ isActive }: { isActive: boolean }): string {
     "flex items-center gap-3 rounded-lg border-l-2 px-3 py-2 text-sm font-medium transition-colors",
     isActive
       ? "border-l-primary bg-primary/15 text-primary"
-      : "border-l-transparent text-muted-foreground hover:bg-muted hover:text-foreground",
+      : "border-l-transparent text-muted-foreground hover:bg-glass hover:text-foreground",
   ].join(" ");
 }
 
@@ -55,7 +55,7 @@ function SectionLabel({ children }: { children: string }) {
 
 function Brand() {
   return (
-    <div className="border-b border-border px-4 py-4">
+    <div className="border-b border-glass-border px-4 py-4">
       <h1 className="text-lg font-bold text-foreground">UniRoute</h1>
       <p className="text-xs text-muted-foreground">AI Gateway Admin</p>
     </div>
@@ -121,7 +121,7 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
         </div>
       </nav>
 
-      <div className="border-t border-border p-3">
+      <div className="border-t border-glass-border p-3">
         <Form method="post" action="/logout">
           <Button type="submit" variant="ghost" className="w-full justify-center">
             <LogOut size={16} />
@@ -141,7 +141,7 @@ type SidebarProps = {
 export function Sidebar({ open, onClose }: SidebarProps) {
   return (
     <>
-      <aside className="hidden w-64 shrink-0 flex-col border-r border-border bg-surface-2 md:flex">
+      <aside className="hidden w-64 shrink-0 flex-col border-r border-glass-border bg-background/70 backdrop-blur-md md:flex">
         <Brand />
         <SidebarContent />
       </aside>
@@ -155,11 +155,11 @@ export function Sidebar({ open, onClose }: SidebarProps) {
       >
         <div className="absolute inset-0 bg-background/50" onClick={onClose} />
         <aside
-          className={`absolute inset-y-0 left-0 flex w-72 max-w-[85vw] flex-col border-r border-border bg-surface shadow-xl transition-transform duration-200 ease-out ${
+          className={`absolute inset-y-0 left-0 flex w-72 max-w-[85vw] flex-col border-r border-glass-border bg-background/80 shadow-xl backdrop-blur-md transition-transform duration-200 ease-out ${
             open ? "translate-x-0" : "-translate-x-full"
           }`}
         >
-          <div className="flex items-center justify-between border-b border-border px-4 py-4">
+          <div className="flex items-center justify-between border-b border-glass-border px-4 py-4">
             <div>
               <h1 className="text-lg font-bold text-foreground">UniRoute</h1>
               <p className="text-xs text-muted-foreground">AI Gateway Admin</p>
@@ -168,7 +168,7 @@ export function Sidebar({ open, onClose }: SidebarProps) {
               type="button"
               onClick={onClose}
               aria-label="Close menu"
-              className="rounded-lg p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+              className="rounded-lg p-1.5 text-muted-foreground hover:bg-glass hover:text-foreground"
             >
               <X size={20} />
             </button>
