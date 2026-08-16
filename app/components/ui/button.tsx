@@ -5,15 +5,15 @@ type Size = "sm" | "md" | "icon";
 
 const VARIANTS: Record<Variant, string> = {
   primary:
-    "bg-primary text-primary-foreground hover:bg-primary/90 shadow-sm",
+    "border border-primary/25 bg-primary/15 text-primary hover:bg-primary/25",
   secondary:
-    "bg-surface-2 text-foreground hover:bg-muted border border-border",
+    "border border-glass-border bg-glass-strong text-foreground hover:bg-glass",
   ghost:
-    "text-muted-foreground hover:text-foreground hover:bg-muted",
+    "text-muted-foreground hover:bg-glass hover:text-foreground",
   danger:
-    "bg-danger text-white hover:bg-danger/90 shadow-sm",
+    "border border-danger/25 bg-danger/15 text-danger hover:bg-danger/25",
   outline:
-    "border border-border text-foreground hover:bg-muted",
+    "border border-glass-border bg-glass text-foreground hover:bg-glass-strong",
 };
 
 const SIZES: Record<Size, string> = {
@@ -38,7 +38,7 @@ export function Button({
     <button
       type={type}
       className={[
-        "inline-flex items-center justify-center gap-2 rounded-lg font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 active:scale-[0.97] disabled:pointer-events-none disabled:opacity-50",
+        "inline-flex items-center justify-center gap-2 rounded-lg font-medium shadow-[inset_0_1px_0_var(--glass-highlight)] transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 active:scale-[0.97] disabled:pointer-events-none disabled:opacity-50",
         VARIANTS[variant],
         SIZES[size],
         className,
