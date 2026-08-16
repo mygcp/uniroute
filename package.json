@@ -7,7 +7,7 @@
     "dev": "react-router dev",
     "start": "bun server.ts",
     "typecheck": "react-router typegen && tsc",
-    "test": "bun test --parallel $(find ./app/.server ./app/routes -maxdepth 1 -name '*.test.ts' 2>/dev/null)"
+    "test": "bun test --parallel $(find ./app/.server ./app/lib ./app/routes -maxdepth 1 -name '*.test.ts' 2>/dev/null)"
   },
   "dependencies": {
     "@react-router/node": "^8",

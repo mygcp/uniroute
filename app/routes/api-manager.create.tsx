@@ -1,5 +1,5 @@
 import { Form } from "react-router";
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { Route } from "./+types/api-manager.create";
 import { KeyRound } from "lucide-react";
 import {
@@ -10,6 +10,7 @@ import { enqueueWebhook } from "../.server/webhook";
 import {
 	getModelSuggestions,
 	getProviderSuggestions,
+	getStructuredSuggestions,
 } from "../.server/suggest";
 import { listTemplates, type KeyTemplate } from "../.server/key-templates";
 import { PageHeader } from "../components/ui/page-header";
@@ -20,14 +21,15 @@ import {
 	Label,
 	Select,
 	Checkbox,
-	Textarea,
 } from "../components/ui/field";
 import { CopyButton } from "../components/ui/copy-button";
+import { TagInput } from "../components/ui/tag-input";
 
 export function loader() {
 	return {
 		modelSuggestions: getModelSuggestions(),
 		providerSuggestions: getProviderSuggestions(),
+		structuredSuggestions: getStructuredSuggestions(),
 		templates: listTemplates().map((t) => ({
 			id: t.id,
 			name: t.name,
@@ -164,8 +166,15 @@ export default function CreateKey({
 	loaderData,
 	actionData,
 }: Route.ComponentProps) {
-	const { modelSuggestions, providerSuggestions, templates } = loaderData;
+	const {
+		modelSuggestions,
+		providerSuggestions,
+		structuredSuggestions,
+		templates,
+	} = loaderData;
 	const formRef = useRef<HTMLFormElement>(null);
+	const [allowedModels, setAllowedModels] = useState("");
+	const [blockedModels, setBlockedModels] = useState("");
 	const created = actionData as
 		| { newlyCreatedKey?: string; name?: string }
 		| undefined;
@@ -173,6 +182,8 @@ export default function CreateKey({
 	useEffect(() => {
 		if (created?.newlyCreatedKey) {
 			formRef.current?.reset();
+			setAllowedModels("");
+			setBlockedModels("");
 		}
 	}, [created?.newlyCreatedKey]);
 
@@ -188,7 +199,7 @@ export default function CreateKey({
 		};
 		set("name", template.name);
 		set("description", template.description ?? "");
-		set("allowed_models", template.allowedModels?.join(", ") ?? "");
+		setAllowedModels(template.allowedModels?.join(", ") ?? "");
 		set(
 			"budget_monthly",
 			template.budget?.monthly != null ? String(template.budget.monthly) : "",
@@ -234,7 +245,7 @@ export default function CreateKey({
 		set("webhook_url", template.webhookUrl ?? "");
 		set("allowed_providers", template.allowedProviders?.join(", ") ?? "");
 		set("blocked_providers", template.blockedProviders?.join(", ") ?? "");
-		set("blocked_models", template.blockedModels?.join(", ") ?? "");
+		setBlockedModels(template.blockedModels?.join(", ") ?? "");
 	};
 
 	return (
@@ -344,19 +355,23 @@ export default function CreateKey({
 							<Label htmlFor="allowed_models">
 								Allowed Models (empty = all)
 							</Label>
-							<Textarea
+							<TagInput
 								id="allowed_models"
 								name="allowed_models"
-								rows={3}
+								options={structuredSuggestions}
+								value={allowedModels}
+								onChange={setAllowedModels}
 								placeholder="gpt-4o, claude-3.5, gemini-1.5-pro"
 							/>
 						</div>
 						<div>
 							<Label htmlFor="blocked_models">Blocked Models</Label>
-							<Textarea
+							<TagInput
 								id="blocked_models"
 								name="blocked_models"
-								rows={3}
+								options={structuredSuggestions}
+								value={blockedModels}
+								onChange={setBlockedModels}
 								placeholder="gpt-4o-mini, llama-3-8b"
 							/>
 						</div>
@@ -418,27 +433,28 @@ export default function CreateKey({
 				<Section title="Budget & Quota">
 					<div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
 						{[
-							["budget_monthly", "Monthly Budget (USD)"],
-							["budget_daily", "Daily Budget (USD)"],
-							["budget_per_request", "Per-request (USD)"],
-							["quota_tokens", "Tokens/Month"],
-							["quota_req_day", "Requests/Day"],
-							["quota_concurrent", "Concurrent"],
-							["quota_rpm", "Requests/Min"],
-							["quota_tpm", "Tokens/Min"],
-							["alert_threshold", "Alert at (0..1)"],
-						].map(([name, label]) => (
-							<div key={name as string}>
-								<Label htmlFor={name as string}>{label}</Label>
-								<Input
-									id={name as string}
-									name={name}
-									type="number"
-									step="any"
-									autoComplete="off"
-								/>
-							</div>
-						))}
+						["budget_monthly", "Monthly Budget (USD)", "USD cap per month, e.g. 100"],
+						["budget_daily", "Daily Budget (USD)", "USD cap per day, e.g. 10"],
+						["budget_per_request", "Per-request (USD)", "Max USD per request, e.g. 0.002"],
+						["quota_tokens", "Tokens/Month", "Token cap per month, e.g. 100000"],
+						["quota_req_day", "Requests/Day", "Daily request cap, e.g. 1000"],
+						["quota_concurrent", "Concurrent", "Max active sessions, e.g. 5"],
+						["quota_rpm", "Requests/Min", "Rate limit per minute, e.g. 60"],
+						["quota_tpm", "Tokens/Min", "Token rate per minute, e.g. 100000"],
+						["alert_threshold", "Alert at (0..1)", "Fraction of budget before warning, e.g. 0.8"],
+					].map(([name, label, placeholder]) => (
+						<div key={name as string}>
+							<Label htmlFor={name as string}>{label}</Label>
+							<Input
+								id={name as string}
+								name={name}
+								type="number"
+								step="any"
+								placeholder={placeholder as string}
+								autoComplete="off"
+							/>
+						</div>
+					))}
 					</div>
 					<label className="mt-3 flex items-center gap-2 text-sm">
 						<Checkbox name="auto_block" value="1" defaultChecked />
