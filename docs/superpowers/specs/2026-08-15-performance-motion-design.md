@@ -4,6 +4,17 @@
 **Status:** Approved
 **Approach:** Approach A — CSS + View Transitions API + targeted render optimizations, zero new dependencies
 
+## Context for agents (read this first)
+
+This spec describes a **frontend-only performance & motion pass**. The rest of the repo is a working AI-gateway app; do not touch backend logic.
+
+- **Stack:** React 19 + React Router v8 (SSR, `flatRoutes()`), Tailwind CSS v4 (`@import "tailwindcss"` + CSS-variable design tokens in `app/app.css`), `lucide-react` icons. Built with Bun (`bun.lock`), bundled by Vite.
+- **Structure:** `app/routes/*.tsx` = pages (data loaders are server-side via `app/.server/*`); `app/components/` = shared components; `app/components/ui/` = hand-built design-system kit (Button, Card, Badge, Tabs, Combobox, Toast, ConfirmDialog, etc.). Everything is typed; `app/routes/+types/` is auto-generated.
+- **Hard constraints from earlier specs (do not violate):** **zero new runtime dependencies** (no motion/framer-motion, no virtualization lib); all UI text in English; dark-first theme with a `.light` override on `<html>`; motion must be `transform`/`opacity`-only and respect `prefers-reduced-motion`.
+- **Current perf problems already located** (see sections below): SSE log updates re-render the whole list per event; route changes remount the full page via `key={pathname}`; large pages re-render too much on local state changes; Inter font is declared but never loaded.
+- **Don't re-explore what's already in this spec** — line numbers are current as of 2026-08-15. If a referenced file changed since, just locate the equivalent code.
+- **Verify with:** `npm run typecheck`, `npm test`, `npm run build` (all must pass). No test framework to extend unless the change is pure logic worth a unit test.
+
 ## Goal
 
 Make the UniRoute admin UI feel fast and smooth: (1) eliminate the main sources of jank (realtime log streaming, large tables/forms), (2) add cheap CSS-native micro-animations, (3) use the browser View Transitions API for page navigation. Keep the existing "zero new dependencies" principle from the design system spec.
