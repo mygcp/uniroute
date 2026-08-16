@@ -15,7 +15,7 @@ export function Table({ className = "", ...rest }: HTMLAttributes<HTMLTableEleme
 export function THead({ className = "", ...rest }: HTMLAttributes<HTMLTableSectionElement>) {
   return (
     <thead
-      className={["border-b border-border text-xs uppercase tracking-wide text-muted-foreground", className].join(" ")}
+      className={["border-b border-glass-border text-xs uppercase tracking-wide text-muted-foreground", className].join(" ")}
       {...rest}
     />
   );
@@ -26,7 +26,7 @@ export function THeadCell({ className = "", ...rest }: ThHTMLAttributes<HTMLTabl
 }
 
 export function TRow({ className = "", ...rest }: HTMLAttributes<HTMLTableRowElement>) {
-  return <tr className={["border-b border-border transition-colors hover:bg-muted/40", className].join(" ")} {...rest} />;
+  return <tr className={["border-b border-glass-border transition-colors hover:bg-glass", className].join(" ")} {...rest} />;
 }
 
 export function TCell({ className = "", ...rest }: TdHTMLAttributes<HTMLTableCellElement>) {
