@@ -2,6 +2,7 @@
 .env
 /node_modules/
 /data/
+/.worktrees/
 
 # React Router
 /.react-router/
