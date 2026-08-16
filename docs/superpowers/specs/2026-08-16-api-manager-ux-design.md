@@ -80,6 +80,41 @@ type TagSuggestion =
   `data.allowed_models` / `data.blocked_models`).
 - No backend/action changes.
 
+## 5. Form field placeholders
+
+Add explanatory `placeholder` text to ambiguous fields so the input's purpose is
+clear without a separate label. Applied on **both** create and edit forms.
+
+Budget & Quota:
+
+| Field | Placeholder |
+|---|---|
+| Monthly Budget (USD) | `USD cap per month, e.g. 100` |
+| Daily Budget (USD) | `USD cap per day, e.g. 10` |
+| Per-request (USD) | `Max USD per request, e.g. 0.002` |
+| Tokens/Month | `Token cap per month, e.g. 100000` |
+| Requests/Day | `Daily request cap, e.g. 1000` |
+| Concurrent | `Max active sessions, e.g. 5` |
+| Requests/Min | `Rate limit per minute, e.g. 60` |
+| Tokens/Min | `Token rate per minute, e.g. 100000` |
+| Alert at (0..1) | `Fraction of budget before warning, e.g. 0.8` |
+
+Security (edit form currently has no placeholders; create form already covers
+rotation/grace/webhook/IPs and is left as-is):
+
+| Field | Placeholder / helper |
+|---|---|
+| Expires | helper: `Leave empty = never expires` |
+| Rotation interval (days) | `Auto-rotate every N days, e.g. 30` |
+| Grace period (days) | `Old key valid N days after rotation, e.g. 7` |
+| Webhook URL | `POST URL for key events (optional)` |
+| IP Whitelist | `CIDR / IP, comma-separated` |
+| IP Blacklist | `CIDR / IP, comma-separated` |
+
+Time-Based Access fields already carry explanatory placeholders on create; the
+edit form's time fields get the same treatment (`Timezone`, `Allowed days`,
+start/end).
+
 ## File Changes
 
 - `app/components/ui/button.tsx` — export `buttonClass`; `Button` uses it.
@@ -88,6 +123,8 @@ type TagSuggestion =
 - `app/components/ui/tag-input.tsx` — new.
 - `app/routes/api-manager.create.tsx` — loader + TagInput for allow/block models.
 - `app/routes/api-manager.$id.tsx` — loader + TagInput for allow/block models.
+- `app/routes/api-manager.create.tsx` + `app/routes/api-manager.$id.tsx` —
+  placeholders for Budget & Quota; edit form also gets Security/Time placeholders.
 
 ## Testing
 
