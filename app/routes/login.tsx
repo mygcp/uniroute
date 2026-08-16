@@ -39,8 +39,8 @@ export default function Login({ loaderData, actionData }: Route.ComponentProps) 
     actionData && "error" in actionData ? String(actionData.error) : null;
 
   return (
-    <main className="flex min-h-screen items-center justify-center bg-muted">
-      <div className="mx-4 w-full max-w-sm rounded-2xl border border-border bg-surface p-6 shadow-sm sm:p-8">
+    <main className="flex min-h-screen items-center justify-center">
+      <div className="mx-4 w-full max-w-sm rounded-2xl border border-glass-border bg-glass p-6 shadow-[0_24px_48px_rgba(0,0,0,0.35),inset_0_1px_0_var(--glass-highlight)] backdrop-blur-md sm:p-8">
         <h1 className="mb-1 text-2xl font-bold text-foreground">UniRoute</h1>
         <p className="mb-6 text-sm text-muted-foreground">
           AI Gateway Admin — sign in with your password.
