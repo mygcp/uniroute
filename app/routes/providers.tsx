@@ -1,5 +1,5 @@
-import { Form, Outlet, redirect, useFetcher, useParams } from "react-router";
-import { useState } from "react";
+import { Form, Link, Outlet, redirect, useFetcher, useParams } from "react-router";
+import { useEffect, useState } from "react";
 import type { Route } from "./+types/providers";
 import { ProviderForm } from "../components/provider-form";
 import {
@@ -101,16 +101,32 @@ function testProvider(providerId: string): Promise<{ connected: number; total: n
   })();
 }
 
-export function loader() {
+export async function loader() {
   const rows = query(
     "SELECT id, name, base_url, auth_type, is_active, weight, priority, current_connections, last_used_at FROM providers ORDER BY is_active DESC, id",
   ).all() as unknown as ProviderRow[];
   const keyRows = query(
-    "SELECT provider_id, COUNT(*) AS c FROM provider_credentials WHERE is_active = 1 GROUP BY provider_id",
+    "SELECT provider_id, COUNT(*) as c FROM provider_credentials WHERE is_active = 1 GROUP BY provider_id",
   ).all() as unknown as KeyCountRow[];
   const keyCounts: Record<string, number> = {};
   for (const r of keyRows) keyCounts[r.provider_id] = Number(r.c);
   return { providers: rows, keyCounts };
+}
+
+function runAllTests(rows: ProviderRow[], keyCounts: Record<string, number>) {
+  return Promise.all(
+    rows.map(async (p) => {
+      if (keyCounts[p.id] === 0) return null;
+      const result = await testProvider(p.id);
+      return [p.id, result] as const;
+    }),
+  ).then((results) => {
+    const initialTestResults: Record<string, { connected: number; total: number }> = {};
+    for (const r of results) {
+      if (r) initialTestResults[r[0]] = r[1];
+    }
+    return initialTestResults;
+  });
 }
 
 export async function action({ request }: Route.ActionArgs) {
@@ -121,6 +137,19 @@ export async function action({ request }: Route.ActionArgs) {
     const id = String(form.get("id"));
     const result = await testProvider(id);
     return { test: { id, ...result } };
+  }
+
+  if (intent === "test-all") {
+    const rows = query(
+      "SELECT id, name, base_url, auth_type, is_active, weight, priority, current_connections, last_used_at FROM providers ORDER BY is_active DESC, id",
+    ).all() as unknown as ProviderRow[];
+    const keyRows = query(
+      "SELECT provider_id, COUNT(*) as c FROM provider_credentials WHERE is_active = 1 GROUP BY provider_id",
+    ).all() as unknown as KeyCountRow[];
+    const keyCounts: Record<string, number> = {};
+    for (const r of keyRows) keyCounts[r.provider_id] = Number(r.c);
+    const initialTestResults = await runAllTests(rows, keyCounts);
+    return { testAll: initialTestResults };
   }
 
   if (intent === "toggle") {
@@ -182,6 +211,16 @@ export default function Providers({ loaderData }: Route.ComponentProps) {
   const fetcher = useFetcher<{ test?: { id: string; connected: number } }>();
   const testResult = fetcher.data?.test;
   const testing = fetcher.state === "submitting";
+  const allFetcher = useFetcher<{ testAll?: Record<string, { connected: number; total: number }> }>();
+
+  // Run the (non-blocking) connection tests after the page renders so the
+  // route loads instantly; statuses fill in as each test completes.
+  useEffect(() => {
+    const form = new FormData();
+    form.set("intent", "test-all");
+    allFetcher.submit(form, { method: "post" });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   if (id) {
     return <Outlet />;
@@ -231,10 +270,10 @@ export default function Providers({ loaderData }: Route.ComponentProps) {
             className={p.is_active ? "transition-colors" : "opacity-80 transition-colors"}
           >
             <div className="flex items-start justify-between gap-3">
-              <a href={`/providers/${p.id}`} className="block min-w-0">
+              <Link to={`/providers/${p.id}`} prefetch="intent" className="block min-w-0">
                 <p className="font-semibold text-foreground">{p.name}</p>
                 <p className="text-xs text-muted-foreground">{p.id}</p>
-              </a>
+              </Link>
               <div className="flex shrink-0 items-center gap-2">
                 <span className="text-xs text-muted-foreground">{p.is_active ? "ON" : "OFF"}</span>
                 <Toggle
@@ -248,22 +287,25 @@ export default function Providers({ loaderData }: Route.ComponentProps) {
                 <AuthBadge auth={p.auth_type} />
               </div>
             </div>
-            <a
-              href={`/providers/${p.id}`}
+            <Link
+              to={`/providers/${p.id}`}
+              prefetch="intent"
               className="mt-2 block truncate text-xs text-muted-foreground"
             >
               {p.base_url}
-            </a>
+            </Link>
             <Form id={`toggle-${p.id}`} method="post" className="hidden">
               <input type="hidden" name="intent" value="toggle" />
               <input type="hidden" name="id" value={p.id} />
               <input type="hidden" name="is_active" value={p.is_active} />
             </Form>
+            
             <ProviderStatusCard
               providerId={p.id}
-              keyCount={keyCounts[p.id] ?? 0}
+              keyCount={keyCounts[p.id] || 0}
               result={testResult && testResult.id === p.id ? testResult : undefined}
-              testing={testing}
+              initialResult={allFetcher.data?.testAll?.[p.id]}
+              testing={testing || allFetcher.state === "submitting"}
               fetcher={fetcher}
             />
           </Card>
@@ -277,12 +319,14 @@ function ProviderStatusCard({
   providerId,
   keyCount,
   result,
+  initialResult,
   testing,
   fetcher,
 }: {
   providerId: string;
   keyCount: number;
   result?: { id: string; connected: number };
+  initialResult?: { connected: number; total: number };
   testing: boolean;
   fetcher: ReturnType<typeof useFetcher>;
 }) {
@@ -296,6 +340,14 @@ function ProviderStatusCard({
   } else if (result) {
     if (result.connected > 0) {
       statusText = `${result.connected} Connected`;
+      statusClass = "text-success";
+    } else {
+      statusText = "Error";
+      statusClass = "text-danger";
+    }
+  } else if (initialResult){
+    if (initialResult.connected > 0){
+      statusText = `${initialResult.connected} Connected`;
       statusClass = "text-success";
     } else {
       statusText = "Error";

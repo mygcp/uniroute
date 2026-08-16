@@ -180,38 +180,6 @@ body {
   animation: page-in 0.18s ease-out;
 }
 
-/* View Transitions for client-side page navigation */
-.view-transition-page {
-  view-transition-name: page;
-}
-
-@keyframes vt-page-in {
-  from {
-    opacity: 0;
-    transform: translateY(6px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-@keyframes vt-page-out {
-  from {
-    opacity: 1;
-  }
-  to {
-    opacity: 0;
-  }
-}
-
-::view-transition-old(page) {
-  animation: vt-page-out 150ms ease-out;
-}
-::view-transition-new(page) {
-  animation: vt-page-in 150ms ease-out;
-}
-
 /* Skeleton shimmer (compositor-friendly: background-position only) */
 @keyframes shimmer {
   from {
@@ -296,9 +264,5 @@ body {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
-  }
-  ::view-transition-old(page),
-  ::view-transition-new(page) {
-    animation: none !important;
   }
 }

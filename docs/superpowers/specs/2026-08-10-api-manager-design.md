@@ -13,7 +13,7 @@ health check, templates, groups (shared quota), bulk operations, dan webhook eve
 ## Keputusan Kunci
 
 | Area | Keputusan |
-|---|---|
+| --- | --- |
 | Penyimpanan key | AES-256-GCM via `API_KEY_SECRET`; `key_hash` dipertahankan sebagai index lookup. Reveal di UI dikontrol `ALLOW_API_KEY_REVEAL` |
 | Permukaan manajemen | Dashboard-only (session cookie). Tidak ada REST API manajemen publik `/api/keys/*`. `scopes` disimpan tapi tidak diberlakukan |
 | Sumber biaya | Tabel harga statis bawaan (USD per 1M token) + tabel `model_pricing` untuk override admin |
@@ -185,7 +185,7 @@ jika belum terkirim; jika `auto_block` dan budget habis → suspend.
 ## Fitur → Implementasi
 
 | Konsep | Implementasi |
-|---|---|
+| --- | --- |
 | Dashboard page + stat cards + table + copy | `/api-manager` |
 | Create/Delete/Edit key | form create + row actions |
 | Usage stats per key | agregasi `key_usage_daily` |

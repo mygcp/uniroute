@@ -9,7 +9,7 @@ export function Header({ onMenuClick }: { onMenuClick?: () => void }) {
   const { theme, toggle } = useTheme();
 
   return (
-    <header className="sticky top-0 z-40 flex items-center justify-between border-b border-glass-border bg-background/60 px-3 py-3 shadow-[inset_0_1px_0_var(--glass-highlight)] backdrop-blur sm:px-4 md:px-6">
+    <header className="sticky top-0 z-40 flex items-center justify-between overflow-x-clip border-b border-glass-border bg-background/60 px-3 py-3 shadow-[inset_0_1px_0_var(--glass-highlight)] backdrop-blur sm:px-4 md:px-6">
       <Button
         type="button"
         onClick={onMenuClick}

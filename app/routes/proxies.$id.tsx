@@ -61,6 +61,7 @@ export default function ProxyDetail({
 					action={
 						<Link
 							to="/proxies"
+							prefetch="render"
 							className="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-border px-4 text-sm font-medium text-foreground transition-colors hover:bg-muted"
 						>
 							Back to proxies
@@ -78,6 +79,7 @@ export default function ProxyDetail({
 				actions={
 					<Link
 						to="/proxies"
+						prefetch="render"
 						className="inline-flex h-8 items-center justify-center rounded-lg px-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
 					>
 						Back

@@ -5,5 +5,5 @@ import { Outlet } from "react-router";
  * create/detail/templates/groups/export dirender via <Outlet/>.
  */
 export default function ApiManagerLayout() {
-  return <Outlet />;
+	return <Outlet />;
 }

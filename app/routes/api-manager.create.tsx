@@ -2,389 +2,568 @@ import { Form } from "react-router";
 import { useEffect, useRef, type ReactNode } from "react";
 import type { Route } from "./+types/api-manager.create";
 import { KeyRound } from "lucide-react";
-import { createClientKey, type CreateClientKeyInput } from "../.server/client-key";
+import {
+	createClientKey,
+	type CreateClientKeyInput,
+} from "../.server/client-key";
 import { enqueueWebhook } from "../.server/webhook";
-import { getModelSuggestions, getProviderSuggestions } from "../.server/suggest";
+import {
+	getModelSuggestions,
+	getProviderSuggestions,
+} from "../.server/suggest";
 import { listTemplates, type KeyTemplate } from "../.server/key-templates";
 import { PageHeader } from "../components/ui/page-header";
 import { Card } from "../components/ui/card";
 import { Button } from "../components/ui/button";
-import { Input, Label, Select, Checkbox, Textarea } from "../components/ui/field";
+import {
+	Input,
+	Label,
+	Select,
+	Checkbox,
+	Textarea,
+} from "../components/ui/field";
 import { CopyButton } from "../components/ui/copy-button";
 
 export function loader() {
-  return {
-    modelSuggestions: getModelSuggestions(),
-    providerSuggestions: getProviderSuggestions(),
-    templates: listTemplates().map((t) => ({ id: t.id, name: t.name, description: t.description, config: t.config })),
-  };
+	return {
+		modelSuggestions: getModelSuggestions(),
+		providerSuggestions: getProviderSuggestions(),
+		templates: listTemplates().map((t) => ({
+			id: t.id,
+			name: t.name,
+			description: t.description,
+			config: t.config,
+		})),
+	};
 }
 
 export async function action({ request }: Route.ActionArgs) {
-  const form = await request.formData();
-  const parseList = (name: string): string[] | null => {
-    const raw = String(form.get(name) ?? "").trim();
-    if (!raw) return null;
-    const items = raw
-      .split(/[\n,]+/)
-      .map((s) => s.trim())
-      .filter(Boolean);
-    return items.length > 0 ? items : null;
-  };
-  const num = (name: string): number | undefined => {
-    const raw = String(form.get(name) ?? "").trim();
-    if (!raw) return undefined;
-    const n = Number(raw);
-    return Number.isFinite(n) ? n : undefined;
-  };
-  const date = (name: string): number | undefined => {
-    const raw = String(form.get(name) ?? "").trim();
-    if (!raw) return undefined;
-    const t = new Date(raw).getTime();
-    return Number.isFinite(t) ? Math.floor(t / 1000) : undefined;
-  };
+	const form = await request.formData();
+	const parseList = (name: string): string[] | null => {
+		const raw = String(form.get(name) ?? "").trim();
+		if (!raw) return null;
+		const items = raw
+			.split(/[\n,]+/)
+			.map((s) => s.trim())
+			.filter(Boolean);
+		return items.length > 0 ? items : null;
+	};
+	const num = (name: string): number | undefined => {
+		const raw = String(form.get(name) ?? "").trim();
+		if (!raw) return undefined;
+		const n = Number(raw);
+		return Number.isFinite(n) ? n : undefined;
+	};
+	const date = (name: string): number | undefined => {
+		const raw = String(form.get(name) ?? "").trim();
+		if (!raw) return undefined;
+		const t = new Date(raw).getTime();
+		return Number.isFinite(t) ? Math.floor(t / 1000) : undefined;
+	};
 
-  const accessHoursEnabled = form.get("access_enabled") === "1";
-  const accessHours =
-    accessHoursEnabled || form.get("access_timezone") || form.get("access_days") || form.get("access_start") || form.get("access_end")
-      ? {
-          enabled: accessHoursEnabled,
-          timezone: String(form.get("access_timezone") ?? "").trim() || undefined,
-          allowed_days: parseList("access_days") ?? undefined,
-          start_time: String(form.get("access_start") ?? "").trim() || undefined,
-          end_time: String(form.get("access_end") ?? "").trim() || undefined,
-        }
-      : undefined;
+	const accessHoursEnabled = form.get("access_enabled") === "1";
+	const accessHours =
+		accessHoursEnabled ||
+		form.get("access_timezone") ||
+		form.get("access_days") ||
+		form.get("access_start") ||
+		form.get("access_end")
+			? {
+					enabled: accessHoursEnabled,
+					timezone:
+						String(form.get("access_timezone") ?? "").trim() || undefined,
+					allowed_days: parseList("access_days") ?? undefined,
+					start_time:
+						String(form.get("access_start") ?? "").trim() || undefined,
+					end_time: String(form.get("access_end") ?? "").trim() || undefined,
+				}
+			: undefined;
 
-  const scopesRaw = parseListUnchecked(form, "scopes");
-  const manageScope = form.get("manage_scope") === "1";
+	const scopesRaw = parseListUnchecked(form, "scopes");
+	const manageScope = form.get("manage_scope") === "1";
 
-  const input: CreateClientKeyInput = {
-    name: String(form.get("name") ?? "").trim() || "Untitled",
-    prefix: String(form.get("prefix") ?? "").trim() || "sk-",
-    description: String(form.get("description") ?? "").trim() || null,
-    allowedModels: parseList("allowed_models"),
-    modelOverride: String(form.get("model_override") ?? "").trim() || null,
-    pinnedProviderId: String(form.get("pinned_provider_id") ?? "").trim() || null,
-    blockedModels: parseList("blocked_models"),
-    allowedProviders: parseList("allowed_providers"),
-    blockedProviders: parseList("blocked_providers"),
-    budget: {
-      monthly: num("budget_monthly"),
-      daily: num("budget_daily"),
-      per_request: num("budget_per_request"),
-    },
-    quota: {
-      tokens_per_month: num("quota_tokens"),
-      requests_per_day: num("quota_req_day"),
-      concurrent_requests: num("quota_concurrent"),
-      rpm: num("quota_rpm"),
-      tpm: num("quota_tpm"),
-    },
-    alertThreshold: num("alert_threshold"),
-    autoBlock: form.get("auto_block") === "1",
-    ipWhitelist: parseList("ip_whitelist"),
-    ipBlacklist: parseList("ip_blacklist"),
-    strictIp: form.get("strict_ip") === "1",
-    accessHours,
-    expiresAt: date("expires_at"),
-    rotationIntervalDays: num("rotation_interval_days"),
-    gracePeriodDays: num("grace_period_days"),
-    webhookUrl: String(form.get("webhook_url") ?? "").trim() || null,
-    scopes:
-      manageScope && !scopesRaw.includes("manage")
-        ? [...scopesRaw, "manage"]
-        : scopesRaw.length > 0
-          ? scopesRaw
-          : manageScope
-            ? ["manage"]
-            : null,
-  };
+	const input: CreateClientKeyInput = {
+		name: String(form.get("name") ?? "").trim() || "Untitled",
+		prefix: String(form.get("prefix") ?? "").trim() || "sk-",
+		description: String(form.get("description") ?? "").trim() || null,
+		allowedModels: parseList("allowed_models"),
+		modelOverride: String(form.get("model_override") ?? "").trim() || null,
+		pinnedProviderId:
+			String(form.get("pinned_provider_id") ?? "").trim() || null,
+		blockedModels: parseList("blocked_models"),
+		allowedProviders: parseList("allowed_providers"),
+		blockedProviders: parseList("blocked_providers"),
+		budget: {
+			monthly: num("budget_monthly"),
+			daily: num("budget_daily"),
+			per_request: num("budget_per_request"),
+		},
+		quota: {
+			tokens_per_month: num("quota_tokens"),
+			requests_per_day: num("quota_req_day"),
+			concurrent_requests: num("quota_concurrent"),
+			rpm: num("quota_rpm"),
+			tpm: num("quota_tpm"),
+		},
+		alertThreshold: num("alert_threshold"),
+		autoBlock: form.get("auto_block") === "1",
+		ipWhitelist: parseList("ip_whitelist"),
+		ipBlacklist: parseList("ip_blacklist"),
+		strictIp: form.get("strict_ip") === "1",
+		accessHours,
+		expiresAt: date("expires_at"),
+		rotationIntervalDays: num("rotation_interval_days"),
+		gracePeriodDays: num("grace_period_days"),
+		webhookUrl: String(form.get("webhook_url") ?? "").trim() || null,
+		scopes:
+			manageScope && !scopesRaw.includes("manage")
+				? [...scopesRaw, "manage"]
+				: scopesRaw.length > 0
+					? scopesRaw
+					: manageScope
+						? ["manage"]
+						: null,
+	};
 
-  const { key, id } = createClientKey(input);
-  if (input.webhookUrl) {
-    enqueueWebhook({
-      keyId: id,
-      event: "created",
-      url: input.webhookUrl,
-      payload: { event: "created", key_id: id, key_prefix: input.prefix ?? "sk-", at: Date.now() },
-    });
-  }
-  return { newlyCreatedKey: key, id, name: input.name };
+	const { key, id } = createClientKey(input);
+	if (input.webhookUrl) {
+		enqueueWebhook({
+			keyId: id,
+			event: "created",
+			url: input.webhookUrl,
+			payload: {
+				event: "created",
+				key_id: id,
+				key_prefix: input.prefix ?? "sk-",
+				at: Date.now(),
+			},
+		});
+	}
+	return { newlyCreatedKey: key, id, name: input.name };
 }
 
 function parseListUnchecked(form: FormData, name: string): string[] {
-  const raw = String(form.get(name) ?? "").trim();
-  if (!raw) return [];
-  return raw
-    .split(/[\n,]+/)
-    .map((s) => s.trim())
-    .filter(Boolean);
+	const raw = String(form.get(name) ?? "").trim();
+	if (!raw) return [];
+	return raw
+		.split(/[\n,]+/)
+		.map((s) => s.trim())
+		.filter(Boolean);
 }
 
 function Section({ title, children }: { title: string; children: ReactNode }) {
-  return (
-    <Card>
-      <h2 className="mb-3 text-sm font-semibold text-foreground">{title}</h2>
-      {children}
-    </Card>
-  );
+	return (
+		<Card>
+			<h2 className="mb-3 text-sm font-semibold text-foreground">{title}</h2>
+			{children}
+		</Card>
+	);
 }
 
-export default function CreateKey({ loaderData, actionData }: Route.ComponentProps) {
-  const { modelSuggestions, providerSuggestions, templates } = loaderData;
-  const formRef = useRef<HTMLFormElement>(null);
-  const created = actionData as { newlyCreatedKey?: string; name?: string } | undefined;
+export default function CreateKey({
+	loaderData,
+	actionData,
+}: Route.ComponentProps) {
+	const { modelSuggestions, providerSuggestions, templates } = loaderData;
+	const formRef = useRef<HTMLFormElement>(null);
+	const created = actionData as
+		| { newlyCreatedKey?: string; name?: string }
+		| undefined;
 
-  useEffect(() => {
-    if (created?.newlyCreatedKey) {
-      formRef.current?.reset();
-    }
-  }, [created?.newlyCreatedKey]);
+	useEffect(() => {
+		if (created?.newlyCreatedKey) {
+			formRef.current?.reset();
+		}
+	}, [created?.newlyCreatedKey]);
 
-  const applyTemplate = (template: KeyTemplate["config"]) => {
-    const el = formRef.current;
-    if (!el) return;
-    const set = (name: string, value: string | undefined) => {
-      const field = el.elements.namedItem(name) as HTMLInputElement | HTMLTextAreaElement | null;
-      if (field && value != null) field.value = value;
-    };
-    set("name", template.name);
-    set("description", template.description ?? "");
-    set("allowed_models", template.allowedModels?.join(", ") ?? "");
-    set("budget_monthly", template.budget?.monthly != null ? String(template.budget.monthly) : "");
-    set("budget_daily", template.budget?.daily != null ? String(template.budget.daily) : "");
-    set("budget_per_request", template.budget?.per_request != null ? String(template.budget.per_request) : "");
-    set("quota_tokens", template.quota?.tokens_per_month != null ? String(template.quota.tokens_per_month) : "");
-    set("quota_req_day", template.quota?.requests_per_day != null ? String(template.quota.requests_per_day) : "");
-    set("quota_concurrent", template.quota?.concurrent_requests != null ? String(template.quota.concurrent_requests) : "");
-    set("quota_rpm", template.quota?.rpm != null ? String(template.quota.rpm) : "");
-    set("quota_tpm", template.quota?.tpm != null ? String(template.quota.tpm) : "");
-    set("ip_whitelist", template.ipWhitelist?.join(", ") ?? "");
-    set("ip_blacklist", template.ipBlacklist?.join(", ") ?? "");
-    set("webhook_url", template.webhookUrl ?? "");
-    set("allowed_providers", template.allowedProviders?.join(", ") ?? "");
-    set("blocked_providers", template.blockedProviders?.join(", ") ?? "");
-    set("blocked_models", template.blockedModels?.join(", ") ?? "");
-  };
+	const applyTemplate = (template: KeyTemplate["config"]) => {
+		const el = formRef.current;
+		if (!el) return;
+		const set = (name: string, value: string | undefined) => {
+			const field = el.elements.namedItem(name) as
+				| HTMLInputElement
+				| HTMLTextAreaElement
+				| null;
+			if (field && value != null) field.value = value;
+		};
+		set("name", template.name);
+		set("description", template.description ?? "");
+		set("allowed_models", template.allowedModels?.join(", ") ?? "");
+		set(
+			"budget_monthly",
+			template.budget?.monthly != null ? String(template.budget.monthly) : "",
+		);
+		set(
+			"budget_daily",
+			template.budget?.daily != null ? String(template.budget.daily) : "",
+		);
+		set(
+			"budget_per_request",
+			template.budget?.per_request != null
+				? String(template.budget.per_request)
+				: "",
+		);
+		set(
+			"quota_tokens",
+			template.quota?.tokens_per_month != null
+				? String(template.quota.tokens_per_month)
+				: "",
+		);
+		set(
+			"quota_req_day",
+			template.quota?.requests_per_day != null
+				? String(template.quota.requests_per_day)
+				: "",
+		);
+		set(
+			"quota_concurrent",
+			template.quota?.concurrent_requests != null
+				? String(template.quota.concurrent_requests)
+				: "",
+		);
+		set(
+			"quota_rpm",
+			template.quota?.rpm != null ? String(template.quota.rpm) : "",
+		);
+		set(
+			"quota_tpm",
+			template.quota?.tpm != null ? String(template.quota.tpm) : "",
+		);
+		set("ip_whitelist", template.ipWhitelist?.join(", ") ?? "");
+		set("ip_blacklist", template.ipBlacklist?.join(", ") ?? "");
+		set("webhook_url", template.webhookUrl ?? "");
+		set("allowed_providers", template.allowedProviders?.join(", ") ?? "");
+		set("blocked_providers", template.blockedProviders?.join(", ") ?? "");
+		set("blocked_models", template.blockedModels?.join(", ") ?? "");
+	};
 
-  return (
-    <div className="mx-auto max-w-3xl">
-      <PageHeader
-        title="Create New API Key"
-        icon={<KeyRound size={20} />}
-        subtitle="Generate a key with budgets, quotas, and access controls."
-      />
+	return (
+		<div className="mx-auto max-w-3xl">
+			<PageHeader
+				title="Create New API Key"
+				icon={<KeyRound size={20} />}
+				subtitle="Generate a key with budgets, quotas, and access controls."
+			/>
 
-      {created?.newlyCreatedKey ? (
-        <div className="mb-6 rounded-lg border border-warning/30 bg-warning/10 p-4 text-sm">
-          <p className="font-semibold text-foreground">
-            Key created — copy it now, it won't be shown again.
-          </p>
-          <div className="mt-2 flex items-start gap-2">
-            <code className="break-all rounded bg-surface-2 px-3 py-2 font-mono text-xs text-foreground">
-              {created.newlyCreatedKey}
-            </code>
-            <CopyButton text={created.newlyCreatedKey} label="Copy" />
-          </div>
-        </div>
-      ) : null}
+			{created?.newlyCreatedKey ? (
+				<div className="mb-6 rounded-lg border border-warning/30 bg-warning/10 p-4 text-sm">
+					<p className="font-semibold text-foreground">
+						Key created — copy it now, it won't be shown again.
+					</p>
+					<div className="mt-2 flex items-start gap-2">
+						<code className="break-all rounded bg-surface-2 px-3 py-2 font-mono text-xs text-foreground">
+							{created.newlyCreatedKey}
+						</code>
+						<CopyButton text={created.newlyCreatedKey} label="Copy" />
+					</div>
+				</div>
+			) : null}
 
-      <div className="mb-4 flex items-end gap-3">
-        <div className="flex-1">
-          <Label htmlFor="template-select">Create from Template:</Label>
-          <Select
-            id="template-select"
-            onChange={(e) => {
-              const t = templates.find((x) => x.id === Number(e.target.value));
-              if (t) applyTemplate(t.config);
-            }}
-          >
-            <option value="">— none —</option>
-            {templates.map((t) => (
-              <option key={t.id} value={t.id}>
-                {t.name}
-              </option>
-            ))}
-          </Select>
-        </div>
-      </div>
+			<div className="mb-4 flex items-end gap-3">
+				<div className="flex-1">
+					<Label htmlFor="template-select">Create from Template:</Label>
+					<Select
+						id="template-select"
+						onChange={(e) => {
+							const t = templates.find((x) => x.id === Number(e.target.value));
+							if (t) applyTemplate(t.config);
+						}}
+					>
+						<option value="">— none —</option>
+						{templates.map((t) => (
+							<option key={t.id} value={t.id}>
+								{t.name}
+							</option>
+						))}
+					</Select>
+				</div>
+			</div>
 
-      <Form
-        ref={formRef}
-        method="post"
-        className="space-y-4"
-      >
-        <Section title="Information">
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <div>
-              <Label htmlFor="name">Key Name</Label>
-              <Input id="name" name="name" required placeholder="e.g. production-client" autoComplete="off" />
-            </div>
-            <div>
-              <Label htmlFor="description">Description</Label>
-              <Input id="description" name="description" placeholder="Optional" autoComplete="off" />
-            </div>
-            <div>
-              <Label htmlFor="prefix">Prefix</Label>
-              <Input id="prefix" name="prefix" defaultValue="sk-" autoComplete="off" />
-            </div>
-          </div>
-        </Section>
+			<Form ref={formRef} method="post" className="space-y-4">
+				<Section title="Information">
+					<div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+						<div>
+							<Label htmlFor="name">Key Name</Label>
+							<Input
+								id="name"
+								name="name"
+								required
+								placeholder="e.g. production-client"
+								autoComplete="off"
+							/>
+						</div>
+						<div>
+							<Label htmlFor="description">Description</Label>
+							<Input
+								id="description"
+								name="description"
+								placeholder="Optional"
+								autoComplete="off"
+							/>
+						</div>
+						<div>
+							<Label htmlFor="prefix">Prefix</Label>
+							<Input
+								id="prefix"
+								name="prefix"
+								defaultValue="sk-"
+								autoComplete="off"
+							/>
+						</div>
+					</div>
+				</Section>
 
-        <Section title="Permissions">
-          <div className="flex flex-wrap gap-4 text-sm">
-            {[
-              ["chat", "Chat Completions", true],
-              ["embeddings", "Embeddings"],
-              ["image", "Image Generation"],
-              ["audio", "Audio Transcription"],
-              ["rerank", "Reranking"],
-            ].map(([id, label]) => (
-              <label key={id as string} className="flex items-center gap-2">
-                <Checkbox name="scopes" value={id as string} defaultChecked={Boolean(label === "Chat Completions")} />
-                {label}
-              </label>
-            ))}
-          </div>
-          <label className="mt-3 flex items-center gap-2 text-sm">
-            <Checkbox name="manage_scope" value="1" />
-            Management API Access (manage scope)
-          </label>
-        </Section>
+				<Section title="Permissions">
+					<div className="flex flex-wrap gap-4 text-sm">
+						{[
+							["chat", "Chat Completions", true],
+							["embeddings", "Embeddings"],
+							["image", "Image Generation"],
+							["audio", "Audio Transcription"],
+							["rerank", "Reranking"],
+						].map(([id, label]) => (
+							<label key={id as string} className="flex items-center gap-2">
+								<Checkbox
+									name="scopes"
+									value={id as string}
+									defaultChecked={Boolean(label === "Chat Completions")}
+								/>
+								{label}
+							</label>
+						))}
+					</div>
+					<label className="mt-3 flex items-center gap-2 text-sm">
+						<Checkbox name="manage_scope" value="1" />
+						Management API Access (manage scope)
+					</label>
+				</Section>
 
-        <Section title="Model Access">
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <div>
-              <Label htmlFor="allowed_models">Allowed Models (empty = all)</Label>
-              <Textarea id="allowed_models" name="allowed_models" rows={3} placeholder="gpt-4o, claude-3.5, gemini-1.5-pro" />
-            </div>
-            <div>
-              <Label htmlFor="blocked_models">Blocked Models</Label>
-              <Textarea id="blocked_models" name="blocked_models" rows={3} placeholder="gpt-4o-mini, llama-3-8b" />
-            </div>
-            <div>
-              <Label htmlFor="allowed_providers">Allowed Providers (empty = all)</Label>
-              <Input id="allowed_providers" name="allowed_providers" placeholder="openai, anthropic" autoComplete="off" />
-            </div>
-            <div>
-              <Label htmlFor="blocked_providers">Blocked Providers</Label>
-              <Input id="blocked_providers" name="blocked_providers" placeholder="deepseek" autoComplete="off" />
-            </div>
-            <div>
-              <Label htmlFor="model_override">Model Override (advanced)</Label>
-              <Input id="model_override" name="model_override" list="model-suggestions" placeholder="e.g. gpt-4o-mini" autoComplete="off" />
-            </div>
-            <div>
-              <Label htmlFor="pinned_provider_id">Pinned Provider (advanced)</Label>
-              <Input id="pinned_provider_id" name="pinned_provider_id" list="provider-suggestions" placeholder="e.g. openai" autoComplete="off" />
-            </div>
-          </div>
-          <datalist id="model-suggestions">
-            {modelSuggestions.map((m) => (
-              <option key={m} value={m} />
-            ))}
-          </datalist>
-          <datalist id="provider-suggestions">
-            {providerSuggestions.map((p) => (
-              <option key={p} value={p} />
-            ))}
-          </datalist>
-        </Section>
+				<Section title="Model Access">
+					<div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+						<div>
+							<Label htmlFor="allowed_models">
+								Allowed Models (empty = all)
+							</Label>
+							<Textarea
+								id="allowed_models"
+								name="allowed_models"
+								rows={3}
+								placeholder="gpt-4o, claude-3.5, gemini-1.5-pro"
+							/>
+						</div>
+						<div>
+							<Label htmlFor="blocked_models">Blocked Models</Label>
+							<Textarea
+								id="blocked_models"
+								name="blocked_models"
+								rows={3}
+								placeholder="gpt-4o-mini, llama-3-8b"
+							/>
+						</div>
+						<div>
+							<Label htmlFor="allowed_providers">
+								Allowed Providers (empty = all)
+							</Label>
+							<Input
+								id="allowed_providers"
+								name="allowed_providers"
+								placeholder="openai, anthropic"
+								autoComplete="off"
+							/>
+						</div>
+						<div>
+							<Label htmlFor="blocked_providers">Blocked Providers</Label>
+							<Input
+								id="blocked_providers"
+								name="blocked_providers"
+								placeholder="deepseek"
+								autoComplete="off"
+							/>
+						</div>
+						<div>
+							<Label htmlFor="model_override">Model Override (advanced)</Label>
+							<Input
+								id="model_override"
+								name="model_override"
+								list="model-suggestions"
+								placeholder="e.g. gpt-4o-mini"
+								autoComplete="off"
+							/>
+						</div>
+						<div>
+							<Label htmlFor="pinned_provider_id">
+								Pinned Provider (advanced)
+							</Label>
+							<Input
+								id="pinned_provider_id"
+								name="pinned_provider_id"
+								list="provider-suggestions"
+								placeholder="e.g. openai"
+								autoComplete="off"
+							/>
+						</div>
+					</div>
+					<datalist id="model-suggestions">
+						{modelSuggestions.map((m) => (
+							<option key={m} value={m} />
+						))}
+					</datalist>
+					<datalist id="provider-suggestions">
+						{providerSuggestions.map((p) => (
+							<option key={p} value={p} />
+						))}
+					</datalist>
+				</Section>
 
-        <Section title="Budget & Quota">
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-            {[
-              ["budget_monthly", "Monthly Budget (USD)"],
-              ["budget_daily", "Daily Budget (USD)"],
-              ["budget_per_request", "Per-request (USD)"],
-              ["quota_tokens", "Tokens/Month"],
-              ["quota_req_day", "Requests/Day"],
-              ["quota_concurrent", "Concurrent"],
-              ["quota_rpm", "Requests/Min"],
-              ["quota_tpm", "Tokens/Min"],
-              ["alert_threshold", "Alert at (0..1)"],
-            ].map(([name, label]) => (
-              <div key={name as string}>
-                <Label htmlFor={name as string}>{label}</Label>
-                <Input id={name as string} name={name} type="number" step="any" autoComplete="off" />
-              </div>
-            ))}
-          </div>
-          <label className="mt-3 flex items-center gap-2 text-sm">
-            <Checkbox name="auto_block" value="1" defaultChecked />
-            Auto-block when budget exceeded
-          </label>
-        </Section>
+				<Section title="Budget & Quota">
+					<div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+						{[
+							["budget_monthly", "Monthly Budget (USD)"],
+							["budget_daily", "Daily Budget (USD)"],
+							["budget_per_request", "Per-request (USD)"],
+							["quota_tokens", "Tokens/Month"],
+							["quota_req_day", "Requests/Day"],
+							["quota_concurrent", "Concurrent"],
+							["quota_rpm", "Requests/Min"],
+							["quota_tpm", "Tokens/Min"],
+							["alert_threshold", "Alert at (0..1)"],
+						].map(([name, label]) => (
+							<div key={name as string}>
+								<Label htmlFor={name as string}>{label}</Label>
+								<Input
+									id={name as string}
+									name={name}
+									type="number"
+									step="any"
+									autoComplete="off"
+								/>
+							</div>
+						))}
+					</div>
+					<label className="mt-3 flex items-center gap-2 text-sm">
+						<Checkbox name="auto_block" value="1" defaultChecked />
+						Auto-block when budget exceeded
+					</label>
+				</Section>
 
-        <Section title="Security">
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <div>
-              <Label htmlFor="expires_at">Expires</Label>
-              <Input id="expires_at" name="expires_at" type="date" />
-            </div>
-            <div>
-              <Label htmlFor="rotation_interval_days">Rotation interval (days)</Label>
-              <Input id="rotation_interval_days" name="rotation_interval_days" type="number" placeholder="e.g. 30" autoComplete="off" />
-            </div>
-            <div>
-              <Label htmlFor="grace_period_days">Grace period (days)</Label>
-              <Input id="grace_period_days" name="grace_period_days" type="number" placeholder="e.g. 7" autoComplete="off" />
-            </div>
-            <div>
-              <Label htmlFor="webhook_url">Webhook URL</Label>
-              <Input id="webhook_url" name="webhook_url" type="url" placeholder="https://my-app.com/webhook" autoComplete="off" />
-            </div>
-            <div>
-              <Label htmlFor="ip_whitelist">IP Whitelist (CIDR / IP)</Label>
-              <Input id="ip_whitelist" name="ip_whitelist" placeholder="192.168.1.0/24, 10.0.0.1" autoComplete="off" />
-            </div>
-            <div>
-              <Label htmlFor="ip_blacklist">IP Blacklist</Label>
-              <Input id="ip_blacklist" name="ip_blacklist" placeholder="203.0.113.0/24" autoComplete="off" />
-            </div>
-          </div>
-          <label className="mt-3 flex items-center gap-2 text-sm">
-            <Checkbox name="strict_ip" value="1" />
-            Strict IP — only whitelisted IPs may access
-          </label>
-        </Section>
+				<Section title="Security">
+					<div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+						<div>
+							<Label htmlFor="expires_at">Expires</Label>
+							<Input id="expires_at" name="expires_at" type="date" />
+						</div>
+						<div>
+							<Label htmlFor="rotation_interval_days">
+								Rotation interval (days)
+							</Label>
+							<Input
+								id="rotation_interval_days"
+								name="rotation_interval_days"
+								type="number"
+								placeholder="e.g. 30"
+								autoComplete="off"
+							/>
+						</div>
+						<div>
+							<Label htmlFor="grace_period_days">Grace period (days)</Label>
+							<Input
+								id="grace_period_days"
+								name="grace_period_days"
+								type="number"
+								placeholder="e.g. 7"
+								autoComplete="off"
+							/>
+						</div>
+						<div>
+							<Label htmlFor="webhook_url">Webhook URL</Label>
+							<Input
+								id="webhook_url"
+								name="webhook_url"
+								type="url"
+								placeholder="https://my-app.com/webhook"
+								autoComplete="off"
+							/>
+						</div>
+						<div>
+							<Label htmlFor="ip_whitelist">IP Whitelist (CIDR / IP)</Label>
+							<Input
+								id="ip_whitelist"
+								name="ip_whitelist"
+								placeholder="192.168.1.0/24, 10.0.0.1"
+								autoComplete="off"
+							/>
+						</div>
+						<div>
+							<Label htmlFor="ip_blacklist">IP Blacklist</Label>
+							<Input
+								id="ip_blacklist"
+								name="ip_blacklist"
+								placeholder="203.0.113.0/24"
+								autoComplete="off"
+							/>
+						</div>
+					</div>
+					<label className="mt-3 flex items-center gap-2 text-sm">
+						<Checkbox name="strict_ip" value="1" />
+						Strict IP — only whitelisted IPs may access
+					</label>
+				</Section>
 
-        <Section title="Time-Based Access">
-          <label className="mb-2 flex items-center gap-2 text-sm">
-            <Checkbox name="access_enabled" value="1" defaultChecked />
-            Enable access hours
-          </label>
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-            <div>
-              <Label htmlFor="access_timezone">Timezone</Label>
-              <Input id="access_timezone" name="access_timezone" placeholder="Asia/Jakarta" autoComplete="off" />
-            </div>
-            <div>
-              <Label htmlFor="access_days">Allowed days</Label>
-              <Input id="access_days" name="access_days" placeholder="monday, tuesday,…" autoComplete="off" />
-            </div>
-            <div>
-              <Label htmlFor="access_start">Start (HH:mm)</Label>
-              <Input id="access_start" name="access_start" type="time" defaultValue="08:00" />
-            </div>
-            <div>
-              <Label htmlFor="access_end">End (HH:mm)</Label>
-              <Input id="access_end" name="access_end" type="time" defaultValue="18:00" />
-            </div>
-          </div>
-        </Section>
+				<Section title="Time-Based Access">
+					<label className="mb-2 flex items-center gap-2 text-sm">
+						<Checkbox name="access_enabled" value="1" defaultChecked />
+						Enable access hours
+					</label>
+					<div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+						<div>
+							<Label htmlFor="access_timezone">Timezone</Label>
+							<Input
+								id="access_timezone"
+								name="access_timezone"
+								placeholder="Asia/Jakarta"
+								autoComplete="off"
+							/>
+						</div>
+						<div>
+							<Label htmlFor="access_days">Allowed days</Label>
+							<Input
+								id="access_days"
+								name="access_days"
+								placeholder="monday, tuesday,…"
+								autoComplete="off"
+							/>
+						</div>
+						<div>
+							<Label htmlFor="access_start">Start (HH:mm)</Label>
+							<Input
+								id="access_start"
+								name="access_start"
+								type="time"
+								defaultValue="08:00"
+							/>
+						</div>
+						<div>
+							<Label htmlFor="access_end">End (HH:mm)</Label>
+							<Input
+								id="access_end"
+								name="access_end"
+								type="time"
+								defaultValue="18:00"
+							/>
+						</div>
+					</div>
+				</Section>
 
-        <div className="flex items-center justify-end gap-3">
-          <a
-            href="/api-manager"
-            className="inline-flex items-center rounded-lg border border-border px-4 py-2 text-sm font-medium text-foreground hover:bg-muted"
-          >
-            Cancel
-          </a>
-          <Button type="submit">Create API Key</Button>
-        </div>
-      </Form>
-    </div>
-  );
+				<div className="flex items-center justify-end gap-3">
+					<a
+						href="/api-manager"
+						className="inline-flex items-center rounded-lg border border-border px-4 py-2 text-sm font-medium text-foreground hover:bg-muted"
+					>
+						Cancel
+					</a>
+					<Button type="submit">Create API Key</Button>
+				</div>
+			</Form>
+		</div>
+	);
 }

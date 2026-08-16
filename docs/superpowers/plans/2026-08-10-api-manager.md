@@ -1,4 +1,5 @@
 # UniRoute API Manager Implementation Plan
+>
 > **Untuk agentic workers:** WAJIB sub-skill: superpowers:subagent-driven-development (disarankan) atau superpowers:executing-plans untuk implementasi task-by-task. Steps pakai checkbox (`- [ ]`).
 
 **Goal:** Membangun API Manager lengkap dari spec `docs/superpowers/specs/2026-08-10-api-manager-design.md`: AES key storage, pipeline enforcement (budget/quota, whitelist/blacklist granular model & provider, IP & time access, rate limit, rotation/expiry + grace, auto-block), audit trail, analytics, health check, templates, groups (shared quota), bulk ops, webhook events, dan UI halaman `/api-manager` (+ create/detail/templates/groups) serta filter log by key.
@@ -22,6 +23,7 @@
 ## File Structure
 
 Baru (server):
+
 - `app/.server/key-crypto.ts` — AES-256-GCM encrypt/decrypt + env helpers
 - `app/.server/pricing.ts` — static price map + baca/tulis `model_pricing`
 - `app/.server/rate-limiter.ts` — sliding window RPM/TPM + concurrency counter (in-memory)
@@ -37,6 +39,7 @@ Baru (server):
 - `app/.server/key-groups.ts` — CRUD `key_groups` + `key_group_members` + cek shared quota
 
 Dimodifikasi (server):
+
 - `app/.server/db.ts` — schema (kolom baru, tabel baru, `request_logs.api_key_id`, index)
 - `app/.server/client-key.ts` — tipe `ClientKey` lengkap, create/update semua field, lookup hash + previous hash, parse JSON
 - `app/.server/logger.ts` — dukung `api_key_id` pada RequestLog
@@ -44,6 +47,7 @@ Dimodifikasi (server):
 - `app/.server/auth.test.ts`/reruntut: tidak berubah
 
 Baru (route UI):
+
 - `app/routes/api-manager.tsx` — dashboard (list, stat, bulk, export)
 - `app/routes/api-manager.create.tsx` — form create (+ dari template)
 - `app/routes/api-manager.$id.tsx` — detail + audit + analytics + health
@@ -51,6 +55,7 @@ Baru (route UI):
 - `app/routes/api-manager.groups.tsx` — kelola grup
 
 Dimodifikasi (UI):
+
 - `app/routes/api.tsx` — hapus tab "API Keys" (pindah ke `/api-manager`)
 - `app/routes/logs.requests.tsx` — filter dropdown by API key
 - `app/components/sidebar.tsx` — tambah nav `/api-manager`
@@ -62,6 +67,7 @@ Tests baru: `app/.server/{key-crypto,pricing,rate-limiter,net,time-access,key-us
 ### Phase A — Fondasi: schema, crypto, harga, model
 
 #### Task A1: Migrasi schema di `app/.server/db.ts`
+
 - Tambah kolom-kolom baru pada `CREATE TABLE client_api_keys` (lihat spec section Data Model; gunakan `ALTER TABLE ... ADD COLUMN` idempotent via pragma cek seperti pola migrasi existing untuk `provider_credentials`). Kolom tambahan:
   `description, key_enc, previous_key_hash, previous_key_enc, previous_expires_at, blocked_models, allowed_providers, blocked_providers, budget, quota, alert_threshold, auto_block, blocked_at, ip_whitelist, ip_blacklist, strict_ip, access_hours, expires_at, rotation_interval_days, grace_period_days, webhook_url, scopes`.
 - Buat tabel baru: `key_usage_daily`, `key_audit_logs` (+index `idx_audit_key`), `model_pricing`, `key_templates`, `key_groups`, `key_group_members`, `webhook_events` (SQL per spec).
@@ -71,6 +77,7 @@ Tests baru: `app/.server/{key-crypto,pricing,rate-limiter,net,time-access,key-us
 - **Verify:** `bun test app/.server/db.test.ts` lalu `bun test` (semua existing tetap hijau).
 
 #### Task A2: `app/.server/key-crypto.ts`
+
 - `deriveKey()`: SHA-256 dari `process.env.API_KEY_SECRET`; `hasSecret()`.
 - `encryptKey(raw): string | null` → base64(iv||ciphertext||tag) AES-256-GCM; return `null` bila `!hasSecret()`.
 - `decryptKey(enc: string): string` (throw bila gagal/tidak ada secret).
@@ -79,6 +86,7 @@ Tests baru: `app/.server/{key-crypto,pricing,rate-limiter,net,time-access,key-us
 - **Verify:** `bun test app/.server/key-crypto.test.ts`.
 
 #### Task A3: `app/.server/pricing.ts`
+
 - `STATIC_PRICES: Record<string, { input: number; output: number }>` per model id (USD per 1M token) untuk model populer: gpt-4o (2.5/10), gpt-4o-mini (0.15/0.6), gpt-4-turbo (10/30), gpt-4.1 (2/8), o3-mini (1.1/4.4), claude-3.5 & claude-3-5 variants (~3/15), gemini-1.5-pro (1.25/5), gemini-2.0-flash (0.1/0.4), deepseek-chat (0.27/1.1), mistral-large, llama-3.1-8b (~0.05/0.08), dsb. Nilai mendekati publik; jangan terlalu presisi.
 - `getPrice(model, providerId)` → `{ input, output }`: prioritas row `model_pricing(model, providerId)` (bila ada), lalu `STATIC_PRICES[model]`, lalu `{0,0}`.
 - `setPrice(model, providerId, input, output)`: upsert `model_pricing`.
@@ -87,6 +95,7 @@ Tests baru: `app/.server/{key-crypto,pricing,rate-limiter,net,time-access,key-us
 - **Verify:** `bun test app/.server/pricing.test.ts`.
 
 #### Task A4: Perluas `app/.server/client-key.ts`
+
 - Perluas tipe `ClientKey` + `ClientKeyRow` dengan semua kolom baru; `toClientKey` parse semua JSON kolom (`blocked_models, allowed_providers, blocked_providers, budget, quota, ip_whitelist, ip_blacklist, access_hours`) menjadi array/objek atau `null`, pakai helper `parseJson<T>(s)`.
 - `CreateClientKeyInput` diperluas: description, blockedModels, allowedProviders, blockedProviders, budget, quota, alertThreshold, autoBlock, ipWhitelist, ipBlacklist, strictIp, accessHours, expiresAt, rotationIntervalDays, gracePeriodDays, webhookUrl, scopes, dan `noEncrypt?: boolean` (untuk test / tenant tanpa secret).
 - `createClientKey` set kolom baru; `key_enc = encryptKey(key)` bila tersedia (tetap hash untuk index).
@@ -100,6 +109,7 @@ Tests baru: `app/.server/{key-crypto,pricing,rate-limiter,net,time-access,key-us
 ### Phase B — Helper enforcement (murni, tanpa DB)
 
 #### Task B1: `app/.server/net.ts`
+
 - `ipInCidr(ip, cidr)`: IPv4; dukung IP tunggal (`x.x.x.x/x` atau tanpa slash → /32). Parse pakai bitwise uint32.
 - `ipInList(ip, list: string[])`; `anyIpInList`.
 - Gunakan di enforce: `strict_ip` → harus di whitelist; selainnya → blacklist ditolak.
@@ -107,12 +117,14 @@ Tests baru: `app/.server/{key-crypto,pricing,rate-limiter,net,time-access,key-us
 - **Verify:** `bun test app/.server/net.test.ts`.
 
 #### Task B2: `app/.server/time-access.ts`
+
 - `isWithinAccessHours(accessHours, now = new Date())`: cek `enabled`, hari bay (senin..minggu dari `allowed_days`) dan window `start_time`..`end_time`, semua dalam `timezone` (pakai `Intl.DateTimeFormat` dengan `timeZone`, format token). Jika window lintas tengah malam (start>end) — perlakukan sebagai range membalik (opsional, cukup dukung start<end; jika start≥end, anggap selalu salah kecuali dokumentasi terbatas).
 - Return `{ allowed: boolean; reason?: string }`.
 - **Test** `time-access.test.ts`: fix timezone UTC dengan data fixture; allowed day, wrong day, before/after window, disabled.
 - **Verify:** `bun test app/.server/time-access.test.ts`.
 
 #### Task B3: `app/.server/rate-limiter.ts`
+
 - In-memory sliding window 60 detik: `checkRateLimit({ scope: string, incrementTokens: number, rpm?, tpm? })` → `{ allowed: boolean; limit?: "rpm"|"tpm"; remaining? }`. `scope` = `key-${id}`.
 - Concurrency: `acquireSlot(scope, limit)` → boolean; `releaseSlot(scope)`; refcount map. `currentConcurrent(scope)`.
 - Reset otomatis saat window lewat (map di-prune lazily).
@@ -122,6 +134,7 @@ Tests baru: `app/.server/{key-crypto,pricing,rate-limiter,net,time-access,key-us
 ### Phase C — Usage, audit, webhook (queue SQLite)
 
 #### Task C1: `app/.server/key-usage.ts`
+
 - `recordUsage(keyId, { promptTokens, completionTokens, cost, at? })`: upsert `key_usage_daily(key_id, date)` (+=).
 - `usagePeriod(keyId, fromTs)`: SUM requests/prompt/completion/cost.
 - `usageToday(keyId)`, `usageThisMonth(keyId)` (UTC date dari `Math.floor(now/86400000)` basis created_at? gunakan kalender UTC `toISOString().slice(0,10)` per window; window disimpan per hari UTC).
@@ -130,12 +143,14 @@ Tests baru: `app/.server/{key-crypto,pricing,rate-limiter,net,time-access,key-us
 - **Verify:** `bun test app/.server/key-usage.test.ts`.
 
 #### Task C2: `app/.server/key-audit.ts`
+
 - `logAudit(keyId, action, fields?: { model?, providerId?, status?, tokens?, cost?, ip?, userAgent?, details? })`.
 - `listAudit(keyId, limit=50)`.
 - **Test** `key-audit.test.ts`.
 - **Verify:** `bun test app/.server/key-audit.test.ts`.
 
 #### Task C3: `app/.server/webhook.ts`
+
 - `enqueueWebhook({ keyId, event, url, payload })` → insert `webhook_events` status `pending`.
 - `deliverPending()`: ambil ≤10 pending dengan `next_retry_at<=now`; POST JSON ke `url` (fetch, timeout 5s); sukses → `success`; gagal → `attempts+1`, backoff `30s * 2^attempts`, >5 attempts → `dropped`.
 - `startDeliverer()`: `setInterval(deliverPending, 5000)`; panggil sekali saat app boot (dari `server.ts` atau module side-effect yang aman untuk test — pakai flag `window.setInterval` guard by `process.env.NODE_ENV`/bun test: panggil manual di server, jangan side-effect di module agar test tidak memicu interval).
@@ -145,6 +160,7 @@ Tests baru: `app/.server/{key-crypto,pricing,rate-limiter,net,time-access,key-us
 ### Phase D — Enforcement engine + integrasi pipeline
 
 #### Task D1: `app/.server/key-enforce.ts`
+
 - `computeStatus(key, usage)`: `"expired"` (expires_at<now) | `"suspended"`/`"locked"` (blocked_at != null / is_active=0) | `"near_limit"` (usage ≥ threshold) | `"active"`.
 - `checkIp(key, ip)` → `{ ok }` / `{ ok:false, error }`
 - `checkHours(key, now)` → `{ ok }` / `{ ok:false, error }`
@@ -156,6 +172,7 @@ Tests baru: `app/.server/{key-crypto,pricing,rate-limiter,net,time-access,key-us
 - **Verify:** `bun test app/.server/key-enforce.test.ts`.
 
 #### Task D2: Integrasi `app/.server/proxy-handler.ts`
+
 - `authorize()`: setelah `resolveClientKey` ok, jalankan secara berurutan:
   1. `computeStatus` → expired → 403 `"api key expired"`; suspended/blocked → 401.
   2. IP (`request.headers: cf-connecting-ip || x-forwarded-for || remote`) → 403.
@@ -173,6 +190,7 @@ Tests baru: `app/.server/{key-crypto,pricing,rate-limiter,net,time-access,key-us
 ### Phase E — Lifecycle ops & fitur lanjutan
 
 #### Task E1: `app/.server/key-ops.ts`
+
 - `rotateKey(id, by?)`: generate key baru; simpan `key_hash/key_enc` lama ke `previous_key_hash/previous_key_enc`; set `previous_expires_at = now + grace_period_days` (0 → langsung hapus prev); tulis key baru di row; audit `KEY_ROTATED` (details old/new); webhook `rotated`; return `{ key, id }` baru (tampilkan sekali).
 - `suspendKey(id)`: `blocked_at=now`; audit `KEY_SUSPENDED`; webhook `suspended`.
 - `reactivateKey(id)`: `blocked_at=NULL`; audit `KEY_REACTIVATED`.
@@ -182,22 +200,25 @@ Tests baru: `app/.server/{key-crypto,pricing,rate-limiter,net,time-access,key-us
 - **Verify:** `bun test app/.server/key-ops.test.ts`.
 
 #### Task E2: `app/.server/key-bulk.ts`
+
 - `applyBulk(filter, action, data)`: filter `{ status }` (active/suspended/expired), `created_before`; action: `activate`, `suspend`, `delete`, `rotate`, `extend_expiry`, `set_budget`, `export` (kembalikan array → caller serialize CSV/JSON).
 - Semua action memanggil `key-ops` per item + akumulasi hasil `{ done, failed }`.
 - **Test** `key-bulk.test.ts`.
 - **Verify:** `bun test app/.server/key-bulk.test.ts`.
 
 #### Task E3: `app/.server/key-templates.ts` + `app/.server/key-groups.ts`
+
 - `key-templates.ts`: `listTemplates`, `createTemplate(input)`, `deleteTemplate(id)`, `getTemplate(id)`. `config` JSON berisi sub-bagian field create (allowed_models, budget, quota, ip_*, access_hours, dll).
 - `key-groups.ts`: CRUD group (bulk insert members); `groupsOfKey(keyId)`; `sharedQuotaExceeded(group, usage)` → cek monthly_budget & tokens_per_month grup (jumlah usage seluruh member); audit `GROUP_UPDATED` bila perlu.
 - **Test** masing-masing `key-templates.test.ts`, `key-groups.test.ts`.
 - **Verify:** `bun test app/.server/key-templates.test.ts app/.server/key-groups.test.ts`.
 
-#### Task E4: Panggil `startDeliverer()` di `app/server.ts` (setelah server listen) dan safe-guard `process.env.NODE_ENV === "test"` tidak perlu (interval hanya dari server.ts).
+#### Task E4: Panggil `startDeliverer()` di `app/server.ts` (setelah server listen) dan safe-guard `process.env.NODE_ENV === "test"` tidak perlu (interval hanya dari server.ts)
 
 ### Phase F — UI
 
 #### Task F1: Route `app/routes/api-manager.tsx` (dashboard)
+
 - Loader: `listClientKeys()` (dengan ringkasan usage via `usageThisMonth` per key, cost), `counts` (total/active/restricted), templates, groups, `ALLOW_API_KEY_REVEAL`.
 - UI mengikuti concept section 4.1: stat cards (Total Keys, Active, Restricted, Requests bulan ini), search box, filter status dropdown, tabel (Name, Key masked `key_prefix…`, Status badge, Usage bar % via cost budget, Actions 📋 copy / 🗑️ delete / ⚙️ detail), bulk toolbar (checkbox select all → Suspend/Reactivate/Rotate/Delete/Export CSV/JSON), tombol `+ Create New Key`, tautan Templates & Groups.
 - Copy button: navigator.clipboard (fallback textarea). Reveal hanya jika `ALLOW_API_KEY_REVEAL=1` dan `key_enc` ada; tampil modal sekali, lalu perbaruan.
@@ -206,22 +227,26 @@ Tests baru: `app/.server/{key-crypto,pricing,rate-limiter,net,time-access,key-us
 - **Verify:** `bun dev` lalu buka halaman.
 
 #### Task F2: Route `app/routes/api-manager.create.tsx`
+
 - Form lengkap (concept 4.2): Key name, description, permissions bitset (chat/embeddings/image/audio/rerank — simpan sebagai `scopes` display-only), Model Access (radio all/specific + combobox menggunakan `getModelSuggestions`), Budget & Quota (monthly/daily/per-request, tokens/month, req/day, concurrents, auto-block checkbox, alert threshold), Rate limit (rpm/tpm/concurrent), Security (expires date, IP whitelist/blacklist, strict_ip, webhook url, manage-access checkbox → simpan ke scopes), **"Create from Template"** dropdown (isi form dari `key_templates.config`).
 - Submit POST via `createClientKey`; tampilkan full key sekali (banner), dengan tombol copy.
 - **Verify:** manual di dev.
 
 #### Task F3: Route `app/routes/api-manager.$id.tsx` (detail)
+
 - Loader: getClientKeyById, usage summary (total requests/tokens/cost, avg latency, success rate dari audit), budgetUsed monthly, recent audit (listAudit 50), analytics chart data (per-day dari `key_usage_daily`), health via `healthCheck`.
 - UI (concept 4.3): status cards, usage overview, budget bar, recent activity table, permissions list, tombol Edit (mode toggle form yang reuse field create), Rotate, Delete, Export Logs (CSV audit).
 - Chart: reuse `app/components/usage-chart.tsx` bila cocok, atau chart sederhana SVG/tailwind bar.
 - **Verify:** manual di dev.
 
 #### Task F4: Routes `app/routes/api-manager.templates.tsx` & `app/routes/api-manager.groups.tsx`
+
 - Templates: list, create form (name, description, config JSON editor sederhana + helper checkbox model), delete.
 - Groups: list, create (name, desc, shared_quota monthly_budget & tokens_per_month), add/remove member (select dari keys), tampilkan aggregated usage member & status vs shared quota.
 - **Verify:** manual di dev.
 
 #### Task F5: Integrasi navigasi & old page
+
 - `app/components/sidebar.tsx`: tambah `{ to: "/api-manager", label: "API Manager", icon: KeyRound }`.
 - `app/routes/api.tsx`: hapus tab & handler API Keys (pindahkan seluruhnya; sisakan Allowlist + Routing Rules). Saat `/api` masih butuh `listClientKeys` dsb., hapus import yang tak terpakai agar typecheck bersih.
 - `app/routes/logs.requests.tsx`: drop filter "API Key" (list dari `listClientKeys`), query tambah `WHERE api_key_id = ?` saat dipilih.
@@ -230,6 +255,7 @@ Tests baru: `app/.server/{key-crypto,pricing,rate-limiter,net,time-access,key-us
 ### Phase G — Verifikasi akhir
 
 #### Task G1: Seluruh suite + typecheck + smoke
+
 - `npm test` (semua test hijau), `npm run typecheck` bersih.
 - `bun dev` manual: create key → pakai di curl `Authorization: Bearer`, coincide budget/IP/time/rate, rotate + grace, suspend, webhook (pakai `https://webhook.site`/local sink), export CSV, kelompok via group shared quota, filter logs by key.
 - Update spec status bila ada penyimpangan kecil → catat di PR.

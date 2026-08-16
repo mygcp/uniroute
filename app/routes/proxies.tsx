@@ -504,7 +504,7 @@ const ProxyListRow = memo(function ProxyListRow({
 	return (
 		<TRow key={proxy.id}>
 			<TCell className="px-4 py-3 font-medium text-foreground">
-				<Link to={`/proxies/${proxy.id}`} className="hover:text-primary">
+				<Link to={`/proxies/${proxy.id}`} prefetch="intent" className="hover:text-primary">
 					{proxy.name}
 				</Link>
 			</TCell>
@@ -814,6 +814,7 @@ export default function Proxies({ loaderData }: Route.ComponentProps) {
 				actions={
 					<Link
 						to="/proxies/create"
+						prefetch="render"
 						className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-primary px-4 text-sm font-medium text-primary-foreground shadow-sm transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
 					>
 						<Plus size={16} /> New Proxy

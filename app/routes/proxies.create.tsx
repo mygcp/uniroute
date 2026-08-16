@@ -33,6 +33,7 @@ export default function CreateProxy() {
 				actions={
 					<Link
 						to="/proxies"
+						prefetch="render"
 						className="inline-flex h-8 items-center justify-center rounded-lg px-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
 					>
 						Back
@@ -105,6 +106,7 @@ export default function CreateProxy() {
 						<Button type="submit">Save</Button>
 						<Link
 							to="/proxies"
+							prefetch="render"
 							className="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-border px-4 text-sm font-medium text-foreground transition-colors hover:bg-muted"
 						>
 							Cancel

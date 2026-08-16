@@ -239,6 +239,7 @@ export default function KeyDetail({ loaderData, actionData }: Route.ComponentPro
     <div>
       <Link
         to="/api-manager"
+        prefetch="render"
         className="mb-4 inline-flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
       >
         <ArrowLeft size={14} /> API Manager
