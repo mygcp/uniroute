@@ -6,9 +6,9 @@ import type {
 } from "react";
 
 const base =
-  "w-full rounded-lg border border-border bg-surface-2 px-3 text-sm text-foreground placeholder:text-muted-foreground transition-colors focus:border-primary focus:outline-none focus:ring-2 focus:ring-ring/40 disabled:opacity-50";
+  "w-full rounded-lg border border-glass-border bg-glass-strong px-3 text-sm text-foreground backdrop-blur-sm shadow-[inset_0_1px_0_var(--glass-highlight)] transition-colors placeholder:text-muted-foreground focus:border-primary/40 focus:outline-none focus:ring-2 focus:ring-primary/20 disabled:opacity-50";
 const invalidBase =
-  "border-danger data-[invalid=true]:border-danger data-[invalid=true]:focus:border-danger data-[invalid=true]:focus:ring-danger/40";
+  "border-danger/40 data-[invalid=true]:border-danger/60 data-[invalid=true]:focus:border-danger data-[invalid=true]:focus:ring-danger/25";
 
 export function Label({
   className = "",
@@ -80,7 +80,7 @@ export function Checkbox({
     <input
       type="checkbox"
       className={[
-        "h-4 w-4 rounded border-border bg-surface-2 accent-primary",
+        "h-4 w-4 rounded border border-glass-border bg-glass-strong accent-primary",
         className,
       ].join(" ")}
       {...rest}
