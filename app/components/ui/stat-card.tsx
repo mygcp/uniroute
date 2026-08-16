@@ -14,7 +14,7 @@ export function StatCard({
   icon?: ReactNode;
 }) {
   return (
-    <div className="rounded-xl border border-border bg-surface p-5 shadow-sm transition hover:-translate-y-0.5 hover:border-primary/30">
+    <div className="glass-panel transition hover:-translate-y-0.5 hover:border-primary/30">
       <div className="mb-3 flex items-center justify-between">
         <div className={`h-1 w-10 rounded-full ${accent}`} />
         {icon ? <span className="text-muted-foreground">{icon}</span> : null}
