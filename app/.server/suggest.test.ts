@@ -14,6 +14,7 @@ beforeAll(async () => {
   db.resetDb();
   suggest = await import("./suggest");
   db.seed();
+  db.query("DELETE FROM models;").run();
   db.query(
     "INSERT INTO providers (id, name, base_url, auth_type, is_active, weight, priority) VALUES ('p1', 'Prov A', 'https://x', 'bearer', 1, 1, 0)",
   ).run();
@@ -35,6 +36,9 @@ beforeAll(async () => {
   ).run();
   db.query(
     "INSERT INTO client_api_keys (name, key_hash, key_prefix, allowed_models, model_override, pinned_provider_id, is_active) VALUES ('k1', 'hash1', 'sk-test1', '[\"gpt-4\",\"gpt-4o\"]', 'gpt-4o-mini', NULL, 1)",
+  ).run();
+  db.query(
+    "INSERT INTO combos (name, strategy, config, created_at, updated_at) VALUES ('coding', 'priority', '{}', 0, 0)",
   ).run();
 });
 
@@ -76,5 +80,40 @@ describe("getProviderSuggestions", () => {
     expect(result).toContain("p1");
     expect(new Set(result).size).toBe(result.length);
     expect(result).toEqual([...result].sort((a, b) => a.localeCompare(b)));
+  });
+});
+
+describe("getStructuredSuggestions", () => {
+  test("active models carry provider", () => {
+    const result = suggest.getStructuredSuggestions();
+    const gpt4o = result.find((s) => s.value === "gpt-4o");
+    expect(gpt4o).toEqual({ value: "gpt-4o", type: "model", provider: "p1" });
+  });
+
+  test("allowlist/key models included without provider", () => {
+    const result = suggest.getStructuredSuggestions();
+    const legacy = result.find((s) => s.value === "legacy-model");
+    expect(legacy).toEqual({ value: "legacy-model", type: "model" });
+    const gpt4 = result.find((s) => s.value === "gpt-4");
+    expect(gpt4).toEqual({ value: "gpt-4", type: "model" });
+  });
+
+  test("combos listed as combo:<name> with type combo", () => {
+    const result = suggest.getStructuredSuggestions();
+    expect(result).toContainEqual({ value: "combo:coding", type: "combo" });
+  });
+
+  test("no duplicate values; models sorted before combos", () => {
+    const result = suggest.getStructuredSuggestions();
+    const values = result.map((s) => s.value);
+    expect(new Set(values).size).toBe(values.length);
+    const modelValues = result
+      .filter((s) => s.type === "model")
+      .map((s) => s.value);
+    const comboValues = result
+      .filter((s) => s.type === "combo")
+      .map((s) => s.value);
+    expect(modelValues).toEqual([...modelValues].sort((a, b) => a.localeCompare(b)));
+    expect(comboValues).toEqual([...comboValues].sort((a, b) => a.localeCompare(b)));
   });
 });
