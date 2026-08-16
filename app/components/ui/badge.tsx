@@ -5,20 +5,20 @@ export type BadgeStyle = "solid" | "subtle";
 
 const SOLID: Record<BadgeTone, string> = {
   neutral: "bg-muted text-foreground",
-  success: "bg-success text-white",
-  warning: "bg-warning text-white",
-  danger: "bg-danger text-white",
-  info: "bg-info text-white",
-  primary: "bg-primary text-primary-foreground",
+  success: "bg-success/80 text-white",
+  warning: "bg-warning/80 text-white",
+  danger: "bg-danger/80 text-white",
+  info: "bg-info/80 text-white",
+  primary: "bg-primary/80 text-primary-foreground",
 };
 
 const SUBTLE: Record<BadgeTone, string> = {
-  neutral: "bg-muted text-muted-foreground",
-  success: "bg-success/15 text-success",
-  warning: "bg-warning/15 text-warning",
-  danger: "bg-danger/15 text-danger",
-  info: "bg-info/15 text-info",
-  primary: "bg-primary/15 text-primary",
+  neutral: "border border-glass-border bg-glass-strong text-muted-foreground",
+  success: "border border-success/25 bg-success/15 text-success",
+  warning: "border border-warning/25 bg-warning/15 text-warning",
+  danger: "border border-danger/25 bg-danger/15 text-danger",
+  info: "border border-info/25 bg-info/15 text-info",
+  primary: "border border-primary/25 bg-primary/15 text-primary",
 };
 
 export function Badge({
