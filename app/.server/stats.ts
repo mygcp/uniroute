@@ -26,9 +26,9 @@ export function getStats() {
 
 export function getUsageLast7Days() {
   const rows = query(
-    `SELECT date(created_at, 'unixepoch') AS day, COUNT(*) AS c
+    `SELECT strftime('%Y-%m-%d', created_at / 1000, 'unixepoch') AS day, COUNT(*) AS c
      FROM request_logs
-     WHERE created_at >= strftime('%s','now','-6 days')
+     WHERE created_at >= (strftime('%s','now','-6 days') * 1000)
      GROUP BY day ORDER BY day`,
   ).all() as { day: string; c: number }[];
 
