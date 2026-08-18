@@ -3,7 +3,7 @@ import type { Metric, TimeSeriesPoint } from "../../.server/usage";
 type Props = {
   data: TimeSeriesPoint[];
   metric: Metric;
-  viewBox?: { w: number; h: number };
+  barHeight?: number;
 };
 
 function fmtValue(value: number, metric: Metric): string {
@@ -11,13 +11,7 @@ function fmtValue(value: number, metric: Metric): string {
   return value.toLocaleString();
 }
 
-export function TimeSeriesChart({ data, metric, viewBox = { w: 900, h: 200 } }: Props) {
-  const { w, h } = viewBox;
-  const max = Math.max(1, ...data.map((d) => d.value));
-  const barGap = 12;
-  const barW = data.length > 0 ? (w - barGap * (data.length - 1)) / data.length : w;
-  const fill = metric === "cost" ? "#10b981" : "#3b82f6";
-
+export function TimeSeriesChart({ data, metric, barHeight = 160 }: Props) {
   if (data.length === 0) {
     return (
       <div className="py-10 text-center text-sm text-muted-foreground">
@@ -25,43 +19,34 @@ export function TimeSeriesChart({ data, metric, viewBox = { w: 900, h: 200 } }: 
       </div>
     );
   }
+  const max = Math.max(1, ...data.map((d) => d.value));
+  const fill = metric === "cost" ? "bg-success" : "bg-primary";
 
   return (
-    <svg viewBox={`0 0 ${w} ${h}`} className="w-full" role="img" aria-label={`${metric} time series`}>
-      <line x1="0" y1={h - 20} x2={w} y2={h - 20} stroke="#4b5563" />
-      {data.map((d, i) => {
-        const x = i * (barW + barGap);
-        const bh = d.value > 0 ? Math.max(1, (d.value / max) * (h - 40)) : 0;
-        return (
-          <g key={`${d.labelFull}-${i}`}>
-            <rect
-              x={x}
-              y={h - 20 - bh}
-              width={barW}
-              height={bh}
-              rx={3}
-              fill={d.value > 0 ? fill : "#4b5563"}
+    <div className="w-full overflow-x-auto" role="img" aria-label={`${metric} time series`}>
+      <div className="flex items-end gap-1.5" style={{ minWidth: `${data.length * 32}px` }}>
+        {data.map((d, i) => {
+          const h = d.value > 0 ? Math.max(3, (d.value / max) * barHeight) : 3;
+          return (
+            <div
+              key={`${d.labelFull}-${i}`}
+              className="flex flex-1 flex-col items-center gap-1"
+              title={`${d.labelFull}: ${fmtValue(d.value, metric)}`}
             >
-              <title>{`${d.labelFull}: ${fmtValue(d.value, metric)}`}</title>
-            </rect>
-            {bh > 5 ? (
-              <text
-                x={x + barW / 2}
-                y={h - 26 - bh}
-                textAnchor="middle"
-                fontSize="9"
-                fill="#9ca3af"
-                className="tabular-nums"
-              >
+              <span className="hidden text-[10px] leading-none tabular-nums text-muted-foreground sm:block">
                 {fmtValue(d.value, metric)}
-              </text>
-            ) : null}
-            <text x={x + barW / 2} y={h - 6} textAnchor="middle" fontSize="9" fill="#9ca3af">
-              {d.label}
-            </text>
-          </g>
-        );
-      })}
-    </svg>
+              </span>
+              <div className="flex w-full items-end" style={{ height: barHeight }}>
+                <div
+                  className={`bar-grow-y w-full rounded-sm ${d.value > 0 ? fill : "bg-[#4b5563]"}`}
+                  style={{ height: `${h}px`, animationDelay: `${i * 25}ms` }}
+                />
+              </div>
+              <span className="text-[10px] leading-none text-muted-foreground">{d.label}</span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
   );
 }
