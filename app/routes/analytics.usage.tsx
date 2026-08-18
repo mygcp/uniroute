@@ -86,9 +86,8 @@ function shortError(msg: string, max = 60): string {
 function deltaProps(
   value: number | null,
   good: boolean,
-  suffix = "%",
-): { value: number | null; good: boolean; deltaSuffix: string } {
-  return { value, good, deltaSuffix: suffix };
+): { value: number | null; good: boolean } {
+  return { value, good };
 }
 
 function useUsageParams() {
@@ -177,7 +176,8 @@ export default function AnalyticsUsage({ loaderData }: Route.ComponentProps) {
           value={fmtTokens(performance.successRate)}
           suffix="%"
           accent="bg-success"
-          delta={deltaProps(trends.successRate, true, " pts")}
+          delta={deltaProps(trends.successRate, true)}
+          deltaSuffix=" pts"
         />
         <StatCard
           title="Avg Latency"
