@@ -256,6 +256,31 @@ body {
 .dialog-pop[open]::backdrop {
   animation: backdrop-in 0.15s ease-out;
 }
+/* Usage chart bar grow-in (transform-only, compositor-friendly) */
+@keyframes grow-y {
+  from {
+    transform: scaleY(0);
+  }
+  to {
+    transform: scaleY(1);
+  }
+}
+@keyframes grow-x {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+.bar-grow-y {
+  transform-origin: bottom;
+  animation: grow-y 0.45s ease-out both;
+}
+.bar-grow-x {
+  transform-origin: left;
+  animation: grow-x 0.45s ease-out both;
+}
 
 @media (prefers-reduced-motion: reduce) {
   *,
