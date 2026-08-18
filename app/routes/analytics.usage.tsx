@@ -72,6 +72,25 @@ function fmtCost(n: number): string {
   return n > 0 ? `$${n.toFixed(2)}` : "—";
 }
 
+function shortError(msg: string, max = 60): string {
+  let text = msg;
+  try {
+    const parsed = JSON.parse(msg) as { error?: { message?: string }; message?: string };
+    text = parsed?.error?.message ?? parsed?.message ?? msg;
+  } catch {
+    /* not JSON — use raw text */
+  }
+  return text.length > max ? text.slice(0, max - 1) + "…" : text;
+}
+
+function deltaProps(
+  value: number | null,
+  good: boolean,
+  suffix = "%",
+): { value: number | null; good: boolean; deltaSuffix: string } {
+  return { value, good, deltaSuffix: suffix };
+}
+
 function useUsageParams() {
   const [, setSearchParams] = useSearchParams();
   return {
@@ -97,8 +116,13 @@ function useUsageParams() {
 }
 
 export default function AnalyticsUsage({ loaderData }: Route.ComponentProps) {
-  const { summary, timeSeries, breakdown, range, metric, dimension } = loaderData;
+  const { summary, performance, trends, errors, timeSeries, breakdown, range, metric, dimension } =
+    loaderData;
   const { setRange, setMetric, setDimension } = useUsageParams();
+
+  const errTotal = errors.total || 1;
+  const successPct = errors.total ? Math.round((errors.success / errors.total) * 100) : 0;
+  const errorPct = errors.total ? Math.round((errors.error / errors.total) * 100) : 0;
 
   return (
     <div>
@@ -119,14 +143,59 @@ export default function AnalyticsUsage({ loaderData }: Route.ComponentProps) {
       />
 
       <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard title="Total Tokens" value={fmtTokens(summary.totalTokens)} />
-        <StatCard title="Input Tokens" value={fmtTokens(summary.inputTokens)} accent="bg-info" />
-        <StatCard title="Output Tokens" value={fmtTokens(summary.outputTokens)} accent="bg-warning" />
-        <StatCard title="Est. Cost" value={fmtCost(summary.cost)} accent="bg-success" />
+        <StatCard
+          title="Total Tokens"
+          value={fmtTokens(summary.totalTokens)}
+          delta={deltaProps(trends.totalTokens, true)}
+        />
+        <StatCard
+          title="Input Tokens"
+          value={fmtTokens(summary.inputTokens)}
+          accent="bg-info"
+          delta={deltaProps(trends.inputTokens, true)}
+        />
+        <StatCard
+          title="Output Tokens"
+          value={fmtTokens(summary.outputTokens)}
+          accent="bg-warning"
+          delta={deltaProps(trends.outputTokens, true)}
+        />
+        <StatCard
+          title="Est. Cost"
+          value={fmtCost(summary.cost)}
+          accent="bg-success"
+          delta={deltaProps(trends.cost, false)}
+          subline={`Avg cost / request: ${fmtCost(performance.costPerReq)}`}
+        />
+        <StatCard
+          title="Requests"
+          value={fmtTokens(performance.requests)}
+          delta={deltaProps(trends.requests, true)}
+        />
+        <StatCard
+          title="Success Rate"
+          value={fmtTokens(performance.successRate)}
+          suffix="%"
+          accent="bg-success"
+          delta={deltaProps(trends.successRate, true, " pts")}
+        />
+        <StatCard
+          title="Avg Latency"
+          value={fmtTokens(performance.avgLatencyMs)}
+          suffix="ms"
+          accent="bg-warning"
+          delta={deltaProps(trends.avgLatencyMs, false)}
+        />
+        <StatCard
+          title="Avg Tokens / Req"
+          value={fmtTokens(Math.round(performance.tokensPerReq))}
+          accent="bg-info"
+          delta={deltaProps(trends.tokensPerReq, true)}
+        />
       </div>
 
       <Card className="mb-6">
-        <CardHeader>
+        <CardHeader className="flex-wrap">
           <CardTitle>
             {metric === "tokens" ? "Tokens" : "Cost"} — {DIMENSION_LABEL[dimension]} — {rangeTitle(range)}
           </CardTitle>
@@ -152,8 +221,8 @@ export default function AnalyticsUsage({ loaderData }: Route.ComponentProps) {
         </div>
       </Card>
 
-      <Card>
-        <CardHeader>
+      <Card className="mb-6">
+        <CardHeader className="flex-wrap">
           <CardTitle>Top {breakdown.length || 10} — {DIMENSION_LABEL[dimension]}</CardTitle>
           <div className="flex items-center gap-2">
             <Tabs
@@ -176,6 +245,63 @@ export default function AnalyticsUsage({ loaderData }: Route.ComponentProps) {
           </div>
         </CardHeader>
         <BreakdownChart data={breakdown} metric={metric} />
+      </Card>
+
+      <Card>
+        <CardHeader className="flex-wrap">
+          <CardTitle>Status &amp; Errors</CardTitle>
+        </CardHeader>
+        <div className="space-y-5">
+          <div>
+            <div
+              className="flex h-4 w-full overflow-hidden rounded-full bg-white/5"
+              role="img"
+              aria-label={`${errors.success} success, ${errors.error} errors`}
+            >
+              {errors.success > 0 ? (
+                <div className="bg-success" style={{ width: `${(errors.success / errTotal) * 100}%` }} />
+              ) : null}
+              {errors.error > 0 ? (
+                <div className="bg-danger" style={{ width: `${(errors.error / errTotal) * 100}%` }} />
+              ) : null}
+            </div>
+            <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-sm text-muted-foreground">
+              <span className="flex items-center gap-1.5">
+                <span className="h-2.5 w-2.5 rounded-full bg-success" />
+                {errors.success} success ({successPct}%)
+              </span>
+              <span className="flex items-center gap-1.5">
+                <span className="h-2.5 w-2.5 rounded-full bg-danger" />
+                {errors.error} error ({errorPct}%)
+              </span>
+            </div>
+          </div>
+
+          {errors.top.length > 0 ? (
+            <div>
+              <h3 className="mb-2 text-sm font-semibold text-foreground">Top errors</h3>
+              <ul className="space-y-1.5">
+                {errors.top.map((e, i) => (
+                  <li key={`${e.message}-${i}`} className="flex items-center gap-2 text-sm">
+                    <code title={e.message} className="flex-1 truncate text-xs text-muted-foreground">
+                      {shortError(e.message)}
+                    </code>
+                    <span className="shrink-0 rounded-full bg-white/5 px-2 py-0.5 text-xs tabular-nums text-muted-foreground">
+                      {e.count}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground">No errors in this period</p>
+          )}
+
+          <div className="border-t border-glass-border pt-3 text-xs text-muted-foreground">
+            Avg cost / request: <span className="tabular-nums">{fmtCost(performance.costPerReq)}</span> · Avg
+            tokens / request: <span className="tabular-nums">{fmtTokens(Math.round(performance.tokensPerReq))}</span>
+          </div>
+        </div>
       </Card>
     </div>
   );
