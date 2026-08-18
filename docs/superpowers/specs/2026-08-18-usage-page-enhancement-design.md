@@ -78,7 +78,7 @@ Calendar-based previous window via a new `prevRangeBounds(range)` helper:
 
 ### 3.2 Status & errors query
 
-- `GROUP BY status` counts within the range → `errors.success` / `errors.error`.
+- `GROUP BY status` counts within the range → `errors.success` (status `success`) and `errors.error` (every non-success status: `error`, `timeout`, `denied`), so `errors.success + errors.error` equals the row count. The top-errors query filters `status != 'success'`.
 - Top errors: `WHERE error_message IS NOT NULL GROUP BY error_message ORDER BY COUNT(*) DESC LIMIT 5`.
 - Error message extraction (UI-side helper): if the string parses as JSON and has `error.message`, use that; otherwise use the raw text. Truncate to ~60 chars for display; full text in `title` tooltip.
 

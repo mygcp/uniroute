@@ -72,6 +72,11 @@ function fmtCost(n: number): string {
   return n > 0 ? `$${n.toFixed(2)}` : "—";
 }
 
+function fmtCostPrecise(n: number): string {
+  if (n <= 0) return "—";
+  return n >= 1 ? `$${n.toFixed(2)}` : `$${n.toFixed(4)}`;
+}
+
 function shortError(msg: string, max = 60): string {
   let text = msg;
   try {
@@ -164,7 +169,7 @@ export default function AnalyticsUsage({ loaderData }: Route.ComponentProps) {
           value={fmtCost(summary.cost)}
           accent="bg-success"
           delta={deltaProps(trends.cost, false)}
-          subline={`Avg cost / request: ${fmtCost(performance.costPerReq)}`}
+          subline={`Avg cost / request: ${fmtCostPrecise(performance.costPerReq)}`}
         />
         <StatCard
           title="Requests"
@@ -298,7 +303,7 @@ export default function AnalyticsUsage({ loaderData }: Route.ComponentProps) {
           )}
 
           <div className="border-t border-glass-border pt-3 text-xs text-muted-foreground">
-            Avg cost / request: <span className="tabular-nums">{fmtCost(performance.costPerReq)}</span> · Avg
+            Avg cost / request: <span className="tabular-nums">{fmtCostPrecise(performance.costPerReq)}</span> · Avg
             tokens / request: <span className="tabular-nums">{fmtTokens(Math.round(performance.tokensPerReq))}</span>
           </div>
         </div>

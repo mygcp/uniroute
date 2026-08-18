@@ -258,19 +258,21 @@ function _queryErrors(range: TimeRange): Errors {
       GROUP BY status`,
   ).all(fromTs, toTs) as { status: string; c: number }[];
   const counts = new Map(statusRows.map((r) => [r.status, Number(r.c)]));
+  const total = statusRows.reduce((s, r) => s + Number(r.c), 0);
   const success = counts.get("success") ?? 0;
-  const error = counts.get("error") ?? 0;
+  const error = total - success;
   const errRows = query(
     `SELECT error_message, COUNT(*) AS c
        FROM request_logs
       WHERE created_at >= ? AND created_at < ?
+        AND status != 'success'
         AND error_message IS NOT NULL
       GROUP BY error_message ORDER BY c DESC LIMIT 5`,
   ).all(fromTs, toTs) as { error_message: string; c: number }[];
   return {
     success,
     error,
-    total: success + error,
+    total,
     top: errRows.map((r) => ({ message: String(r.error_message), count: Number(r.c) })),
   };
 }

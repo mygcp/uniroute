@@ -33,11 +33,11 @@ function insertLog(row: {
   );
 }
 
-function insertErrorLog(model: string, providerId: string, errorMessage: string, created_at: number): void {
+function insertErrorLog(model: string, providerId: string, errorMessage: string, created_at: number, status = "error"): void {
   db.query(
     `INSERT INTO request_logs (model, provider_id, prompt_tokens, completion_tokens, api_key_id, created_at, status, error_message)
-     VALUES (?, ?, NULL, NULL, NULL, ?, 'error', ?)`,
-  ).run(model, providerId, created_at, errorMessage);
+     VALUES (?, ?, NULL, NULL, NULL, ?, ?, ?)`,
+  ).run(model, providerId, created_at, status, errorMessage);
 }
 
 beforeAll(async () => {
@@ -52,6 +52,8 @@ beforeAll(async () => {
   insertErrorLog("gpt-4o", "openai", '{"error":{"message":"rate limit exceeded"}}', now - 2 * DAY_MS);
   insertErrorLog("gpt-4o", "openai", '{"error":{"message":"rate limit exceeded"}}', now - 3 * DAY_MS);
   insertErrorLog("gpt-4o", "openai", "model not found", now - 3 * DAY_MS);
+  insertErrorLog("gpt-4o", "openai", "routing rule deny", now - 2 * DAY_MS, "denied");
+  insertErrorLog("gpt-4o", "openai", "upstream timeout", now - 3 * DAY_MS, "timeout");
 });
 
 afterAll(() => {
@@ -115,11 +117,11 @@ describe("breakdown", () => {
 describe("getUsageData performance", () => {
   test("aggregates requests, success rate, latency, tokens/req, cost/req for range=all", () => {
     const data = usage.getUsageData({ range: "all" });
-    expect(data.performance.requests).toBe(7); // 4 success + 3 error
-    expect(data.performance.successRate).toBe(57); // round(4/7*100)
+    expect(data.performance.requests).toBe(9); // 4 success + 3 error + 1 denied + 1 timeout
+    expect(data.performance.successRate).toBe(44); // round(4/9*100)
     expect(data.performance.avgLatencyMs).toBe(0);
-    expect(data.performance.tokensPerReq).toBeCloseTo(742.857, 1); // 5200/7
-    expect(data.performance.costPerReq).toBeCloseTo(0.00386, 4); // 0.027/7
+    expect(data.performance.tokensPerReq).toBeCloseTo(577.778, 2); // 5200/9
+    expect(data.performance.costPerReq).toBeCloseTo(0.003, 4); // 0.027/9
   });
 });
 
@@ -149,11 +151,19 @@ describe("getUsageData errors", () => {
   test("groups status counts and top error messages", () => {
     const data = usage.getUsageData({ range: "all" });
     expect(data.errors.success).toBe(4);
-    expect(data.errors.error).toBe(3);
-    expect(data.errors.total).toBe(7);
-    expect(data.errors.top).toHaveLength(2);
+    expect(data.errors.error).toBe(5); // 3 error + 1 denied + 1 timeout
+    expect(data.errors.total).toBe(9);
+    expect(data.errors.top).toHaveLength(4); // rate-limit(2), model not found, routing rule deny, upstream timeout
     expect(data.errors.top[0]).toEqual({ message: '{"error":{"message":"rate limit exceeded"}}', count: 2 });
-    expect(data.errors.top[1]).toEqual({ message: "model not found", count: 1 });
+    const messages = data.errors.top.map((e) => e.message);
+    expect(messages).toContain("model not found");
+    expect(messages).toContain("routing rule deny");
+    expect(messages).toContain("upstream timeout");
+  });
+
+  test("status counts reconcile with performance.requests", () => {
+    const data = usage.getUsageData({ range: "all" });
+    expect(data.errors.success + data.errors.error).toBe(data.performance.requests);
   });
 
   test("range=day excludes previous days' errors", () => {
