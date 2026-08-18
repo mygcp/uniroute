@@ -12,6 +12,32 @@ export type UsageSummary = {
   cost: number;
 };
 
+export type Performance = {
+  requests: number;
+  successRate: number;
+  avgLatencyMs: number;
+  tokensPerReq: number;
+  costPerReq: number;
+};
+
+export type Trends = {
+  totalTokens: number | null;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  cost: number | null;
+  requests: number | null;
+  successRate: number | null;
+  avgLatencyMs: number | null;
+  tokensPerReq: number | null;
+};
+
+export type Errors = {
+  success: number;
+  error: number;
+  total: number;
+  top: { message: string; count: number }[];
+};
+
 export type TimeSeriesPoint = {
   label: string;
   labelFull: string;
@@ -26,6 +52,9 @@ export type BreakdownEntry = {
 
 export type UsageData = {
   summary: UsageSummary;
+  performance: Performance;
+  trends: Trends;
+  errors: Errors;
   timeSeries: TimeSeriesPoint[];
   breakdown: BreakdownEntry[];
   range: TimeRange;
@@ -70,6 +99,30 @@ function rangeBounds(range: TimeRange): [number, number] {
   }
 }
 
+function prevRangeBounds(range: TimeRange): [number, number] | null {
+  const now = new Date();
+  const y = now.getUTCFullYear();
+  const m = now.getUTCMonth();
+  const d = now.getUTCDate();
+  const todayStart = Date.UTC(y, m, d);
+  switch (range) {
+    case "day":
+      return [todayStart - DAY_MS, todayStart];
+    case "week": {
+      const dow = now.getUTCDay(); // 0 = Sun
+      const daysSinceMon = dow === 0 ? 6 : dow - 1;
+      const thisMon = todayStart - daysSinceMon * DAY_MS;
+      return [thisMon - 7 * DAY_MS, thisMon];
+    }
+    case "month":
+      return [Date.UTC(y, m - 1, 1), Date.UTC(y, m, 1)];
+    case "year":
+      return [Date.UTC(y - 1, 0, 1), Date.UTC(y, 0, 1)];
+    case "all":
+      return null;
+  }
+}
+
 function dateExpr(range: TimeRange): string {
   if (range === "day") return `strftime('%Y-%m-%d %H:00', created_at / 1000, 'unixepoch')`;
   if (range === "year" || range === "all") return `strftime('%Y-%m', created_at / 1000, 'unixepoch')`;
@@ -102,8 +155,8 @@ function groupLabel(grp: string | number, dim: Dimension): string {
   return String(grp);
 }
 
-function _querySummary(range: TimeRange): UsageSummary {
-  const [fromTs, toTs] = rangeBounds(range);
+function _querySummaryFor(bounds: [number, number]): UsageSummary {
+  const [fromTs, toTs] = bounds;
   const sumRow = query(
     `SELECT COALESCE(SUM(prompt_tokens), 0) AS pt,
             COALESCE(SUM(completion_tokens), 0) AS ct
@@ -132,6 +185,94 @@ function _querySummary(range: TimeRange): UsageSummary {
   );
 
   return { totalTokens: pt + ct, inputTokens: pt, outputTokens: ct, cost };
+}
+
+function _querySummary(range: TimeRange): UsageSummary {
+  return _querySummaryFor(rangeBounds(range));
+}
+
+function _queryPerformanceFor(bounds: [number, number], tokens: number, cost: number): Performance {
+  const [fromTs, toTs] = bounds;
+  const row = query(
+    `SELECT COUNT(*) AS requests,
+            COALESCE(SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END), 0) AS ok,
+            AVG(duration_ms) AS avgDur
+       FROM request_logs
+      WHERE created_at >= ? AND created_at < ?`,
+  ).get(fromTs, toTs) as { requests: number; ok: number; avgDur: number | null };
+  const requests = Number(row.requests);
+  const ok = Number(row.ok);
+  const avgDur = Number(row.avgDur ?? 0);
+  return {
+    requests,
+    successRate: requests ? Math.round((ok / requests) * 100) : 0,
+    avgLatencyMs: Math.round(avgDur),
+    tokensPerReq: requests ? tokens / requests : 0,
+    costPerReq: requests ? cost / requests : 0,
+  };
+}
+
+function pctDelta(curr: number, prev: number): number | null {
+  if (prev === 0) return null;
+  return Math.round(((curr - prev) / prev) * 1000) / 10;
+}
+
+function pointDelta(curr: number, prev: number): number | null {
+  return Math.round((curr - prev) * 10) / 10;
+}
+
+function _queryTrends(range: TimeRange, summary: UsageSummary, performance: Performance): Trends {
+  const prev = prevRangeBounds(range);
+  if (!prev) {
+    return {
+      totalTokens: null,
+      inputTokens: null,
+      outputTokens: null,
+      cost: null,
+      requests: null,
+      successRate: null,
+      avgLatencyMs: null,
+      tokensPerReq: null,
+    };
+  }
+  const prevSummary = _querySummaryFor(prev);
+  const prevPerf = _queryPerformanceFor(prev, prevSummary.totalTokens, prevSummary.cost);
+  return {
+    totalTokens: pctDelta(summary.totalTokens, prevSummary.totalTokens),
+    inputTokens: pctDelta(summary.inputTokens, prevSummary.inputTokens),
+    outputTokens: pctDelta(summary.outputTokens, prevSummary.outputTokens),
+    cost: pctDelta(summary.cost, prevSummary.cost),
+    requests: pctDelta(performance.requests, prevPerf.requests),
+    successRate: prevPerf.requests ? pointDelta(performance.successRate, prevPerf.successRate) : null,
+    avgLatencyMs: prevPerf.requests ? pctDelta(performance.avgLatencyMs, prevPerf.avgLatencyMs) : null,
+    tokensPerReq: prevPerf.requests ? pctDelta(performance.tokensPerReq, prevPerf.tokensPerReq) : null,
+  };
+}
+
+function _queryErrors(range: TimeRange): Errors {
+  const [fromTs, toTs] = rangeBounds(range);
+  const statusRows = query(
+    `SELECT status, COUNT(*) AS c
+       FROM request_logs
+      WHERE created_at >= ? AND created_at < ?
+      GROUP BY status`,
+  ).all(fromTs, toTs) as { status: string; c: number }[];
+  const counts = new Map(statusRows.map((r) => [r.status, Number(r.c)]));
+  const success = counts.get("success") ?? 0;
+  const error = counts.get("error") ?? 0;
+  const errRows = query(
+    `SELECT error_message, COUNT(*) AS c
+       FROM request_logs
+      WHERE created_at >= ? AND created_at < ?
+        AND error_message IS NOT NULL
+      GROUP BY error_message ORDER BY c DESC LIMIT 5`,
+  ).all(fromTs, toTs) as { error_message: string; c: number }[];
+  return {
+    success,
+    error,
+    total: success + error,
+    top: errRows.map((r) => ({ message: String(r.error_message), count: Number(r.c) })),
+  };
 }
 
 function _queryTimeSeries(range: TimeRange, metric: Metric): TimeSeriesPoint[] {
@@ -249,8 +390,13 @@ export function getUsageData(opts: {
   const { range } = opts;
   const metric = opts.metric ?? "tokens";
   const dimension = opts.dimension ?? "provider";
+  const summary = _querySummary(range);
+  const performance = _queryPerformanceFor(rangeBounds(range), summary.totalTokens, summary.cost);
   return {
-    summary: _querySummary(range),
+    summary,
+    performance,
+    trends: _queryTrends(range, summary, performance),
+    errors: _queryErrors(range),
     timeSeries: _queryTimeSeries(range, metric),
     breakdown: _queryBreakdown(range, metric, dimension),
     range,

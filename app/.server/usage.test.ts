@@ -33,6 +33,13 @@ function insertLog(row: {
   );
 }
 
+function insertErrorLog(model: string, providerId: string, errorMessage: string, created_at: number): void {
+  db.query(
+    `INSERT INTO request_logs (model, provider_id, prompt_tokens, completion_tokens, api_key_id, created_at, status, error_message)
+     VALUES (?, ?, NULL, NULL, NULL, ?, 'error', ?)`,
+  ).run(model, providerId, created_at, errorMessage);
+}
+
 beforeAll(async () => {
   await resetTestDb();
   usage = await import("./usage");
@@ -42,6 +49,9 @@ beforeAll(async () => {
   insertLog({ model: "gpt-4o", provider_id: "openai", prompt_tokens: 2000, completion_tokens: 1000, created_at: now - DAY_MS });
   insertLog({ model: "claude-3-5-sonnet", provider_id: "anthropic", prompt_tokens: 500, completion_tokens: 200, created_at: now - 2 * DAY_MS });
   insertLog({ model: "claude-3-5-sonnet", provider_id: "anthropic", prompt_tokens: null, completion_tokens: null, created_at: now - 100 * DAY_MS });
+  insertErrorLog("gpt-4o", "openai", '{"error":{"message":"rate limit exceeded"}}', now - 2 * DAY_MS);
+  insertErrorLog("gpt-4o", "openai", '{"error":{"message":"rate limit exceeded"}}', now - 3 * DAY_MS);
+  insertErrorLog("gpt-4o", "openai", "model not found", now - 3 * DAY_MS);
 });
 
 afterAll(() => {
@@ -99,5 +109,57 @@ describe("breakdown", () => {
     const data = usage.getUsageData({ range: "all", dimension: "apikey" });
     const names = data.breakdown.map((b) => b.name);
     expect(names).toContain("No API Key");
+  });
+});
+
+describe("getUsageData performance", () => {
+  test("aggregates requests, success rate, latency, tokens/req, cost/req for range=all", () => {
+    const data = usage.getUsageData({ range: "all" });
+    expect(data.performance.requests).toBe(7); // 4 success + 3 error
+    expect(data.performance.successRate).toBe(57); // round(4/7*100)
+    expect(data.performance.avgLatencyMs).toBe(0);
+    expect(data.performance.tokensPerReq).toBeCloseTo(742.857, 1); // 5200/7
+    expect(data.performance.costPerReq).toBeCloseTo(0.00386, 4); // 0.027/7
+  });
+});
+
+describe("getUsageData trends", () => {
+  test("range=all has no prior period (all null)", () => {
+    const data = usage.getUsageData({ range: "all" });
+    expect(data.trends.totalTokens).toBeNull();
+    expect(data.trends.requests).toBeNull();
+    expect(data.trends.successRate).toBeNull();
+  });
+
+  test("range=day compares against yesterday", () => {
+    const data = usage.getUsageData({ range: "day" });
+    expect(data.summary.totalTokens).toBe(1500); // today: row at `now`
+    expect(data.trends.totalTokens).toBe(-50); // (1500-3000)/3000
+    expect(data.trends.inputTokens).toBe(-50);
+    expect(data.trends.outputTokens).toBe(-50);
+    expect(data.trends.cost).toBe(-50);
+    expect(data.trends.requests).toBe(0);
+    expect(data.trends.successRate).toBe(0); // absolute-point delta
+    expect(data.trends.tokensPerReq).toBe(-50);
+    expect(data.trends.avgLatencyMs).toBeNull();
+  });
+});
+
+describe("getUsageData errors", () => {
+  test("groups status counts and top error messages", () => {
+    const data = usage.getUsageData({ range: "all" });
+    expect(data.errors.success).toBe(4);
+    expect(data.errors.error).toBe(3);
+    expect(data.errors.total).toBe(7);
+    expect(data.errors.top).toHaveLength(2);
+    expect(data.errors.top[0]).toEqual({ message: '{"error":{"message":"rate limit exceeded"}}', count: 2 });
+    expect(data.errors.top[1]).toEqual({ message: "model not found", count: 1 });
+  });
+
+  test("range=day excludes previous days' errors", () => {
+    const data = usage.getUsageData({ range: "day" });
+    expect(data.errors.success).toBe(1);
+    expect(data.errors.error).toBe(0);
+    expect(data.errors.top).toHaveLength(0);
   });
 });
