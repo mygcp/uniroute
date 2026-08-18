@@ -10,7 +10,7 @@ function fmtValue(value: number, metric: Metric): string {
   return `${value.toLocaleString()} tokens`;
 }
 
-function truncate(name: string, n = 20): string {
+function truncate(name: string, n = 28): string {
   return name.length > n ? name.slice(0, n - 1) + "…" : name;
 }
 
@@ -22,51 +22,44 @@ export function BreakdownChart({ data, metric }: Props) {
       </div>
     );
   }
-
   const max = Math.max(1, ...data.map((d) => d.value));
-  const rowH = 44;
-  const headerH = 20;
-  const h = Math.max(80, data.length * rowH + headerH);
-  const w = 800;
-  const barMaxW = w * 0.6;
-  const barX = 200;
 
   return (
-    <svg viewBox={`0 0 ${w} ${h}`} className="w-full" role="img" aria-label={`${metric} breakdown`}>
-      {data.map((d, i) => {
-        const y = headerH + i * rowH;
-        const bw = (d.value / max) * barMaxW;
-        const fill = d.name === "Other" ? "#6b7280" : i % 2 === 0 ? "#3b82f6" : "#2563eb";
-        return (
-          <g key={`${d.name}-${i}`}>
-            <text x={barX - 8} y={y + 14} textAnchor="end" fontSize="12" fill="#9ca3af">
-              <title>{d.name}</title>
-              {truncate(d.name)}
-            </text>
-            <rect x={barX} y={y + 2} width={Math.max(0, bw)} height={16} rx={3} fill={fill}>
-              <title>{`${d.name}: ${fmtValue(d.value, metric)}`}</title>
-            </rect>
-            {bw > 40 ? (
-              <text x={barX + bw - 6} y={y + 14} textAnchor="end" fontSize="11" fill="#fff">
-                {d.pct}%
-              </text>
-            ) : (
-              <text x={barX + bw + 4} y={y + 14} fontSize="11" fill="#9ca3af">
-                {d.pct}%
-              </text>
-            )}
-            <text
-              x={barX + barMaxW + 12}
-              y={y + 14}
-              fontSize="11"
-              fill="#9ca3af"
-              className="tabular-nums"
-            >
-              {fmtValue(d.value, metric)}
-            </text>
-          </g>
-        );
-      })}
-    </svg>
+    <div role="img" aria-label={`${metric} breakdown`}>
+      <ul className="space-y-3">
+        {data.map((d, i) => {
+          const pctW = Math.round((d.value / max) * 100);
+          const fill =
+            d.name === "Other" ? "bg-[#6b7280]" : i % 2 === 0 ? "bg-primary" : "bg-primary/70";
+          return (
+            <li key={`${d.name}-${i}`} className="flex flex-col gap-1 md:flex-row md:items-center md:gap-3">
+              <div className="flex items-center justify-between gap-2 md:w-40 md:shrink-0">
+                <span className="truncate text-sm text-muted-foreground" title={d.name}>
+                  {truncate(d.name)}
+                </span>
+                <span className="text-xs tabular-nums text-muted-foreground md:hidden">
+                  {fmtValue(d.value, metric)}
+                </span>
+              </div>
+              <div className="flex flex-1 items-center gap-2">
+                <div className="h-4 flex-1 overflow-hidden rounded-sm bg-white/5">
+                  <div
+                    className={`bar-grow-x h-full ${fill}`}
+                    style={{ width: `${pctW}%`, animationDelay: `${i * 25}ms` }}
+                    title={`${d.name}: ${fmtValue(d.value, metric)}`}
+                  />
+                </div>
+                <span className="w-10 shrink-0 text-right text-xs tabular-nums text-muted-foreground">
+                  {d.pct}%
+                </span>
+                <span className="hidden w-28 shrink-0 text-right text-xs tabular-nums text-muted-foreground md:block">
+                  {fmtValue(d.value, metric)}
+                </span>
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
   );
 }
