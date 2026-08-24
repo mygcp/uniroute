@@ -1,6 +1,8 @@
 # AI Agents & MCP
 
-The **Tools → AI Agents** page connects coding agent CLIs to the gateway.
+The **Tools → AI Agents** page connects coding agent CLIs to the gateway. The
+**Tools → MCP Server** page (`/mcp`) shows connection commands for every
+transport and the full tool list.
 
 ## 1. Harness config (chat)
 
@@ -29,28 +31,28 @@ through natural language.
 
 | Mode | Command | Notes |
 | --- | --- | --- |
-| stdio | `bun mcp-server.ts` | Agent spawns this process |
-| HTTP | `bun mcp-server.ts --http 3007` | `POST /mcp`, optional `Authorization: Bearer $UNIROUTE_MCP_TOKEN` |
+| stdio | `bun app/.server/mcp-server.ts` | Agent spawns this process |
+| HTTP | `bun app/.server/mcp-server.ts --http 3007` | `POST /mcp`, optional `Authorization: Bearer $UNIROUTE_MCP_TOKEN` |
 
 ### Quick registration
 
 ```bash
 # Claude Code
-claude mcp add uniroute -- bun /path/to/uniroute/mcp-server.ts
+claude mcp add uniroute -- bun /path/to/uniroute/app/.server/mcp-server.ts
 ```
 
 ```jsonc
 // OpenCode (opencode.json)
 { "mcp": { "servers": { "uniroute": {
   "type": "local",
-  "command": ["bun", "/path/to/uniroute/mcp-server.ts"] } } } }
+  "command": ["bun", "/path/to/uniroute/app/.server/mcp-server.ts"] } } } }
 ```
 
 ```toml
 # Codex CLI (config.toml)
 [mcp_servers.uniroute]
 command = "bun"
-args = ["/path/to/uniroute/mcp-server.ts"]
+args = ["/path/to/uniroute/app/.server/mcp-server.ts"]
 ```
 
 Or press **Register** on the MCP Server card (writes the config with an

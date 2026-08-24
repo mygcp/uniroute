@@ -66,7 +66,7 @@ Hot indexes are created automatically for the most-used filter/group columns
 | `.server/logger.ts` + `log-stream.ts` | Batched inserts + realtime SSE broadcast |
 | `.server/usage.ts`, `stats.ts` | Usage analytics |
 | `.server/agents-config.ts` | Agent harness configs (backup/restore/MCP registration) |
-| `mcp-server.ts` | MCP stdio/HTTP server (40 tools) |
+| `app/.server/mcp-server.ts` | MCP stdio/HTTP server (40 tools) |
 
 ## Realtime
 

@@ -27,7 +27,7 @@ All configuration is done through environment variables (`.env` file).
 | Variable | Purpose |
 | --- | --- |
 | `UNIROUTE_AGENT_HOME` | Overrides `$HOME` when reading/writing harness configs and backup folder (used by tests; normally unset). |
-| `UNIROUTE_MCP_TOKEN` | Optional bearer token for the MCP HTTP transport (`bun mcp-server.ts --http`). |
+| `UNIROUTE_MCP_TOKEN` | Optional bearer token for the MCP HTTP transport (`bun app/.server/mcp-server.ts --http`). |
 | `UNIROUTE_MCP_PORT` | MCP HTTP port when `--http` is given without a value (default `3007`). |
 
 ## Harness config backups

@@ -534,10 +534,10 @@ const MCP_NAME = "uniroute";
 
 /** Perintah default untuk spawn server MCP dari mesin yang sama. */
 export function defaultMcpCommand(): string[] {
-  const entry = process.argv[1]
-    ? path.resolve(process.argv[1])
-    : path.join(process.cwd(), "mcp-server.ts");
-  return ["bun", entry];
+  // Entri MCP server tinggal di dalam app/.server — resolusi terhadap root
+  // proyek (bukan process.argv[1], yang bergantung pada proses pemanggil).
+  const root = process.env.UNIROUTE_ROOT ?? process.cwd();
+  return ["bun", path.join(root, "app", ".server", "mcp-server.ts")];
 }
 
 function upsertTomlSection(

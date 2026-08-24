@@ -7,3 +7,7 @@
 # React Router
 /.react-router/
 /build/
+
+# Local agent tooling / planning state
+.agents/
+.superpowers/

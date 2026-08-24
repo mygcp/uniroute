@@ -12,7 +12,7 @@
  * Semua tool beroperasi langsung pada SQLite gateway yang sama.
  */
 
-import { executeTool, TOOLS } from "./app/.server/mcp-tools";
+import { executeTool, TOOLS } from "./mcp-tools";
 
 type RpcRequest = {
 	jsonrpc?: string;

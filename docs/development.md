@@ -53,8 +53,7 @@ app/
   components/        # UI (ui/, usage/, chart)
   hooks/             # use-realtime-logs, use-streaming, …
   lib/               # client-safe helpers (format, markdown)
-  .server/           # server modules (db, proxy-handler, translate/, …)
-mcp-server.ts        # MCP stdio/HTTP
+  .server/           # server modules (db, proxy-handler, mcp-server.ts, …)
 docs/                # this documentation
 scripts/bench/       # gateway streaming benchmark toolkit
 ```
