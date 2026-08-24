@@ -1,6 +1,11 @@
 export const SESSION_COOKIE = "uniroute_session";
 const SESSION_MAX_AGE = 60 * 60 * 24; // 24 jam
 
+/** Dipakai bila env PASSWORD tidak diset (mode plug & play). */
+export const DEFAULT_PASSWORD = "CHANGEME";
+
+let warnedDefaultPassword = false;
+
 const sessions = new Set<string>();
 
 export function createSession(): string {
@@ -39,13 +44,19 @@ export function clearSessionCookie(response: Response): void {
 }
 
 export function verifyPassword(input: string): boolean {
-  const pwd = process.env.PASSWORD;
-  if (!pwd) throw new Error("PASSWORD not set");
-  if (!input) return false;
-  const a = new TextEncoder().encode(input);
-  const b = new TextEncoder().encode(pwd);
-  if (a.length !== b.length) return false;
-  let diff = 0;
-  for (let i = 0; i < a.length; i++) diff |= a[i] ^ b[i];
-  return diff === 0;
+	const pwd = process.env.PASSWORD?.trim() || DEFAULT_PASSWORD;
+	if (!process.env.PASSWORD?.trim() && !warnedDefaultPassword) {
+		warnedDefaultPassword = true;
+		console.warn(
+			"[uniroute] PASSWORD not set — using default 'CHANGEME'. " +
+				"Set it in .env for production.",
+		);
+	}
+	if (!input) return false;
+	const a = new TextEncoder().encode(input);
+	const b = new TextEncoder().encode(pwd);
+	if (a.length !== b.length) return false;
+	let diff = 0;
+	for (let i = 0; i < a.length; i++) diff |= a[i] ^ b[i];
+	return diff === 0;
 }
