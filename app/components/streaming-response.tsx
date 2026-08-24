@@ -1,30 +1,72 @@
+import { Spinner } from "./ui/feedback";
+import { Markdown } from "./markdown";
+
 type Props = {
   content: string;
   streaming: boolean;
   done: boolean;
   error: string;
+  /** Waktu berjalan (ms) — dipakai untuk tok/s live. */
+  latencyMs?: number | null;
+  /** Usage resmi dari chunk akhir (bila provider mengirim). */
+  usage?: {
+    completion_tokens?: number;
+  } | null;
 };
 
-export function StreamingResponse({ content, streaming, done, error }: Props) {
+/**
+ * Bubble asisten: markdown + caret streaming + meter tok/s.
+ * Saat streaming → estimasi (chars/4 ÷ detik); setelah selesai & ada usage
+ * resmi → token output sebenarnya.
+ */
+export function StreamingResponse({
+  content,
+  streaming,
+  done,
+  error,
+  latencyMs,
+  usage,
+}: Props) {
+  const elapsedSec = latencyMs != null ? latencyMs / 1000 : null;
+  let tps: number | null = null;
+  if (streaming && content.length > 0 && elapsedSec && elapsedSec > 0.2) {
+    tps = Math.round(content.length / 4 / elapsedSec);
+  } else if (!streaming && done && usage?.completion_tokens && elapsedSec) {
+    tps = Math.round(usage.completion_tokens / elapsedSec);
+  }
+
   return (
-    <div className="min-h-[160px] rounded-lg bg-gray-50 p-3 dark:bg-gray-800 sm:min-h-[200px] sm:p-4">
+    <div className="min-w-0 flex-1">
       {error ? (
-        <pre className="whitespace-pre-wrap text-sm text-red-600 dark:text-red-400">{error}</pre>
-      ) : content ? (
+        <div className="whitespace-pre-wrap break-words rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-xs text-danger">
+          {error}
+        </div>
+      ) : (
         <>
-          <p className="whitespace-pre-wrap text-sm text-gray-800 dark:text-gray-200">{content}</p>
+          <Markdown text={content} />
           {streaming ? (
-            <span className="mt-1 inline-block h-2 w-2 animate-pulse rounded-full bg-blue-500" />
+            <span className="ml-0.5 inline-block h-4 w-[2px] animate-pulse bg-primary align-text-bottom" />
           ) : null}
         </>
-      ) : (
-        <p className="text-sm text-gray-400 dark:text-gray-500">
-          {streaming ? "Streaming..." : "Response akan tampil di sini."}
+      )}
+      {(tps != null || (streaming && content === "")) && (
+        <p
+          className={`mt-1 flex items-center gap-2 text-[11px] tabular-nums ${
+            streaming ? "text-muted-foreground" : "text-success"
+          }`}
+        >
+          {streaming && content === "" ? (
+            <>
+              <Spinner size={12} /> thinking…
+            </>
+          ) : null}
+          {tps != null ? (
+            <span title={streaming ? "estimated" : "actual"}>
+              ≈ {tps} tok/s{!streaming ? ` · ${usage?.completion_tokens ?? "—"} out` : ""}
+            </span>
+          ) : null}
         </p>
       )}
-      {done && !error ? (
-        <p className="mt-2 text-xs text-green-600 dark:text-green-400">Selesai.</p>
-      ) : null}
     </div>
   );
 }

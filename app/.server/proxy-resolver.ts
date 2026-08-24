@@ -8,6 +8,7 @@ import {
 	getGlobalProxyPool,
 	getPool,
 	getProxy,
+	type PoolStrategy,
 	type ProxyConfig,
 	type ProxyPool,
 	recordProxyResult,
@@ -33,6 +34,7 @@ export interface ResolvedProxy {
 	proxy: ProxyConfig;
 	poolId: number;
 	poolName: string;
+	strategy: PoolStrategy;
 }
 
 export interface FetchUpstreamInit extends RequestInit {
@@ -48,11 +50,18 @@ export interface FetchUpstreamInit extends RequestInit {
 	proxyPoolId?: number;
 	/** Provider id, used only for diagnostics. */
 	providerId?: string;
+	/** Konteks untuk proxy_logs: ip client & api key client (opsional). */
+	logClientIp?: string | null;
+	logApiKeyId?: number | null;
 	/** Called each time a specific proxy is about to be used. */
 	onProxyUsed?: (resolved: ResolvedProxy) => void;
 }
 
 const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
+
+// Konstanta byte dipakai di loop parsing panas — hindari alokasi per chunk.
+const CRLF = Buffer.from("\r\n");
+const CRLF_CRLF = Buffer.from("\r\n\r\n");
 
 // ---------------------------------------------------------------------------
 // Resolution
@@ -77,18 +86,45 @@ export function resolveProxyPool(params: {
 	for (const id of pool.proxy_ids) {
 		const proxy = getProxy(id);
 		if (proxy && proxy.is_active) {
-			active.push({ proxy, poolId: pool.id, poolName: pool.name });
+			active.push({
+				proxy,
+				poolId: pool.id,
+				poolName: pool.name,
+				strategy: pool.strategy,
+			});
 		}
 	}
 	return active.length > 0 ? active : null;
 }
 
-/** Round-robin pick: least recently used proxy first. */
-export function pickProxy(chain: ResolvedProxy[]): ResolvedProxy | undefined {
-	if (chain.length === 0) return undefined;
-	return [...chain].sort(
-		(a, b) => a.proxy.last_used_at - b.proxy.last_used_at,
-	)[0];
+/**
+ * Urutan pemakaian proxy sesuai strategy pool:
+ * - round_robin: least-recently-used dulu (rotasi merata)
+ * - priority   : urutan sesuai daftar di pool (index pertama = utama)
+ * - random     : acak tiap request
+ */
+export function orderProxiesByStrategy(
+	chain: ResolvedProxy[],
+): ResolvedProxy[] {
+	if (chain.length <= 1) return chain;
+	const strategy = chain[0].strategy;
+	switch (strategy) {
+		case "priority":
+			return [...chain];
+		case "random": {
+			const arr = [...chain];
+			for (let i = arr.length - 1; i > 0; i--) {
+				const j = Math.floor(Math.random() * (i + 1));
+				[arr[i], arr[j]] = [arr[j]!, arr[i]!];
+			}
+			return arr;
+		}
+		case "round_robin":
+		default:
+			return [...chain].sort(
+				(a, b) => a.proxy.last_used_at - b.proxy.last_used_at,
+			);
+	}
 }
 
 function markProxyUsed(id: number): void {
@@ -113,6 +149,8 @@ export async function fetchUpstream(
 		proxyPoolId,
 		providerId,
 		onProxyUsed,
+		logClientIp,
+		logApiKeyId,
 		...fetchInit
 	} = init;
 
@@ -130,9 +168,9 @@ export async function fetchUpstream(
 		return fetch(url, fetchInit);
 	}
 
-	const ordered = [...chain].sort(
-		(a, b) => a.proxy.last_used_at - b.proxy.last_used_at,
-	);
+	// Urutan berdasarkan strategy pool (RR / priority / random), bukan
+	// hardcoded LRU lagi.
+	const ordered = orderProxiesByStrategy(chain);
 	let lastResponse: Response | null = null;
 	let lastError: string | null = null;
 
@@ -174,6 +212,11 @@ export async function fetchUpstream(
 					latencyMs: Date.now() - started,
 					providerId: providerId ?? null,
 				},
+				provider_id: providerId ?? null,
+				proxy_id: resolved.proxy.id,
+				latency_ms: Date.now() - started,
+				client_ip: logClientIp ?? null,
+				api_key_id: logApiKeyId ?? null,
 			});
 		} catch (err) {
 			lastError = err instanceof Error ? err.message : String(err);
@@ -192,6 +235,11 @@ export async function fetchUpstream(
 					latencyMs: Date.now() - started,
 					providerId: providerId ?? null,
 				},
+				provider_id: providerId ?? null,
+				proxy_id: resolved.proxy.id,
+				latency_ms: Date.now() - started,
+				client_ip: logClientIp ?? null,
+				api_key_id: logApiKeyId ?? null,
 			});
 		}
 	}
@@ -262,12 +310,7 @@ async function httpConnectTunnel(
 			`Host: ${targetHost}:${targetPort}\r\n` +
 			`${auth}\r\n`,
 	);
-	const { head } = await readUntil(
-		socket,
-		Buffer.from("\r\n\r\n"),
-		16 * 1024,
-		signal,
-	);
+	const { head } = await readUntil(socket, CRLF_CRLF, 16 * 1024, signal);
 	const statusLine = head.toString("latin1").split("\r\n")[0] ?? "";
 	const code = Number(statusLine.split(" ")[1] ?? 0);
 	if (code !== 200) {
@@ -434,47 +477,54 @@ function readResponseHead(
 // Socket reading helpers
 // ---------------------------------------------------------------------------
 
-function readN(
+type StepResult<T> = { done: true; value: T } | { done: false };
+
+/**
+ * Kumpulkan byte dari socket sampai `step` mengembalikan nilai final.
+ * - step mengembalikan `{ done: false }` bila butuh data lagi.
+ * - throw di dalam step (mis. limit terlampaui) menolak promise.
+ * - abort / socket end-close selesai sebelum nilai final → reject.
+ */
+function collectSocket<T>(
 	socket: Socket,
-	n: number,
-	signal?: AbortSignal,
-): Promise<Buffer> {
+	signal: AbortSignal | undefined,
+	endFailure: () => Error,
+	step: (chunk: Buffer) => StepResult<T>,
+): Promise<T> {
 	return new Promise((resolve, reject) => {
-		let buf = Buffer.alloc(0);
-		let done = false;
-		const onData = (chunk: Buffer) => {
-			buf = Buffer.concat([buf, chunk]);
-			if (buf.length >= n) {
-				cleanup();
-				done = true;
-				resolve(buf.subarray(0, n));
-			}
-		};
-		const onError = (err: Error) => {
-			if (done) return;
-			cleanup();
-			done = true;
-			reject(err);
-		};
-		const onEnd = () => {
-			if (done) return;
-			cleanup();
-			done = true;
-			reject(new Error("socket closed while reading"));
-		};
-		const onAbort = () => {
-			if (done) return;
-			cleanup();
-			done = true;
-			reject(new Error("aborted"));
-		};
-		const cleanup = () => {
+		let settled = false;
+		function cleanup(): void {
 			socket.off("data", onData);
 			socket.off("error", onError);
 			socket.off("end", onEnd);
 			socket.off("close", onEnd);
 			signal?.removeEventListener("abort", onAbort);
-		};
+		}
+		function settle(fn: () => void): void {
+			if (settled) return;
+			settled = true;
+			cleanup();
+			fn();
+		}
+		function onData(chunk: Buffer): void {
+			if (settled) return;
+			try {
+				const r = step(chunk);
+				if (r.done) settle(() => resolve(r.value));
+			} catch (err) {
+				settle(() =>
+					reject(err instanceof Error ? err : new Error(String(err))),
+				);
+			}
+		}
+		function onError(err: Error): void {
+			settle(() => reject(err));
+		}
+		function onEnd(): void {
+			settle(() => reject(endFailure()));
+		}
+		const onAbort = () => settle(() => reject(new Error("aborted")));
+
 		socket.on("data", onData);
 		socket.on("error", onError);
 		socket.on("end", onEnd);
@@ -483,65 +533,56 @@ function readN(
 		else signal?.addEventListener("abort", onAbort, { once: true });
 	});
 }
+
+/** Baca tepat `n` byte dari socket. */
+function readN(
+	socket: Socket,
+	n: number,
+	signal?: AbortSignal,
+): Promise<Buffer> {
+	let buf = Buffer.alloc(0);
+	return collectSocket<Buffer>(
+		socket,
+		signal,
+		() => new Error("socket closed while reading"),
+		(chunk) => {
+			buf = Buffer.concat([buf, chunk]);
+			if (buf.length >= n) {
+				return { done: true, value: buf.subarray(0, n) };
+			}
+			return { done: false };
+		},
+	);
+}
+
+/** Baca sampai delimiter ditemukan; sisanya dikembalikan sebagai `tail`. */
 function readUntil(
 	socket: Socket,
 	delimiter: Buffer,
 	maxSize: number,
 	signal?: AbortSignal,
 ): Promise<{ head: Buffer; tail: Buffer }> {
-	return new Promise((resolve, reject) => {
-		let buf = Buffer.alloc(0);
-		let done = false;
-		const onData = (chunk: Buffer) => {
+	let buf = Buffer.alloc(0);
+	return collectSocket<{ head: Buffer; tail: Buffer }>(
+		socket,
+		signal,
+		() => new Error("socket closed before response head"),
+		(chunk) => {
 			buf = Buffer.concat([buf, chunk]);
 			if (buf.length > maxSize) {
-				cleanup();
-				done = true;
-				reject(new Error("response head too large"));
-				return;
+				throw new Error("response head too large");
 			}
 			const idx = buf.indexOf(delimiter);
-			if (idx !== -1) {
-				cleanup();
-				done = true;
-				resolve({
+			if (idx === -1) return { done: false };
+			return {
+				done: true,
+				value: {
 					head: buf.subarray(0, idx),
 					tail: buf.subarray(idx + delimiter.length),
-				});
-			}
-		};
-		const onError = (err: Error) => {
-			if (done) return;
-			cleanup();
-			done = true;
-			reject(err);
-		};
-		const onEnd = () => {
-			if (done) return;
-			cleanup();
-			done = true;
-			reject(new Error("socket closed before response head"));
-		};
-		const onAbort = () => {
-			if (done) return;
-			cleanup();
-			done = true;
-			reject(new Error("aborted"));
-		};
-		const cleanup = () => {
-			socket.off("data", onData);
-			socket.off("error", onError);
-			socket.off("end", onEnd);
-			socket.off("close", onEnd);
-			signal?.removeEventListener("abort", onAbort);
-		};
-		socket.on("data", onData);
-		socket.on("error", onError);
-		socket.on("end", onEnd);
-		socket.on("close", onEnd);
-		if (signal?.aborted) onAbort();
-		else signal?.addEventListener("abort", onAbort, { once: true });
-	});
+				},
+			};
+		},
+	);
 }
 
 // ---------------------------------------------------------------------------
@@ -606,7 +647,7 @@ function makeBodyStream(
 							chunkTerm -= take;
 							if (chunkTerm > 0) return true;
 						}
-						const nl = data.indexOf(Buffer.from("\r\n"), pos);
+						const nl = data.indexOf(CRLF, pos);
 						if (nl === -1) {
 							lineBuf = Buffer.concat([lineBuf, data.subarray(pos)]);
 							return true; // wait for more
@@ -643,8 +684,8 @@ function makeBodyStream(
 						trailerBuf = Buffer.concat([trailerBuf, data.subarray(pos)]);
 						const hasBlankLine =
 							trailerBuf.length >= 2 &&
-							trailerBuf.subarray(0, 2).equals(Buffer.from("\r\n"));
-						if (hasBlankLine || trailerBuf.indexOf(Buffer.from("\r\n\r\n")) !== -1) {
+							trailerBuf.subarray(0, 2).equals(CRLF);
+						if (hasBlankLine || trailerBuf.indexOf(CRLF_CRLF) !== -1) {
 							finish();
 							return false;
 						}

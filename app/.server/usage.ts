@@ -9,6 +9,7 @@ export type UsageSummary = {
   totalTokens: number;
   inputTokens: number;
   outputTokens: number;
+  cachedTokens: number;
   cost: number;
 };
 
@@ -24,6 +25,7 @@ export type Trends = {
   totalTokens: number | null;
   inputTokens: number | null;
   outputTokens: number | null;
+  cachedTokens: number | null;
   cost: number | null;
   requests: number | null;
   successRate: number | null;
@@ -64,16 +66,37 @@ export type UsageData = {
 
 const DAY_MS = 86_400_000;
 
+type PricePair = { input: number; output: number };
+
+/**
+ * Cache harga per kombinasi model::provider untuk satu batch perhitungan.
+ * Tanpa ini, loop cost memanggil getPrice (2 query) untuk SETIAP baris log.
+ */
+function priceLookup(
+  rows: Array<Record<string, unknown>>,
+): (model: unknown, providerId: unknown) => PricePair {
+  const cache = new Map<string, PricePair>();
+  return (model, providerId) => {
+    const key = `${String(model ?? "").toLowerCase()}::${String(
+      providerId ?? "",
+    ).toLowerCase()}`;
+    let price = cache.get(key);
+    if (!price) {
+      price = getPrice(String(model ?? ""), String(providerId ?? ""));
+      cache.set(key, price);
+    }
+    return price;
+  };
+}
+
 function computeCost(
   promptTokens: number | null,
   completionTokens: number | null,
-  model: string,
-  providerId: string,
+  price: PricePair,
 ): number {
-  const { input, output } = getPrice(model, providerId);
   const pt = promptTokens ?? 0;
   const ct = completionTokens ?? 0;
-  return (pt * input) / 1_000_000 + (ct * output) / 1_000_000;
+  return (pt * price.input) / 1_000_000 + (ct * price.output) / 1_000_000;
 }
 
 function rangeBounds(range: TimeRange): [number, number] {
@@ -159,12 +182,14 @@ function _querySummaryFor(bounds: [number, number]): UsageSummary {
   const [fromTs, toTs] = bounds;
   const sumRow = query(
     `SELECT COALESCE(SUM(prompt_tokens), 0) AS pt,
-            COALESCE(SUM(completion_tokens), 0) AS ct
+            COALESCE(SUM(completion_tokens), 0) AS ct,
+            COALESCE(SUM(cached_tokens), 0) AS cache
        FROM request_logs
       WHERE created_at >= ? AND created_at < ?`,
-  ).get(fromTs, toTs) as { pt: number; ct: number };
+  ).get(fromTs, toTs) as { pt: number; ct: number; cache: number };
   const pt = Number(sumRow.pt);
   const ct = Number(sumRow.ct);
+  const cache = Number(sumRow.cache);
 
   const rows = query(
     `SELECT prompt_tokens, completion_tokens, model, provider_id
@@ -172,19 +197,19 @@ function _querySummaryFor(bounds: [number, number]): UsageSummary {
       WHERE created_at >= ? AND created_at < ?
         AND (prompt_tokens IS NOT NULL OR completion_tokens IS NOT NULL)`,
   ).all(fromTs, toTs) as Record<string, unknown>[];
+  const priceOf = priceLookup(rows);
   const cost = rows.reduce(
     (s, r) =>
       s +
       computeCost(
         r.prompt_tokens as number | null,
         r.completion_tokens as number | null,
-        String(r.model),
-        String(r.provider_id),
+        priceOf(r.model, r.provider_id),
       ),
     0,
   );
 
-  return { totalTokens: pt + ct, inputTokens: pt, outputTokens: ct, cost };
+  return { totalTokens: pt + ct, inputTokens: pt, outputTokens: ct, cachedTokens: cache, cost };
 }
 
 function _querySummary(range: TimeRange): UsageSummary {
@@ -228,6 +253,7 @@ function _queryTrends(range: TimeRange, summary: UsageSummary, performance: Perf
       totalTokens: null,
       inputTokens: null,
       outputTokens: null,
+      cachedTokens: null,
       cost: null,
       requests: null,
       successRate: null,
@@ -241,6 +267,7 @@ function _queryTrends(range: TimeRange, summary: UsageSummary, performance: Perf
     totalTokens: pctDelta(summary.totalTokens, prevSummary.totalTokens),
     inputTokens: pctDelta(summary.inputTokens, prevSummary.inputTokens),
     outputTokens: pctDelta(summary.outputTokens, prevSummary.outputTokens),
+    cachedTokens: pctDelta(summary.cachedTokens, prevSummary.cachedTokens),
     cost: pctDelta(summary.cost, prevSummary.cost),
     requests: pctDelta(performance.requests, prevPerf.requests),
     successRate: prevPerf.requests ? pointDelta(performance.successRate, prevPerf.successRate) : null,
@@ -297,6 +324,7 @@ function _queryTimeSeries(range: TimeRange, metric: Metric): TimeSeriesPoint[] {
        FROM request_logs
       WHERE created_at >= ? AND created_at < ?`,
   ).all(fromTs, toTs) as Record<string, unknown>[];
+  const priceOf = priceLookup(rows);
   const map = new Map<string, number>();
   for (const r of rows) {
     const dt = r.dt as string;
@@ -306,8 +334,7 @@ function _queryTimeSeries(range: TimeRange, metric: Metric): TimeSeriesPoint[] {
         computeCost(
           r.prompt_tokens as number | null,
           r.completion_tokens as number | null,
-          String(r.model),
-          String(r.provider_id),
+          priceOf(r.model, r.provider_id),
         ),
     );
   }
@@ -359,6 +386,7 @@ function _queryBreakdown(range: TimeRange, metric: Metric, dim: Dimension): Brea
        FROM request_logs
       WHERE created_at >= ? AND created_at < ?`,
   ).all(fromTs, toTs) as Record<string, unknown>[];
+  const priceOf = priceLookup(rows);
   const map = new Map<string, number>();
   for (const r of rows) {
     const grp = String(r.grp);
@@ -368,8 +396,7 @@ function _queryBreakdown(range: TimeRange, metric: Metric, dim: Dimension): Brea
         computeCost(
           r.prompt_tokens as number | null,
           r.completion_tokens as number | null,
-          String(r.model),
-          String(r.provider_id),
+          priceOf(r.model, r.provider_id),
         ),
     );
   }

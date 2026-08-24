@@ -20,7 +20,11 @@ import {
 	getGlobalProxyPool,
 	setGlobalProxyPool,
 } from "./outbound-proxy";
-import { fetchUpstream, pickProxy, resolveProxyPool } from "./proxy-resolver";
+import {
+	fetchUpstream,
+	orderProxiesByStrategy,
+	resolveProxyPool,
+} from "./proxy-resolver";
 
 /** Minimal in-process HTTP CONNECT proxy. After the CONNECT handshake it
  *  answers the inner HTTP request with `respond(requestHead)`. */
@@ -126,8 +130,8 @@ describe("resolveProxyPool", () => {
 	});
 });
 
-describe("pickProxy round-robin", () => {
-	test("picks least recently used first", () => {
+describe("orderProxiesByStrategy", () => {
+	test("round_robin picks least recently used first", () => {
 		const p1 = createProxy({
 			name: "r1",
 			type: "http-connect",
@@ -143,7 +147,37 @@ describe("pickProxy round-robin", () => {
 		const pool = createPool({ name: "rr", proxy_ids: [p1.id, p2.id] });
 		const chain = resolveProxyPool({ providerPoolId: pool.id })!;
 		// p1 has older last_used_at (0) → picked first
-		expect(pickProxy(chain)?.proxy.id).toBe(p1.id);
+		expect(orderProxiesByStrategy(chain)[0]?.proxy.id).toBe(p1.id);
+	});
+
+	test("priority keeps the order defined in the pool", () => {
+		const p1 = createProxy({ name: "pr1", type: "http-connect", host: "h", port: 1 });
+		const p2 = createProxy({ name: "pr2", type: "http-connect", host: "h", port: 2 });
+		const pool = createPool({
+			name: "prio",
+			proxy_ids: [p2.id, p1.id],
+			strategy: "priority",
+		});
+		const chain = resolveProxyPool({ providerPoolId: pool.id })!;
+		expect(chain[0]?.strategy).toBe("priority");
+		expect(orderProxiesByStrategy(chain).map((r) => r.proxy.id)).toEqual([
+			p2.id,
+			p1.id,
+		]);
+	});
+
+	test("random always returns a chain member", () => {
+		const ids = [1, 2, 3].map((n) =>
+			createProxy({ name: `rd${n}`, type: "http-connect", host: "h", port: n }).id,
+		);
+		const pool = createPool({
+			name: "rnd",
+			proxy_ids: ids,
+			strategy: "random",
+		});
+		const chain = resolveProxyPool({ providerPoolId: pool.id })!;
+		const orderedIds = orderProxiesByStrategy(chain).map((r) => r.proxy.id);
+		expect(orderedIds.sort()).toEqual([...ids].sort());
 	});
 });
 

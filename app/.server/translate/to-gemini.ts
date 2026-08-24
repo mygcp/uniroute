@@ -39,6 +39,13 @@ function toParts(
             },
           });
         }
+      } else if (p.type === "audio") {
+        parts.push({
+          inlineData: {
+            mimeType: `audio/${p.format ?? "wav"}`,
+            data: p.data,
+          },
+        });
       }
     }
   }

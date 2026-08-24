@@ -18,7 +18,3 @@ export function broadcast(payload: unknown): void {
     }
   }
 }
-
-export function getClientsCount(): number {
-  return clients.size;
-}

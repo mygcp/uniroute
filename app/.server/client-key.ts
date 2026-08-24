@@ -191,7 +191,7 @@ export function generateKey(prefix = "sk-"): string {
   return `${normalized}${hex}`;
 }
 
-export function normalizePrefix(prefix: string | null | undefined): string {
+function normalizePrefix(prefix: string | null | undefined): string {
   const trimmed = (prefix ?? "sk-").trim();
   if (!trimmed) return "sk-";
   return /^[A-Za-z0-9_-]+$/.test(trimmed) ? trimmed : "sk-";

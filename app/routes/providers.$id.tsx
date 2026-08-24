@@ -5,17 +5,36 @@ import { getRegistryEntry } from "~/registry";
 import type { RegistryEntry } from "~/types";
 import { query } from "../.server/db";
 import {
+  listSessions,
+  getMessages,
+  saveSession,
+  deleteSession as deleteChatSession,
+  type ChatMessage,
+} from "../.server/chat-store";
+import {
   addApiKey,
   deleteApiKeyById,
   listApiKeys,
   setApiKeyActive,
+  setApiKeyProxyPool,
   setRoutingKey,
   type ApiKeyRow,
 } from "../.server/credential";
+import {
+  assignPool,
+  createPool,
+  getPoolForProvider,
+  getProxy,
+  listPools,
+  listProxies,
+  unassignPool,
+  updatePool,
+} from "../.server/outbound-proxy";
 import { reload } from "../.server/registry";
 import { useStreaming } from "../hooks/use-streaming";
 import { MessageInput } from "../components/message-input";
 import { StreamingResponse } from "../components/streaming-response";
+import { Markdown } from "../components/markdown";
 import { useConfirm } from "../components/ui/confirm-dialog";
 import { useToast } from "../components/ui/toast";
 import { PageHeader } from "../components/ui/page-header";
@@ -25,6 +44,7 @@ import { Button } from "../components/ui/button";
 import { Spinner } from "../components/ui/feedback";
 import { Input, Label, Select } from "../components/ui/field";
 import { Tabs } from "../components/ui/tabs";
+import { Toggle } from "../components/ui/toggle";
 import {
   ArrowLeft,
   Plug,
@@ -37,6 +57,7 @@ import {
   CheckCircle2,
   XCircle,
   ShieldCheck,
+  Globe,
 } from "lucide-react";
 
 type ProviderRow = {
@@ -61,140 +82,6 @@ const TAB_ITEMS: { value: "keys" | "models" | "chat"; label: string }[] = [
   { value: "chat", label: "Chat Playground" },
 ];
 
-function upsertProviderModel(
-  providerId: string,
-  modelName: string,
-  contextLength: number | null,
-  makePrimary = false,
-) {
-  const existing = query(
-    "SELECT id, is_primary FROM models WHERE model_name = ? AND provider_id = ?",
-  ).get(modelName, providerId) as { id: number; is_primary: number } | undefined;
-
-  if (existing) {
-    query(
-      "UPDATE models SET context_length = COALESCE(?, context_length), is_active = 1 WHERE id = ?",
-    ).run(contextLength, existing.id);
-    if (makePrimary) {
-      query("UPDATE models SET is_primary = 0 WHERE provider_id = ?").run(providerId);
-      query("UPDATE models SET is_primary = 1 WHERE id = ?").run(existing.id);
-    }
-    return { id: existing.id, created: false };
-  }
-
-  if (makePrimary) {
-    query("UPDATE models SET is_primary = 0 WHERE provider_id = ?").run(providerId);
-  }
-
-  const hasPrimary = query(
-    "SELECT 1 AS ok FROM models WHERE provider_id = ? AND is_primary = 1",
-  ).get(providerId) as { ok: number } | undefined;
-
-  const isPrimary = makePrimary || !hasPrimary ? 1 : 0;
-  const result = query(
-    `INSERT INTO models (model_name, provider_id, context_length, is_active, is_primary)
-     VALUES (?, ?, ?, 1, ?)`,
-  ).run(modelName, providerId, contextLength, isPrimary) as {
-    lastInsertRowid: number | bigint;
-  };
-
-  return { id: Number(result.lastInsertRowid), created: true };
-}
-
-function parseContextLength(value: FormDataEntryValue | null): number | null {
-  if (value == null || value === "") return null;
-  const n = Number(value);
-  if (!Number.isFinite(n) || n <= 0) return null;
-  return Math.round(n);
-}
-
-async function fetchProviderModelsList(
-  providerId: string,
-): Promise<
-  | { ok: true; models: { id: string; contextLength: number | null }[] }
-  | { ok: false; message: string }
-> {
-  const provider = query(
-    "SELECT base_url, auth_type FROM providers WHERE id = ?",
-  ).get(providerId) as { base_url: string; auth_type: string } | undefined;
-  if (!provider) return { ok: false, message: "Provider not found" };
-
-  const keys = listApiKeys(providerId).filter((k) => k.is_active);
-  const key = keys.find((k) => k.is_routing) ?? keys[0];
-  if (!key && provider.auth_type !== "none") {
-    return { ok: false, message: "No active API key to import models" };
-  }
-
-  const entry = getRegistryEntry(providerId);
-  const modelsUrl =
-    entry?.modelsUrl ?? new URL("/v1/models", provider.base_url).toString();
-
-  const headers = new Headers({ "Content-Type": "application/json" });
-  if (key) {
-    if (provider.auth_type === "bearer") {
-      headers.set("Authorization", `Bearer ${key.api_key}`);
-    } else if (provider.auth_type === "apikey") {
-      headers.set("x-goog-api-key", key.api_key);
-    }
-  }
-  if (entry?.headers) {
-    for (const [k, v] of Object.entries(entry.headers)) headers.set(k, v);
-  }
-
-  try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 15000);
-    const res = await fetch(modelsUrl, {
-      headers,
-      signal: controller.signal,
-    });
-    clearTimeout(timer);
-    if (!res.ok) {
-      const text = (await res.text()).slice(0, 300);
-      return { ok: false, message: `HTTP ${res.status}: ${text}` };
-    }
-    type RemoteModelItem = {
-      id?: string;
-      name?: string;
-      context_length?: number;
-      contextLength?: number;
-      max_model_len?: number;
-    };
-    const body = (await res.json()) as {
-      data?: RemoteModelItem[];
-      models?: RemoteModelItem[];
-    };
-    const raw: RemoteModelItem[] = Array.isArray(body?.data)
-      ? body.data
-      : Array.isArray(body?.models)
-        ? body.models
-        : Array.isArray(body)
-          ? (body as RemoteModelItem[])
-          : [];
-    const models = raw
-      .map((m) => {
-        const id = String(m.id ?? m.name ?? "").trim();
-        if (!id) return null;
-        const contextLength =
-          typeof m.context_length === "number"
-            ? m.context_length
-            : typeof m.contextLength === "number"
-              ? m.contextLength
-              : typeof m.max_model_len === "number"
-                ? m.max_model_len
-                : null;
-        return { id, contextLength };
-      })
-      .filter((m): m is { id: string; contextLength: number | null } => m != null);
-    return { ok: true, models };
-  } catch (err) {
-    return {
-      ok: false,
-      message: err instanceof Error ? err.message : String(err),
-    };
-  }
-}
-
 function dbSyncModels(providerId: string, entry: RegistryEntry): void {
   for (const [i, m] of entry.models.entries()) {
     query(
@@ -202,6 +89,13 @@ function dbSyncModels(providerId: string, entry: RegistryEntry): void {
        VALUES (?, ?, ?, 1, ?)`,
     ).run(m.id, providerId, m.contextLength ?? null, i === 0 ? 1 : 0);
   }
+}
+
+function parseContextLength(value: FormDataEntryValue | null): number | null {
+  if (value == null || value === "") return null;
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return Math.round(n);
 }
 
 export async function loader({ params }: Route.LoaderArgs) {
@@ -215,6 +109,24 @@ export async function loader({ params }: Route.LoaderArgs) {
         "SELECT id, model_name, context_length, is_active, is_primary FROM models WHERE provider_id = ? ORDER BY is_primary DESC, id",
       ).all(provider.id) as unknown as ModelRow[])
     : [];
+
+  const pools = listPools();
+  const activeProxies = listProxies(true).length;
+  const proxies = listProxies();
+  const chatSessions = provider ? listSessions(provider.id) : [];
+
+  // Assignment provider aktif: pool biasa atau singleton single-proxy.
+  let providerSelected = "";
+  if (provider) {
+    const pp = getPoolForProvider(provider.id);
+    if (pp) {
+      const singleName = `auto · ${provider.id} · provider-single`;
+      providerSelected =
+        pp.name === singleName && pp.proxy_ids.length === 1
+          ? `proxy:${pp.proxy_ids[0]}`
+          : String(pp.id);
+    }
+  }
 
   const entry = getRegistryEntry(params.id ?? "");
   const registryModelNames = (entry?.models ?? []).map((m) => m.id);
@@ -230,6 +142,11 @@ export async function loader({ params }: Route.LoaderArgs) {
     models,
     missingModels,
     entry: entry ?? null,
+    pools,
+    providerSelected,
+    activeProxies,
+    proxies,
+    chatSessions,
   };
 }
 
@@ -294,11 +211,197 @@ export async function action({ request, params }: Route.ActionArgs) {
     }
   }
 
+  // ---- Outbound proxy assignment ------------------------------------------
+
+  // Semua key provider ini memakai pool yang sama (level provider).
+  // Nilai "proxy:<id>" berarti memakai SATU proxy langsung dari list —
+  // dibungkus pool singleton agar pipeline routing tidak berubah.
+  if (intent === "set-provider-pool") {
+    const raw = String(form.get("pool_id") || "");
+    if (!raw) {
+      unassignPool("provider", id);
+      return { savedPool: true };
+    }
+    let poolId: number;
+    if (raw.startsWith("proxy:")) {
+      const proxyId = Number(raw.slice(6));
+      const name = `auto · ${id} · provider-single`;
+      let pool = listPools().find((p) => p.name === name);
+      if (pool) updatePool(pool.id, { proxy_ids: [proxyId] });
+      else pool = createPool({ name, proxy_ids: [proxyId] });
+      poolId = pool.id;
+    } else {
+      poolId = Number(raw);
+    }
+    assignPool({
+      proxyPoolId: poolId,
+      targetType: "provider",
+      targetId: id,
+    });
+    return { savedPool: true };
+  }
+
+  // Satu akun (provider_credentials) memakai pool sendiri.
+  if (intent === "set-key-pool") {
+    const keyId = Number(form.get("key_id"));
+    const raw = String(form.get("pool_id") || "");
+    setApiKeyProxyPool(keyId, raw ? Number(raw) : null);
+    return { savedPool: true };
+  }
+
+  // Pilih SATU proxy spesifik untuk satu akun — disimpan sebagai pool
+  // singleton "auto · <id> · key-<keyId>" agar pipeline routing lama tetap
+  // berfungsi. Tanpa proxy_id = lepas assignment.
+  if (intent === "set-key-proxy") {
+    const keyId = Number(form.get("key_id"));
+    const key = listApiKeys(id).find((k) => k.id === keyId);
+    if (!key) {
+      return { distribute: { ok: false, message: "Key not found", rows: [] } };
+    }
+    const proxyIdRaw = String(form.get("proxy_id") || "");
+    if (!proxyIdRaw) {
+      setApiKeyProxyPool(keyId, null);
+      return { savedPool: true };
+    }
+    const proxyId = Number(proxyIdRaw);
+    const name = `auto · ${id} · key-${keyId}`;
+    let pool = listPools().find((p) => p.name === name);
+    if (pool) updatePool(pool.id, { proxy_ids: [proxyId] });
+    else pool = createPool({ name, proxy_ids: [proxyId] });
+    setApiKeyProxyPool(keyId, pool.id);
+    return { savedPool: true };
+  }
+
+  // Distribusi otomatis: bagi proxy aktif (dari satu pool ATAU seluruh daftar
+  // proxy) secara round-robin ke semua akun aktif provider. Pool otomatis
+  // bernama "auto · <id> · acct-N" dibuat/diperbarui & ditautkan per akun.
+  if (intent === "distribute") {
+    const sourceType =
+      String(form.get("source_type")) === "list" ? "list" : "pool";
+    const accounts = listApiKeys(id).filter((k) => k.is_active);
+
+    let proxies: number[] = [];
+    let sourceLabel = "";
+    if (sourceType === "list") {
+      proxies = listProxies(true).map((p) => p.id);
+      sourceLabel = "proxy list";
+    } else {
+      const source = listPools().find(
+        (p) => p.id === Number(form.get("pool_id")),
+      );
+      if (!source) {
+        return {
+          distribute: { ok: false, message: "Pool not found", rows: [] },
+        };
+      }
+      proxies = source.proxy_ids
+        .map((pid) => getProxy(pid))
+        .filter((p) => p && p.is_active)
+        .map((p) => p!.id);
+      sourceLabel = `pool “${source.name}”`;
+    }
+
+    if (accounts.length === 0) {
+      return {
+        distribute: {
+          ok: false,
+          message: "No active API keys on this provider",
+          rows: [],
+        },
+      };
+    }
+    if (proxies.length === 0) {
+      return {
+        distribute: {
+          ok: false,
+          message: `No active proxies found in ${sourceLabel}`,
+          rows: [],
+        },
+      };
+    }
+
+    const rows = accounts.map((k, i) => {
+      const ids = proxies.filter((_, j) => j % accounts.length === i);
+      const name = `auto · ${id} · acct-${i + 1}`;
+      let pool = listPools().find((p) => p.name === name);
+      if (pool) updatePool(pool.id, { proxy_ids: ids });
+      else pool = createPool({ name, proxy_ids: ids });
+      setApiKeyProxyPool(k.id, pool.id);
+      return `${k.label || `Key #${k.id}`} → ${name} (${ids.length} proxies)`;
+    });
+
+    return {
+      distribute: {
+        ok: true,
+        message: `${accounts.length} accounts · ${proxies.length} active proxies from ${sourceLabel} distributed`,
+        rows,
+      },
+    };
+  }
+
+  // ---- Chat playground persistence ----------------------------------------
+
+  if (intent === "chat-save") {
+    const providerId = params.id ?? "";
+    let msgs: ChatMessage[] = [];
+    try {
+      const parsed = JSON.parse(String(form.get("messages") || "[]")) as ChatMessage[];
+      msgs = Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return { chat: { ok: false, sessionId: null, message: "Invalid messages payload" } };
+    }
+    const clean = msgs
+      .filter((m) => m && (m.role === "user" || m.role === "assistant") && typeof m.content === "string")
+      .map((m) => ({
+        role: m.role,
+        content: m.content,
+        model: m.model ?? null,
+        latency_ms: m.latency_ms ?? null,
+      }));
+    if (clean.length === 0) {
+      return { chat: { ok: false, sessionId: null, message: "Nothing to save" } };
+    }
+    const sidRaw = Number(form.get("session_id")) || 0;
+    const firstUser = clean.find((m) => m.role === "user");
+    const title =
+      String(form.get("title") || "").trim() ||
+      (firstUser ? firstUser.content.slice(0, 60) : "New chat");
+    const { sessionId } = saveSession(
+      providerId,
+      sidRaw || null,
+      title,
+      String(form.get("model") || "") || null,
+      clean,
+    );
+    return { chat: { ok: true, sessionId, message: null } };
+  }
+
+  if (intent === "chat-load") {
+    const sid = Number(form.get("session_id"));
+    const rows = getMessages(sid) as ChatMessage[];
+    return {
+      chatLoad: {
+        ok: rows.length > 0,
+        sessionId: sid,
+        messages: rows.map((m) => ({
+          role: m.role as "user" | "assistant",
+          content: m.content,
+          model: m.model ?? null,
+          ms: m.latency_ms ?? null,
+        })),
+      },
+    };
+  }
+
+  if (intent === "chat-delete") {
+    deleteChatSession(Number(form.get("session_id")));
+    return { chatDeleted: Number(form.get("session_id")) };
+  }
+
   if (intent === "add-key") {
     const apiKey = String(form.get("api_key") ?? "").trim();
     if (apiKey) {
-      addApiKey(
-        id,
+      addApiKey(        id,
         apiKey,
         String(form.get("label") ?? "").trim() || null,
         true,
@@ -339,6 +442,8 @@ export async function action({ request, params }: Route.ActionArgs) {
     const contextLength = parseContextLength(form.get("context_length"));
     const makePrimary =
       form.get("is_primary") === "1" || form.get("is_primary") === "on";
+    // Dynamic import: modul .server tidak boleh masuk graf client bundle.
+    const { upsertProviderModel } = await import("../.server/provider-models");
     upsertProviderModel(id, modelName, contextLength, makePrimary);
     reload();
     return {
@@ -360,6 +465,9 @@ export async function action({ request, params }: Route.ActionArgs) {
       };
     }
 
+    const { upsertProviderModel, fetchProviderModelsList } = await import(
+      "../.server/provider-models"
+    );
     const fetched = await fetchProviderModelsList(id);
     const contextById = new Map<string, number | null>();
     if (fetched.ok) {
@@ -386,6 +494,9 @@ export async function action({ request, params }: Route.ActionArgs) {
   }
 
   if (intent === "fetch-remote-models") {
+    const { fetchProviderModelsList } = await import(
+      "../.server/provider-models"
+    );
     const fetched = await fetchProviderModelsList(id);
     if (!fetched.ok) {
       return {
@@ -463,7 +574,73 @@ function MaskedKey({ value }: { value: string }) {
   );
 }
 
-export default function ProviderDetail({ loaderData }: Route.ComponentProps) {
+export default function ProviderDetail({
+  loaderData,
+  actionData,
+}: Route.ComponentProps) {
+  const { pools, providerSelected, activeProxies, proxies } = loaderData;
+  const [distSource, setDistSource] = useState<"pool" | "list">("pool");
+  const [picker, setPicker] = useState<{ keyId: number; label: string } | null>(
+    null,
+  );
+  const [pickerQuery, setPickerQuery] = useState("");
+
+  const proxiesById = new Map(proxies.map((p) => [p.id, p]));
+  const autoPoolByName = (name: string) => pools.find((p) => p.name === name);
+
+  type Tone = "ok" | "error" | "none";
+  const PROXY_TONE_CLASS: Record<Tone, string> = {
+    ok: "border-success/40 bg-success/15 text-success hover:bg-success/25",
+    error: "border-danger/40 bg-danger/15 text-danger hover:bg-danger/25",
+    none: "border-border bg-muted text-muted-foreground hover:bg-glass-hover",
+  };
+
+  function proxyInfoFor(key: ApiKeyRow): {
+    tone: Tone;
+    detail: string;
+    selectedId: number | null;
+  } {
+    if (!key.proxy_pool_id) {
+      return { tone: "none", detail: "No proxy — click to pick one", selectedId: null };
+    }
+    const pool =
+      pools.find((p) => p.id === key.proxy_pool_id) ??
+      autoPoolByName(`auto · ${loaderData.provider?.id ?? ""} · key-${key.id}`);
+    if (!pool || pool.proxy_ids.length === 0) {
+      return { tone: "error", detail: `Pool missing/inactive`, selectedId: null };
+    }
+    const ps = pool.proxy_ids
+      .map((pid) => proxiesById.get(pid))
+      .filter(Boolean)
+      .map((p) => p!);
+    const activeCount = ps.filter((p) => p.is_active).length;
+    const hosts = ps.map((p) => `${p.host}:${p.port}`).join(", ");
+    return {
+      tone: activeCount > 0 ? "ok" : "error",
+      detail:
+        activeCount > 0
+          ? `${pool.name} → ${hosts}`
+          : `All proxies in ${pool.name} are disabled (${hosts})`,
+      selectedId: ps.length === 1 ? ps[0]!.id : null,
+    };
+  }
+
+  const pickerKey =
+    picker && "keys" in loaderData
+      ? loaderData.keys.find((k) => k.id === picker.keyId) ?? null
+      : null;
+  const pickerSelected =
+    pickerKey && pickerKey.proxy_pool_id
+      ? (proxyInfoFor(pickerKey).selectedId ?? -1)
+      : null;
+
+  const q = pickerQuery.trim().toLowerCase();
+  const filteredProxies = q
+    ? proxies.filter((p) =>
+        `${p.name} ${p.host}:${p.port} ${p.type}`.toLowerCase().includes(q),
+      )
+    : proxies;
+
   const { provider, keys, models, missingModels, entry } = loaderData;
   const [tab, setTab] = useState<"keys" | "models" | "chat">("keys");
   const [addOpen, setAddOpen] = useState(false);
@@ -496,6 +673,175 @@ export default function ProviderDetail({ loaderData }: Route.ComponentProps) {
   );
   const [prompt, setPrompt] = useState("");
   const stream = useStreaming();
+
+  // ---- Chat playground state ----------------------------------------------
+  type ChatMsg = {
+    role: "user" | "assistant";
+    content: string;
+    model?: string | null;
+    ms?: number | null;
+  };
+  const [history, setHistory] = useState<ChatMsg[]>([]);
+  const historyRef = useRef<ChatMsg[]>([]);
+  const setTurns = (next: ChatMsg[]) => {
+    historyRef.current = next;
+    setHistory(next);
+  };
+  const [chatSessionId, setChatSessionId] = useState<number | null>(null);
+  const chatScrollRef = useRef<HTMLDivElement>(null);
+  const [autoSave, setAutoSave] = useState(() => {
+    try {
+      return localStorage.getItem("uniroute-chat-autosave") !== "0";
+    } catch {
+      return true;
+    }
+  });
+  const chatSaveFetcher = useFetcher<{
+    chat?: {
+      ok: boolean;
+      sessionId: number | null;
+      message?: string | null;
+    };
+  }>();
+  const chatLoadFetcher = useFetcher<{
+    chatLoad?: { ok: boolean; sessionId: number; messages: ChatMsg[] };
+  }>();
+  const chatDeleteFetcher = useFetcher();
+
+  const streamStartRef = useRef(0);
+  const awaitingAssistantRef = useRef(false);
+
+  // Smart auto-scroll: pin ke bawah hanya bila user memang di dekat bawah.
+  useEffect(() => {
+    const el = chatScrollRef.current;
+    if (!el) return;
+    if (el.scrollHeight - el.scrollTop - el.clientHeight < 90) {
+      el.scrollTop = el.scrollHeight;
+    }
+  }, [stream.response, stream.streaming, history.length]);
+
+  useEffect(() => {
+    const d = chatLoadFetcher.data?.chatLoad;
+    if (!d) return;
+    setTurns(d.messages);
+    setChatSessionId(d.sessionId);
+    requestAnimationFrame(() => {
+      const el = chatScrollRef.current;
+      if (el) el.scrollTop = el.scrollHeight;
+    });
+  }, [chatLoadFetcher.data]);
+
+  // Simpan respons: kunci session agar auto-save berikutnya UPDATE, bukan
+  // membuat sesi duplikat.
+  useEffect(() => {
+    const d = chatSaveFetcher.data?.chat;
+    if (!d) return;
+    if (d.ok && d.sessionId && chatSessionId !== d.sessionId) {
+      setChatSessionId(d.sessionId);
+    }
+    if (d.ok === false && d.message) {
+      toast({ title: "Save failed", description: d.message, variant: "error" });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chatSaveFetcher.data]);
+
+  const saveChat = (msgs: ChatMsg[]) => {
+    if (msgs.length === 0) return;
+    const fd = new FormData();
+    fd.set("intent", "chat-save");
+    fd.set("provider_id", loaderData.provider?.id ?? "");
+    fd.set("session_id", chatSessionId ? String(chatSessionId) : "");
+    fd.set("model", chatModel);
+    fd.set(
+      "title",
+      msgs.find((m) => m.role === "user")?.content.slice(0, 60) ?? "New chat",
+    );
+    fd.set(
+      "messages",
+      JSON.stringify(msgs.map((m) => ({ role: m.role, content: m.content }))),
+    );
+    chatSaveFetcher.submit(fd, { method: "post" });
+  };
+
+  const loadChat = (sessionId: number) => {
+    if (stream.streaming) return;
+    const fd = new FormData();
+    fd.set("intent", "chat-load");
+    fd.set("session_id", String(sessionId));
+    chatLoadFetcher.submit(fd, { method: "post" });
+  };
+
+  const deleteChat = async (sessionId: number) => {
+    const ok = await confirm({
+      title: "Delete this chat?",
+      description:
+        "The conversation and its messages will be permanently removed.",
+      variant: "danger",
+    });
+    if (!ok) return;
+    const fd = new FormData();
+    fd.set("intent", "chat-delete");
+    fd.set("session_id", String(sessionId));
+    chatDeleteFetcher.submit(fd, { method: "post" });
+    if (chatSessionId === sessionId) {
+      setChatSessionId(null);
+      setTurns([]);
+    }
+  };
+
+  const pushTurn = (turn: ChatMsg) => {
+    historyRef.current = [...historyRef.current, turn];
+    setHistory(historyRef.current);
+  };
+
+  const sendChat = () => {
+    const p = prompt.trim();
+    if (!p || stream.streaming) return;
+    setPrompt("");
+    pushTurn({ role: "user", content: p });
+    streamStartRef.current = Date.now();
+    awaitingAssistantRef.current = true;
+    stream.send(chatModel, p, true, {
+      history: history.map((m) => ({ role: m.role, content: m.content })),
+    });
+  };
+
+  // Commit giliran assistant tepat sekali ketika selesai + auto-save.
+  useEffect(() => {
+    if (!awaitingAssistantRef.current) return;
+    if (!(stream.done || stream.error)) return;
+    awaitingAssistantRef.current = false;
+    const ms = streamStartRef.current
+      ? Date.now() - streamStartRef.current
+      : null;
+    const assistantTurn: ChatMsg = {
+      role: "assistant",
+      content: stream.error ? `Error: ${stream.error}` : stream.response,
+      model: chatModel,
+      ms,
+    };
+    const next: ChatMsg[] = [...historyRef.current, assistantTurn];
+    setTurns(next);
+    if (autoSave && !stream.error && assistantTurn.content !== "") {
+      // Simpan DI LUAR updater state — updater bisa dieksekusi React
+      // berkali-kali saat render konkuren → submit dobel = sesi kembar.
+      const fd = new FormData();
+      fd.set("intent", "chat-save");
+      fd.set("provider_id", loaderData.provider?.id ?? "");
+      fd.set("session_id", chatSessionId ? String(chatSessionId) : "");
+      fd.set("model", chatModel);
+      fd.set(
+        "title",
+        next.find((m) => m.role === "user")?.content.slice(0, 60) ?? "New chat",
+      );
+      fd.set(
+        "messages",
+        JSON.stringify(next.map((m) => ({ role: m.role, content: m.content }))),
+      );
+      chatSaveFetcher.submit(fd, { method: "post" });
+    }
+  }, [stream.done, stream.error]);
+
   const { dialog, confirm } = useConfirm();
   const { toast } = useToast();
 
@@ -618,6 +964,119 @@ export default function ProviderDetail({ loaderData }: Route.ComponentProps) {
       />
 
       {tab === "keys" ? (
+        <>
+        <Card className="mb-6">
+          <CardHeader>
+            <CardTitle>Outbound Proxy</CardTitle>
+          </CardHeader>
+          <p className="mb-4 text-xs text-muted-foreground">
+            Assign a whole pool (grouping + auto-management: distribute &amp; rotation)
+            or pick a single proxy straight from the list. Applies to the whole provider
+            — even with no (or a single) API key. Priority: client key pool → account
+            pool → provider assignment → global → direct.
+          </p>
+
+          <div className="mb-4 flex flex-wrap gap-1.5">
+            {(
+              [
+                { value: "pool", label: "From a pool" },
+                { value: "list", label: "All proxies in list" },
+              ] as const
+            ).map((opt) => (
+              <button
+                key={opt.value}
+                type="button"
+                onClick={() => setDistSource(opt.value)}
+                className={`rounded-lg border px-2.5 py-1 text-xs font-medium transition-colors ${
+                  distSource === opt.value
+                    ? "border-primary bg-primary/15 text-primary"
+                    : "border-border text-muted-foreground hover:bg-muted"
+                }`}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+
+          <div className="grid gap-4 md:grid-cols-2">
+            <Form method="post" className="flex items-end gap-2">
+              <input type="hidden" name="intent" value="set-provider-pool" />
+              <div className="flex-1">
+                <Label htmlFor="provider-pool">
+                  Provider proxy / pool — all keys share
+                </Label>
+                <Select
+                  key={providerSelected}
+                  id="provider-pool"
+                  name="pool_id"
+                  defaultValue={providerSelected}
+                >
+                  <option value="">— None (direct) —</option>
+                  {pools.map((p) => (
+                    <option key={`pool-${p.id}`} value={p.id}>
+                      [pool] {p.name} ({p.proxy_ids.length} · {p.strategy})
+                    </option>
+                  ))}
+                  <option disabled>── or single proxy ──</option>
+                  {proxies.map((p) => (
+                    <option key={`px-${p.id}`} value={`proxy:${p.id}`}>
+                      [proxy] {p.host}:{p.port}
+                      {p.is_active ? "" : " (inactive)"}
+                    </option>
+                  ))}
+                </Select>
+              </div>
+              <Button type="submit" size="sm">Save</Button>
+            </Form>
+
+            <Form method="post" className="flex items-end gap-2">
+              <input type="hidden" name="intent" value="distribute" />
+              <input type="hidden" name="source_type" value={distSource} />
+              <div className="flex-1">
+                <Label htmlFor="distribute-source">
+                  Distribute proxies across accounts
+                </Label>
+                {distSource === "pool" ? (
+                  <Select id="distribute-source" name="pool_id" defaultValue="">
+                    <option value="">— Select source pool —</option>
+                    {pools.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name} ({p.proxy_ids.length} proxies)
+                      </option>
+                    ))}
+                  </Select>
+                ) : (
+                  <div className="flex h-9 items-center rounded-lg border border-glass-border bg-glass-strong px-3 text-xs text-muted-foreground">
+                    All active proxies in the list ({activeProxies})
+                  </div>
+                )}
+              </div>
+              <Button type="submit" size="sm" variant="secondary">
+                Distribute
+              </Button>
+            </Form>
+          </div>
+
+          {actionData && "distribute" in actionData && actionData.distribute ? (
+            <div
+              className={`mt-4 rounded-lg px-3 py-2 text-xs ${
+                actionData.distribute.ok
+                  ? "bg-success/10 text-success"
+                  : "bg-danger/10 text-danger"
+              }`}
+            >
+              <p className="font-medium">{actionData.distribute.message}</p>
+              {actionData.distribute.rows.length > 0 ? (
+                <ul className="mt-1 list-disc pl-4 font-mono">
+                  {actionData.distribute.rows.map((r) => (
+                    <li key={r}>{r}</li>
+                  ))}
+                </ul>
+              ) : null}
+            </div>
+          ) : null}
+        </Card>
+
         <Card>
           <CardHeader>
             <CardTitle>API Keys ({keys.length})</CardTitle>
@@ -695,58 +1154,91 @@ export default function ProviderDetail({ loaderData }: Route.ComponentProps) {
                     </p>
                   </div>
 
-                  <div className="flex flex-wrap items-center gap-2">
+                  <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
                     <KeyTestButton
                       fetcher={fetcher}
                       keyId={key.id}
                       result={testResult && testResult.okId === key.id ? testResult : undefined}
                     />
 
-                    <Form method="post">
-                      <input type="hidden" name="intent" value="route-key" />
-                      <input type="hidden" name="key_id" value={key.id} />
-                      <Button
-                        type="submit"
-                        size="sm"
-                        variant="outline"
-                        disabled={Boolean(key.is_routing)}
-                        className={
-                          key.is_routing
-                            ? "cursor-default border-primary/30 bg-primary/15 text-primary"
-                            : ""
-                        }
-                      >
-                        {key.is_routing ? "Routing active" : "Use for routing"}
-                      </Button>
-                    </Form>
+                    {key.is_routing ? null : (
+                      <Form method="post" className="w-full sm:w-auto">
+                        <input type="hidden" name="intent" value="route-key" />
+                        <input type="hidden" name="key_id" value={key.id} />
+                        <Button
+                          type="submit"
+                          variant="outline"
+                          className="h-9 w-full gap-1.5 px-3 text-xs sm:h-8 sm:w-auto sm:px-3"
+                          title="Make this key the routing credential"
+                        >
+                          Set as routing
+                        </Button>
+                      </Form>
+                    )}
 
-                    <Form method="post">
+                    <Form method="post" className="w-full sm:w-auto">
                       <input type="hidden" name="intent" value="active-key" />
                       <input type="hidden" name="key_id" value={key.id} />
                       <input type="hidden" name="is_active" value={key.is_active ? 0 : 1} />
-                      <Button type="submit" variant="outline" size="sm">
+                      <Button
+                        type="submit"
+                        variant="outline"
+                        className="h-9 w-full gap-1.5 px-3 text-xs sm:h-8 sm:w-auto sm:px-3"
+                      >
                         {key.is_active ? "Deactivate" : "Activate"}
                       </Button>
                     </Form>
 
-                    <Form method="post" onSubmit={handleDeleteKey}>
-                      <input type="hidden" name="intent" value="delete-key" />
-                      <input type="hidden" name="key_id" value={key.id} />
-                      <Button
-                        type="submit"
-                        variant="danger"
-                        size="sm"
-                        aria-label={`Delete key #${key.id}`}
+                    <div className="flex w-full items-center gap-2 sm:ml-auto sm:w-auto">
+                      <button
+                        type="button"
+                        title={proxyInfoFor(key).detail}
+                        aria-label={`Proxy for ${key.label || `key #${key.id}`}`}
+                        onClick={() => {
+                          setPickerQuery("");
+                          setPicker({
+                            keyId: key.id,
+                            label: key.label || `Key #${key.id}`,
+                          });
+                        }}
+                        className={`inline-flex h-9 w-full items-center justify-center gap-1.5 rounded-lg border text-xs font-medium transition-colors sm:h-8 sm:w-8 sm:text-sm ${
+                          PROXY_TONE_CLASS[proxyInfoFor(key).tone]
+                        }`}
                       >
-                        <Trash2 size={14} />
-                      </Button>
-                    </Form>
+                        <Globe size={15} />
+                        <span className="sm:hidden">
+                          {proxyInfoFor(key).tone === "ok"
+                            ? "Proxy"
+                            : proxyInfoFor(key).tone === "error"
+                              ? "Proxy error"
+                              : "Set proxy"}
+                        </span>
+                      </button>
+                      <Form
+                        method="post"
+                        className="w-full sm:w-auto"
+                        onSubmit={handleDeleteKey}
+                      >
+                        <input type="hidden" name="intent" value="delete-key" />
+                        <input type="hidden" name="key_id" value={key.id} />
+                        <Button
+                          type="submit"
+                          variant="danger"
+                          className="h-9 w-full gap-1 px-3 text-xs sm:h-8 sm:w-auto sm:px-2"
+                          aria-label={`Delete key #${key.id}`}
+                        >
+                          <Trash2 size={14} />
+                          <span className="sm:hidden">Delete</span>
+                        </Button>
+                      </Form>
+                    </div>
                   </div>
                 </div>
               ))}
             </div>
           )}
         </Card>
+        </>
       ) : tab === "models" ? (
         <Card>
           <CardHeader>
@@ -1041,63 +1533,221 @@ export default function ProviderDetail({ loaderData }: Route.ComponentProps) {
           )}
         </Card>
       ) : (
-        <Card>
-          <CardTitle className="mb-4">Chat Playground</CardTitle>
-          {models.length === 0 ? (
-            <p className="py-8 text-center text-sm text-muted-foreground">
-              No models for this provider yet. Sync models from the registry in the Models tab.
+        <>
+        <div className="mb-4 flex flex-wrap items-center gap-2">
+          <Label htmlFor="chat-model" className="mb-0 shrink-0 text-xs">
+            Model
+          </Label>
+          <Select
+            id="chat-model"
+            value={chatModel}
+            onChange={(e) => setChatModel(e.target.value)}
+            className="h-8 w-auto max-w-[240px] text-xs"
+          >
+            {models.map((m) => (
+              <option key={m.id} value={m.model_name}>
+                {m.model_name}
+              </option>
+            ))}
+          </Select>
+
+          <label className="ml-auto flex items-center gap-2 text-xs text-muted-foreground">
+            Auto-save
+            <Toggle
+              checked={autoSave}
+              label="Auto-save chats"
+              onChange={() => {
+                const next = !autoSave;
+                setAutoSave(next);
+                try {
+                  localStorage.setItem("uniroute-chat-autosave", next ? "1" : "0");
+                } catch {
+                  /* ignore */
+                }
+              }}
+            />
+          </label>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={stream.streaming}
+            title="Start a fresh conversation (current chat is already auto-saved)"
+            onClick={() => {
+              setChatSessionId(null);
+              setTurns([]);
+              setPrompt("");
+            }}
+          >
+            + New
+          </Button>
+        </div>
+
+        <div className="grid gap-4 lg:grid-cols-[230px_minmax(0,1fr)]">
+          <div className="rounded-xl border border-border bg-surface/50 p-2 lg:max-h-[560px] lg:overflow-y-auto">
+            <p className="px-1 pb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+              Saved chats ({loaderData.chatSessions.length})
             </p>
-          ) : (
-            <>
-              <div className="mb-4">
-                <Label htmlFor="chat-model">Model</Label>
-                <Select
-                  id="chat-model"
-                  value={chatModel}
-                  onChange={(e) => setChatModel(e.target.value)}
-                  className="sm:w-72"
-                >
-                  {models.map((m) => (
-                    <option key={m.id} value={m.model_name}>
-                      {m.model_name}
-                    </option>
-                  ))}
-                </Select>
+            {chatLoadFetcher.state !== "idle" ? (
+              <div className="flex items-center gap-2 px-2 py-2 text-xs text-muted-foreground">
+                <Spinner size={12} /> loading…
               </div>
+            ) : null}
+            {loaderData.chatSessions.length === 0 ? (
+              <p className="px-1 py-3 text-xs text-muted-foreground">
+                Nothing saved yet.
+              </p>
+            ) : (
+              loaderData.chatSessions.map((sess) => {
+                const active = sess.id === chatSessionId;
+                return (
+                  <div
+                    key={sess.id}
+                    className={`group mb-1 flex items-center gap-1 rounded-lg px-2 py-1.5 ${
+                      active ? "bg-primary/15" : "hover:bg-muted"
+                    }`}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => loadChat(sess.id)}
+                      className="min-w-0 flex-1 text-left"
+                    >
+                      <span
+                        className={`block truncate text-xs ${
+                          active ? "font-medium text-primary" : "text-foreground"
+                        }`}
+                      >
+                        {sess.title}
+                      </span>
+                      <span className="block truncate text-[10px] text-muted-foreground">
+                        {new Date(sess.updated_at * 1000).toLocaleString()}
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      aria-label={`Delete chat ${sess.title}`}
+                      title="Delete chat"
+                      onClick={() => void deleteChat(sess.id)}
+                      className="shrink-0 rounded p-1 text-muted-foreground transition-colors hover:bg-danger/10 hover:text-danger"
+                    >
+                      <Trash2 size={13} />
+                    </button>
+                  </div>
+                );
+              })
+            )}
+          </div>
 
-              <MessageInput value={prompt} onChange={setPrompt} />
+          <div className="flex h-[560px] min-w-0 flex-col rounded-xl border border-border bg-surface/50">
+            <div
+              ref={chatScrollRef}
+              className="flex-1 space-y-3 overflow-y-auto p-3 sm:p-4"
+            >
+              {history.length === 0 && !stream.streaming ? (
+                <div className="flex h-full items-center justify-center text-center">
+                  <p className="max-w-xs text-sm text-muted-foreground">
+                    Send a message to start chatting with{" "}
+                    <span className="font-medium text-foreground">
+                      {chatModel || "this provider"}
+                    </span>
+                    .{autoSave ? " Conversations auto-save as you go." : ""}
+                  </p>
+                </div>
+              ) : null}
 
-              <div className="mb-4 flex gap-2">
-                <Button
-                  type="button"
-                  onClick={() => {
-                    if (!prompt.trim()) return;
-                    const p = prompt;
-                    setPrompt("");
-                    stream.send(chatModel, p, true);
-                  }}
-                  disabled={stream.streaming}
-                >
-                  {stream.streaming ? <Spinner size={16} /> : <Send size={16} />}
-                  Send
-                </Button>
+              {history.map((m, idx) => {
+                return (
+                  <div
+                    key={idx}
+                    className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}
+                  >
+                    <div
+                      className={`max-w-[85%] rounded-xl border px-3 py-2 sm:max-w-[80%] ${
+                        m.role === "user"
+                          ? "border-primary/30 bg-primary/15"
+                          : "border-border bg-background/60"
+                      }`}
+                    >
+                      <>
+                        <Markdown text={m.content} />
+                        {m.role === "assistant" && (m.ms != null || m.model) ? (
+                          <p className="mt-1 text-[10px] tabular-nums text-muted-foreground">
+                            {[
+                              m.model,
+                              m.ms != null ? `${(m.ms / 1000).toFixed(1)}s` : null,
+                            ]
+                              .filter(Boolean)
+                              .join(" · ")}
+                          </p>
+                        ) : null}
+                      </>
+                    </div>
+                  </div>
+                );
+              })}
+
+              {/* Bubble streaming live — selalu tampil saat generating */}
+              {stream.streaming ? (
+                <div className="flex justify-start">
+                  <div className="max-w-[85%] rounded-xl border border-border bg-background/60 px-3 py-2 sm:max-w-[80%]">
+                    <StreamingResponse
+                      content={stream.response}
+                      streaming={stream.streaming}
+                      done={stream.done}
+                      error={stream.error}
+                      usage={stream.usage}
+                      latencyMs={
+                        streamStartRef.current
+                          ? Date.now() - streamStartRef.current
+                          : null
+                      }
+                    />
+                  </div>
+                </div>
+              ) : null}
+            </div>
+
+            <div className="border-t border-border p-3">
+              <div className="flex items-end gap-2">
+                <div className="min-w-0 flex-1">
+                  <MessageInput
+                    value={prompt}
+                    onChange={setPrompt}
+                    onSubmit={sendChat}
+                    disabled={stream.streaming}
+                    placeholder={
+                      stream.streaming ? "Generating…" : `Message ${chatModel}…`
+                    }
+                  />
+                  <p className="mt-1 hidden text-[10px] text-muted-foreground sm:block">
+                    Enter to send · Shift+Enter for new line
+                  </p>
+                </div>
                 {stream.streaming ? (
-                  <Button type="button" variant="outline" onClick={stream.stop}>
-                    <Square size={16} />
-                    Stop
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="h-9 gap-1.5"
+                    onClick={stream.stop}
+                  >
+                    <Square size={14} /> Stop
                   </Button>
-                ) : null}
+                ) : (
+                  <Button
+                    type="button"
+                    className="h-9 gap-1.5"
+                    disabled={!prompt.trim()}
+                    onClick={sendChat}
+                  >
+                    <Send size={14} /> Send
+                  </Button>
+                )}
               </div>
+            </div>
+          </div>
+        </div>
 
-              <StreamingResponse
-                content={stream.response}
-                streaming={stream.streaming}
-                done={stream.done}
-                error={stream.error}
-              />
-            </>
-          )}
-        </Card>
+        </>
       )}
 
       <Form method="post" className="mt-6 sm:mt-8" onSubmit={handleDelete}>
@@ -1107,6 +1757,119 @@ export default function ProviderDetail({ loaderData }: Route.ComponentProps) {
           Delete provider
         </Button>
       </Form>
+      {picker ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
+          onClick={() => setPicker(null)}
+        >
+          <div
+            className="flex max-h-[80vh] w-full max-w-lg flex-col rounded-xl border border-border bg-surface shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="border-b border-border px-4 py-3">
+              <h3 className="text-sm font-semibold text-foreground">
+                Pick proxy — {picker.label}
+              </h3>
+              <p className="mt-0.5 mb-2 text-xs text-muted-foreground">
+                Click a proxy to assign it. Click the selected one again (or Clear)
+                to deactivate.
+              </p>
+              <Input
+                autoFocus
+                type="search"
+                value={pickerQuery}
+                onChange={(e) => setPickerQuery(e.target.value)}
+                placeholder="Search name / host:port…"
+                className="h-8 text-xs"
+              />
+              {pickerQuery.trim() ? (
+                <p className="mt-1 text-[11px] text-muted-foreground">
+                  {filteredProxies.length} of {proxies.length} proxies match
+                </p>
+              ) : null}
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-2">
+              {filteredProxies.map((p) => {
+                const isSelected = pickerSelected === p.id;
+                const usable = p.is_active;
+                return (
+                  <Form key={p.id} method="post">
+                    <input type="hidden" name="intent" value="set-key-proxy" />
+                    <input type="hidden" name="key_id" value={picker.keyId} />
+                    <input type="hidden" name="proxy_id" value={p.id} />
+                    <button
+                      type="submit"
+                      disabled={!usable && !isSelected}
+                      title={
+                        p.is_active
+                          ? `${p.type} · ${p.success_count} ok / ${p.fail_count} fail`
+                          : "Proxy is inactive"
+                      }
+                      className={`mb-1 flex w-full items-center gap-3 rounded-lg border px-3 py-2 text-left text-sm transition-colors ${
+                        isSelected
+                          ? "border-primary bg-primary/10"
+                          : "border-transparent hover:bg-muted"
+                      } ${!usable ? "opacity-50" : ""}`}
+                    >
+                      <span
+                        className={`inline-block h-2 w-2 shrink-0 rounded-full ${
+                          p.is_active ? "bg-success" : "bg-danger"
+                        }`}
+                      />
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate font-mono text-xs text-foreground">
+                          {p.host}:{p.port}
+                        </span>
+                        <span className="block truncate text-[11px] text-muted-foreground">
+                          {p.type}
+                          {p.last_latency_ms != null
+                            ? ` · ${p.last_latency_ms}ms`
+                            : ""}
+                          {p.last_error ? ` · ${p.last_error.slice(0, 60)}` : ""}
+                        </span>
+                      </span>
+                      {!p.is_active ? (
+                        <Badge tone="danger">disabled</Badge>
+                      ) : null}
+                      {isSelected ? (
+                        <CheckCircle2 size={16} className="shrink-0 text-primary" />
+                      ) : null}
+                    </button>
+                  </Form>
+                );
+              })}
+              {filteredProxies.length === 0 ? (
+                <p className="py-6 text-center text-xs text-muted-foreground">
+                  {proxies.length === 0
+                    ? "No proxies yet — add some in the Proxies page first."
+                    : `No proxies match “${pickerQuery.trim()}”.`}
+                </p>
+              ) : null}
+            </div>
+
+            <div className="flex items-center justify-between gap-2 border-t border-border px-4 py-3">
+              <Form method="post" onSubmit={(e) => setTimeout(() => setPicker(null), 0)}>
+                <input type="hidden" name="intent" value="set-key-proxy" />
+                <input type="hidden" name="key_id" value={picker.keyId} />
+                <input type="hidden" name="proxy_id" value="" />
+                <Button type="submit" size="sm" variant="outline" className="text-danger">
+                  Clear assignment
+                </Button>
+              </Form>
+              <Button
+                type="button"
+                size="sm"
+                variant="secondary"
+                onClick={() => setPicker(null)}
+              >
+                Done
+              </Button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       {dialog}
     </div>
   );
@@ -1135,10 +1898,16 @@ function KeyTestButton({
           {result.ok ? "OK" : "Failed"}
         </span>
       ) : null}
-      <fetcher.Form method="post">
+      <fetcher.Form method="post" className="w-full sm:w-auto">
         <input type="hidden" name="intent" value="test-key" />
         <input type="hidden" name="key_id" value={keyId} />
-        <Button type="submit" variant="outline" size="sm" disabled={pending}>
+        <Button
+          type="submit"
+          variant="outline"
+          size="sm"
+          disabled={pending}
+          className="h-9 w-full gap-1.5 px-3 sm:h-8 sm:w-auto sm:px-3"
+        >
           {pending ? <Spinner size={14} /> : <Plug size={14} />}
           Test
         </Button>

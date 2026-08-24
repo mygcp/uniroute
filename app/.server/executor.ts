@@ -18,8 +18,21 @@ export type ExecutorOptions = {
 	comboPoolId?: number;
 	/** Provider id, used only for diagnostics. */
 	providerId?: string;
+	/** Dipanggil saat proxy spesifik terpilih (untuk metadata request log). */
+	onProxyUsed?: (info: ProxyUsedInfo | null) => void;
+	/** Konteks proxy_logs. */
+	logClientIp?: string | null;
+	logApiKeyId?: number | null;
 	streamTransformer?: StreamTransformer;
 	onComplete: (log: Partial<RequestLog> & Pick<RequestLog, "status">) => void;
+};
+
+/** Metadata proxy yang dipakai egress — dibawa sekali agar log tidak re-query. */
+export type ProxyUsedInfo = {
+	id: number;
+	name: string;
+	host: string;
+	port: number;
 };
 
 type AttemptResult =
@@ -28,6 +41,8 @@ type AttemptResult =
 
 const EXECUTE_TIMEOUT_MS = 120_000;
 const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
+// Encoder bersama — encode() stateless, aman dipakai lintas stream.
+const ENCODER = new TextEncoder();
 
 async function attempt(options: ExecutorOptions): Promise<AttemptResult> {
 	const {
@@ -40,6 +55,9 @@ async function attempt(options: ExecutorOptions): Promise<AttemptResult> {
 		providerPoolId,
 		comboPoolId,
 		providerId,
+		onProxyUsed,
+		logClientIp,
+		logApiKeyId,
 	} = options;
 	const controller = new AbortController();
 	const abortFromCaller = (): void => controller.abort();
@@ -59,6 +77,17 @@ async function attempt(options: ExecutorOptions): Promise<AttemptResult> {
 			providerPoolId,
 			comboPoolId,
 			providerId,
+			onProxyUsed: options.onProxyUsed
+				? (resolved) =>
+						options.onProxyUsed?.({
+							id: resolved.proxy.id,
+							name: resolved.proxy.name,
+							host: resolved.proxy.host,
+							port: resolved.proxy.port,
+						})
+				: undefined,
+			logClientIp,
+			logApiKeyId,
 		});
 
 		if (!upstream.ok) {
@@ -86,11 +115,16 @@ async function attempt(options: ExecutorOptions): Promise<AttemptResult> {
 		controller.abort();
 		const raw = err instanceof Error ? err.message : String(err);
 		const message = raw;
+		// Timeout upstream (120s): hampir pasti gagal lagi kalau diulang —
+		// jangan buang 2×waktu untuk retry.
+		const isTimeout =
+			err instanceof Error &&
+			(err.name === "TimeoutError" || message.includes("aborted due to timeout"));
 		return {
 			ok: false,
 			status: 502,
 			detailText: JSON.stringify({ error: { message } }),
-			retryable: true,
+			retryable: !isTimeout,
 		};
 	} finally {
 		signal?.removeEventListener("abort", abortFromCaller);
@@ -115,16 +149,57 @@ function countDeltaContent(text: string): number {
 	return tokens;
 }
 
+/**
+ * Ekstraksi token usage resmi dari body JSON upstream. Mendukung format
+ * openai (`usage.prompt_tokens` + `prompt_tokens_details.cached_tokens`),
+ * anthropic (`usage.input_tokens` + cache_read/creation) dan gemini
+ * (`usageMetadata.*TokenCount`). Return null bila tidak tersedia.
+ */
+function extractUsage(json: unknown): {
+	promptTokens: number | null;
+	completionTokens: number | null;
+	cachedTokens: number | null;
+} {
+	if (!json || typeof json !== "object")
+		return { promptTokens: null, completionTokens: null, cachedTokens: null };
+	const num = (v: unknown): number | null =>
+		typeof v === "number" && Number.isFinite(v) ? v : null;
+	const root = json as Record<string, unknown>;
+	const usage = (root.usage ?? null) as Record<string, unknown> | null;
+	const meta = (root.usageMetadata ?? null) as Record<string, unknown> | null;
+	const details = (usage?.prompt_tokens_details ?? null) as
+		| Record<string, unknown>
+		| null;
+
+	let cached: number | null =
+		num(details?.cached_tokens) ??
+		num(meta?.cachedContentTokenCount) ??
+		null;
+	if (cached === null && usage) {
+		const read = num(usage.cache_read_input_tokens);
+		const creation = num(usage.cache_creation_input_tokens);
+		if (read !== null || creation !== null) cached = (read ?? 0) + (creation ?? 0);
+	}
+
+	return {
+		promptTokens:
+			num(usage?.prompt_tokens) ??
+			num(usage?.input_tokens) ??
+			num(meta?.promptTokenCount),
+		completionTokens:
+			num(usage?.completion_tokens) ??
+			num(usage?.output_tokens) ??
+			num(meta?.candidatesTokenCount),
+		cachedTokens: cached,
+	};
+}
+
 function buildStreamResponse(
 	upstream: Response,
 	options: ExecutorOptions,
 	transformer: StreamTransformer,
 ): Response {
-	const controller = new AbortController();
-	const abortFromCaller = (): void => controller.abort();
-	options.signal?.addEventListener("abort", abortFromCaller);
 	const started = Date.now();
-	const reader = upstream.body!.getReader();
 	let completionTokens = 0;
 	let finalized = false;
 
@@ -133,54 +208,84 @@ function buildStreamResponse(
 	): void => {
 		if (finalized) return;
 		finalized = true;
+		clearInterval(kaTimer);
+		const usage = options.streamTransformer?.getUsage?.() ?? null;
 		options.onComplete({
 			duration_ms: Date.now() - started,
-			completion_tokens: completionTokens,
+			completion_tokens: usage?.completion_tokens ?? completionTokens,
+			prompt_tokens: usage?.prompt_tokens ?? null,
+			cached_tokens: usage?.cached_tokens ?? null,
 			...log,
 		});
 	};
 
-	const stream = new ReadableStream<Uint8Array>({
-		async start(wsController) {
-			try {
-				for (;;) {
-					const { done, value } = await reader.read();
-					if (done) break;
-					const output = transformer.transform(value);
-					if (output.byteLength === 0) continue;
-					const text = new TextDecoder().decode(output);
-					completionTokens +=
-						transformer.countTokens?.(text) ?? countDeltaContent(text);
-					wsController.enqueue(output);
-				}
-				const rest = transformer.flush();
-				if (rest.byteLength > 0) wsController.enqueue(rest);
-				const term = transformer.terminate?.() ?? new Uint8Array(0);
-				if (term.byteLength > 0) wsController.enqueue(term);
-				wsController.close();
-				finalize({ status: "success" });
-			} catch (err) {
-				const message = err instanceof Error ? err.message : String(err);
-				finalize({ status: "error", error_message: message });
+	let kaTimer: ReturnType<typeof setInterval> | undefined = undefined;
+	let gotFirstByte = false;
+	// Decoder satu instance per stream — mode streaming aman untuk multibyte
+	// yang terpotong di batas chunk.
+	const dec = new TextDecoder();
+
+	// TransformStream + pipeTo (bukan wrapper ReadableStream manual):
+	// native piping di semua runtime — wrapper reader/pull manual terbukti
+	// menunda flush chunk pertama ~450ms pada beberapa stack server.
+	const ts = new TransformStream<Uint8Array, Uint8Array>({
+		start(c) {
+			// Keep-alive tiap 10s sampai byte pertama upstream datang.
+			kaTimer = setInterval(() => {
+				if (gotFirstByte) return;
 				try {
-					wsController.error(err);
+					c.enqueue(ENCODER.encode(": keep-alive\n\n"));
 				} catch {
-					/* already closed */
+					/* ignore */
 				}
-			} finally {
-				reader.releaseLock();
-				controller.abort();
-				options.signal?.removeEventListener("abort", abortFromCaller);
-			}
+			}, 10_000);
 		},
-		cancel() {
-			finalize({ status: "error", error_message: "client disconnected" });
-			controller.abort();
-			options.signal?.removeEventListener("abort", abortFromCaller);
+		transform(chunk, c) {
+			if (!gotFirstByte) {
+				gotFirstByte = true;
+				clearInterval(kaTimer);
+			}
+			let out: Uint8Array;
+			let chunkText: string;
+			if (transformer.transformChunk) {
+				const r = transformer.transformChunk(chunk);
+				out = r.out;
+				chunkText = r.text; // frame kontrol punya text → tetap dihitung
+			} else {
+				out = transformer.transform(chunk);
+				chunkText =
+					out.byteLength > 0 ? dec.decode(out, { stream: true }) : "";
+			}
+			completionTokens +=
+				transformer.countTokens?.(chunkText) ?? countDeltaContent(chunkText);
+			if (out.byteLength > 0) c.enqueue(out);
+		},
+		flush(c) {
+			const rest = transformer.flush();
+			if (rest.byteLength > 0) c.enqueue(rest);
+			const term = transformer.terminate?.() ?? new Uint8Array(0);
+			if (term.byteLength > 0) c.enqueue(term);
+			finalize({ status: "success" });
 		},
 	});
 
-	return new Response(stream, {
+	// Client putus koneksi → hentikan upstream & catat.
+	const onClientAbort = (): void => {
+		finalize({ status: "error", error_message: "client disconnected" });
+		upstream.body?.cancel().catch(() => undefined);
+	};
+	options.signal?.addEventListener("abort", onClientAbort, { once: true });
+
+	upstream.body!.pipeTo(ts.writable).catch((err: unknown) => {
+		if (options.signal?.aborted) {
+			// Sudah dicatat oleh onClientAbort.
+			return;
+		}
+		const message = err instanceof Error ? err.message : String(err);
+		finalize({ status: "error", error_message: message });
+	});
+
+	return new Response(ts.readable, {
 		headers: {
 			"Content-Type": "text/event-stream",
 			"Cache-Control": "no-cache",
@@ -243,9 +348,13 @@ export async function executeJson(
 		});
 		return { ok: false, status: 502, error: "invalid upstream json" };
 	}
+	const usage = extractUsage(json);
 	options.onComplete({
 		status: "success",
 		duration_ms: Date.now() - started,
+		prompt_tokens: usage.promptTokens,
+		completion_tokens: usage.completionTokens,
+		cached_tokens: usage.cachedTokens,
 	});
 	return { ok: true, status: result.response.status, json };
 }

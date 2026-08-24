@@ -80,10 +80,6 @@ export function parseComboModel(model: string): string | null {
   return name.length > 0 ? name : null;
 }
 
-export function isComboModel(model: string): boolean {
-  return parseComboModel(model) !== null;
-}
-
 function parseConfig(raw: string): Record<string, unknown> {
   try {
     const v = JSON.parse(raw) as unknown;

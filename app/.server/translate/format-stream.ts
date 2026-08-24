@@ -296,15 +296,52 @@ export function composeStreamTransformer(
   const format = createEventFormatter(clientFormat);
   let pending = "";
   let streamDone = false;
+  let startPrompt: number | null = null;
+  let startCached: number | null = null;
+  let lastUsage: {
+    prompt_tokens: number;
+    completion_tokens: number;
+    cached_tokens?: number;
+  } | null = null;
   const enc = new TextEncoder();
+  // Decoder milik instance ini — aman untuk banyak stream paralel.
+  const dec = new TextDecoder();
 
   const process = (input: Uint8Array, rest: string): { out: string; rest: string } => {
-    const { frames, rest: r } = tokenizeSse(input, rest);
+    const { frames, rest: r } = tokenizeSse(input, rest, dec);
     let out = "";
     for (const frameText of frames) {
       const ev = parseFrame(providerFormat, frameText);
       if (!ev) continue;
+      // Delta teks kosong membawa nol informasi — jangan diformat/dikirim.
+      // Upstream tertentu mengirim puluhan frame ini per stream.
+      if (ev.type === "content_delta" && ev.text === "") continue;
       if (ev.type === "done") streamDone = true;
+      // Kumpulkan usage dari seluruh aliran:
+      if (ev.type === "message_start" && ev.usage) {
+        startPrompt = ev.usage.prompt_tokens;
+        startCached = ev.usage.cached_tokens ?? null;
+      }
+      if (ev.type === "finish") {
+        if (ev.usage) {
+          lastUsage = {
+            prompt_tokens: ev.usage.prompt_tokens ?? startPrompt ?? 0,
+            completion_tokens: ev.usage.completion_tokens ?? 0,
+            ...( (ev.usage.cached_tokens ?? startCached) != null
+              ? { cached_tokens: ev.usage.cached_tokens ?? startCached! }
+              : {}),
+          };
+        } else if (startPrompt != null && lastUsage === null) {
+          lastUsage = {
+            prompt_tokens: startPrompt,
+            completion_tokens: 0,
+            ...(startCached != null ? { cached_tokens: startCached } : {}),
+          };
+        }
+      }
+      // Finish sentinel khusus-usage (finish_reason kosong dari chunk
+      // usage-only OpenAI): usage sudah dicatat di atas, jangan diformat.
+      if (ev.type === "finish" && ev.finish_reason === "") continue;
       const s = format(ev);
       if (s) out += s;
     }
@@ -318,6 +355,20 @@ export function composeStreamTransformer(
       if (out === "") return enc.encode("");
       return enc.encode(out);
     },
+    /**
+     * Versi hemat: hasil bytes + teks ter-dekode dalam satu kali decode —
+     * executor memakai ini agar tidak mendekode ulang untuk hitung token.
+     */
+    transformChunk(
+      chunk: Uint8Array,
+    ): { out: Uint8Array; text: string } {
+      const { out, rest } = process(chunk, pending);
+      pending = rest;
+      return {
+        out: out === "" ? enc.encode("") : enc.encode(out),
+        text: out,
+      };
+    },
     flush(): Uint8Array {
       const { out, rest } = process(new Uint8Array(0), pending);
       pending = rest;
@@ -328,6 +379,9 @@ export function composeStreamTransformer(
     },
     done(): boolean {
       return streamDone;
+    },
+    getUsage() {
+      return lastUsage;
     },
     terminate(): Uint8Array {
       if (streamDone) return enc.encode("");

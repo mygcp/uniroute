@@ -13,6 +13,7 @@ export type Provider = {
 };
 
 const cache = new Map<string, Provider[]>();
+let loaded = false;
 
 export function reload() {
   cache.clear();
@@ -30,15 +31,21 @@ export function reload() {
     list.push(provider as Provider);
     cache.set(model, list);
   }
+  loaded = true;
+}
+
+/** Muat sekali saat proses pertama memakai registry (lazy init). */
+function ensureLoaded(): void {
+  if (!loaded) reload();
 }
 
 export function getProviders(model: string): Provider[] {
-  if (cache.size === 0) reload();
+  ensureLoaded();
   return cache.get(model) ?? [];
 }
 
 export function getAnyProvider(model: string): Provider[] {
-  if (cache.size === 0) reload();
+  ensureLoaded();
   const direct = cache.get(model) ?? [];
   if (direct.length > 0) return direct;
   const all = [...cache.values()].flat();

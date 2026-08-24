@@ -11,6 +11,8 @@ type Props = {
   scrollRef: React.RefObject<HTMLDivElement | null>;
   emptyMessage: string;
   renderRow: (event: LogEvent) => ReactNode;
+  /** Baris request in-flight (loading) yang tampil di atas log. */
+  headerRows?: ReactNode;
 };
 
 function keyOf(log: LogEvent): string {
@@ -40,6 +42,7 @@ export function LogViewer({
   scrollRef,
   emptyMessage,
   renderRow,
+  headerRows,
 }: Props) {
   return (
     <>
@@ -50,7 +53,7 @@ export function LogViewer({
       ) : null}
 
       <div className="flex h-[calc(100vh-330px)] flex-col rounded-xl border border-border bg-surface shadow-sm sm:h-[calc(100vh-290px)]">
-        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-3 py-2 sm:px-4 sm:py-3">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-3 py-2">
           <div className="flex items-center gap-2 sm:gap-3">
             <span className="text-sm font-medium text-muted-foreground">
               {logs.length} event
@@ -75,8 +78,9 @@ export function LogViewer({
           </button>
         </div>
 
-        <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-2">
-          {logs.length === 0 ? (
+        <div ref={scrollRef} className="flex-1 overflow-y-auto px-2 py-1.5 sm:px-3">
+          {headerRows}
+          {logs.length === 0 && !headerRows ? (
             <p className="py-10 text-center text-sm text-muted-foreground">
               {emptyMessage}
             </p>

@@ -10,7 +10,7 @@ import {
 import { query } from "../.server/db";
 import { reload } from "../.server/registry";
 import { getRegistryEntry } from "~/registry";
-import { listApiKeys } from "../.server/credential";
+import { testProviderConnection } from "../.server/provider-test";
 import { Plug } from "lucide-react";
 import { PageHeader } from "../components/ui/page-header";
 import { Card } from "../components/ui/card";
@@ -36,81 +36,9 @@ type KeyCountRow = {
   c: number;
 };
 
-function testProvider(providerId: string): Promise<{ connected: number; total: number }> {
-  const provider = query(
-    "SELECT base_url, auth_type FROM providers WHERE id = ?",
-  ).get(providerId) as { base_url: string; auth_type: string } | undefined;
-  if (!provider) return Promise.resolve({ connected: 0, total: 0 });
-
-  const entry = getRegistryEntry(providerId);
-  const modelsUrl =
-    entry?.modelsUrl ?? new URL("/v1/models", provider.base_url).toString();
-
-  if (provider.auth_type === "none") {
-    return (async () => {
-      try {
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 5000);
-        const res = await fetch(
-          modelsUrl,
-          { signal: controller.signal },
-        );
-        clearTimeout(timer);
-        return { connected: res.ok ? 1 : 0, total: 1 };
-      } catch {
-        return { connected: 0, total: 1 };
-      }
-    })();
-  }
-
-  const keys = listApiKeys(providerId).filter((k) => k.is_active);
-  if (keys.length === 0) return Promise.resolve({ connected: 0, total: 0 });
-
-  return (async () => {
-    let connected = 0;
-    for (const key of keys) {
-      const headers = new Headers({ "Content-Type": "application/json" });
-      const authHeader = entry?.authHeader;
-      const authPrefix = entry?.authPrefix ?? "";
-      if (authHeader) {
-        headers.set(authHeader, `${authPrefix} ${key.api_key}`.trim());
-      } else if (provider.auth_type === "bearer") {
-        headers.set("Authorization", `Bearer ${key.api_key}`);
-      } else if (provider.auth_type === "apikey") {
-        headers.set("x-goog-api-key", key.api_key);
-      }
-      if (entry?.headers) {
-        for (const [k, v] of Object.entries(entry.headers)) {
-          headers.set(k, v);
-        }
-      }
-      try {
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 5000);
-        const res = await fetch(
-          modelsUrl,
-          { headers, signal: controller.signal },
-        );
-        clearTimeout(timer);
-        if (res.ok) connected += 1;
-      } catch {
-        /* skip */
-      }
-    }
-    return { connected, total: keys.length };
-  })();
-}
-
-export async function loader() {
-  const rows = query(
-    "SELECT id, name, base_url, auth_type, is_active, weight, priority, current_connections, last_used_at FROM providers ORDER BY is_active DESC, id",
-  ).all() as unknown as ProviderRow[];
-  const keyRows = query(
-    "SELECT provider_id, COUNT(*) as c FROM provider_credentials WHERE is_active = 1 GROUP BY provider_id",
-  ).all() as unknown as KeyCountRow[];
-  const keyCounts: Record<string, number> = {};
-  for (const r of keyRows) keyCounts[r.provider_id] = Number(r.c);
-  return { providers: rows, keyCounts };
+async function testProvider(providerId: string): Promise<{ connected: number; total: number }> {
+  const r = await testProviderConnection(providerId);
+  return { connected: r.connected, total: r.total };
 }
 
 function runAllTests(rows: ProviderRow[], keyCounts: Record<string, number>) {
@@ -127,6 +55,18 @@ function runAllTests(rows: ProviderRow[], keyCounts: Record<string, number>) {
     }
     return initialTestResults;
   });
+}
+
+export function loader() {
+  const providers = query(
+    "SELECT id, name, base_url, auth_type, is_active, weight, priority, current_connections, last_used_at FROM providers ORDER BY is_active DESC, id",
+  ).all() as unknown as ProviderRow[];
+  const keyRows = query(
+    "SELECT provider_id, COUNT(*) as c FROM provider_credentials WHERE is_active = 1 GROUP BY provider_id",
+  ).all() as unknown as KeyCountRow[];
+  const keyCounts: Record<string, number> = {};
+  for (const r of keyRows) keyCounts[r.provider_id] = Number(r.c);
+  return { providers, keyCounts };
 }
 
 export async function action({ request }: Route.ActionArgs) {
@@ -208,9 +148,6 @@ export default function Providers({ loaderData }: Route.ComponentProps) {
   const { providers, keyCounts } = loaderData;
   const [picked, setPicked] = useState<ProviderTemplate | null>(null);
   const { id } = useParams();
-  const fetcher = useFetcher<{ test?: { id: string; connected: number } }>();
-  const testResult = fetcher.data?.test;
-  const testing = fetcher.state === "submitting";
   const allFetcher = useFetcher<{ testAll?: Record<string, { connected: number; total: number }> }>();
 
   // Run the (non-blocking) connection tests after the page renders so the
@@ -303,10 +240,7 @@ export default function Providers({ loaderData }: Route.ComponentProps) {
             <ProviderStatusCard
               providerId={p.id}
               keyCount={keyCounts[p.id] || 0}
-              result={testResult && testResult.id === p.id ? testResult : undefined}
               initialResult={allFetcher.data?.testAll?.[p.id]}
-              testing={testing || allFetcher.state === "submitting"}
-              fetcher={fetcher}
             />
           </Card>
         ))}
@@ -318,18 +252,20 @@ export default function Providers({ loaderData }: Route.ComponentProps) {
 function ProviderStatusCard({
   providerId,
   keyCount,
-  result,
   initialResult,
-  testing,
-  fetcher,
 }: {
   providerId: string;
   keyCount: number;
-  result?: { id: string; connected: number };
   initialResult?: { connected: number; total: number };
-  testing: boolean;
-  fetcher: ReturnType<typeof useFetcher>;
 }) {
+  // Fetcher milik tiap kartu: klik Test di satu kartu tidak mengganggu
+  // kartu lain (dulu satu fetcher dibagi semua → semua ikut spin).
+  const fetcher = useFetcher<{ test?: { id: string; connected: number } }>();
+  const testResult =
+    fetcher.data?.test && fetcher.data.test.id === providerId
+      ? fetcher.data.test
+      : undefined;
+  const testing = fetcher.state !== "idle";
   const pending = testing;
   let statusText: string;
   let statusClass: string;
@@ -337,9 +273,9 @@ function ProviderStatusCard({
   if (keyCount === 0) {
     statusText = "no connection";
     statusClass = "text-muted-foreground";
-  } else if (result) {
-    if (result.connected > 0) {
-      statusText = `${result.connected} Connected`;
+  } else if (testResult) {
+    if (testResult.connected > 0) {
+      statusText = `${testResult.connected} Connected`;
       statusClass = "text-success";
     } else {
       statusText = "Error";

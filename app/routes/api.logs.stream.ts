@@ -15,6 +15,13 @@ export async function loader({ request }: Route.LoaderArgs) {
         }
       };
       const unsubscribe = subscribe(send);
+      // Flush headers + tanda hidup segera agar client tahu stream siap
+      // tanpa menunggu event log pertama / heartbeat.
+      try {
+        controller.enqueue(encoder.encode(": connected\n\n"));
+      } catch {
+        /* ignore */
+      }
       const hb = setInterval(() => {
         try {
           controller.enqueue(encoder.encode(": ping\n\n"));

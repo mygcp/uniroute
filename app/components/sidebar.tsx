@@ -10,6 +10,7 @@ import {
 	ScrollText,
 	TrendingUp,
 	Network,
+	Bot,
 	X,
 } from "lucide-react";
 import { Button } from "./ui/button";
@@ -21,6 +22,11 @@ const NAV_ITEMS = [
 	{ to: "/api-manager", label: "API Manager", icon: KeySquare },
 	{ to: "/combo", label: "Combo", icon: Link2 },
 	{ to: "/proxies", label: "Proxies", icon: Network },
+];
+
+// Grouped under "Tools" — utilities that configure external tooling.
+const TOOLS_ITEMS = [
+	{ to: "/agents", label: "AI Agents", icon: Bot },
 ];
 
 // Grouped under "Monitoring" — request + proxy log viewers.
@@ -80,6 +86,25 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
 						</NavLink>
 					);
 				})}
+
+				<div className="pt-3">
+					<SectionLabel>Tools</SectionLabel>
+					{TOOLS_ITEMS.map((item) => {
+						const Icon = item.icon;
+						return (
+							<NavLink
+								key={item.to}
+								to={item.to}
+								prefetch="intent"
+								className={linkClass}
+								onClick={onNavigate}
+							>
+								<Icon size={16} />
+								{item.label}
+							</NavLink>
+						);
+					})}
+				</div>
 
 				<div className="pt-3">
 					<SectionLabel>Monitoring</SectionLabel>

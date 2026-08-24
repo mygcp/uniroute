@@ -1,6 +1,7 @@
 export type CanonicalContentPart =
   | { type: "text"; text: string }
-  | { type: "image"; image_url?: string; data?: string; media_type?: string };
+  | { type: "image"; image_url?: string; data?: string; media_type?: string }
+  | { type: "audio"; data: string; format?: string };
 
 export type CanonicalMessage = {
   role: "system" | "user" | "assistant" | "tool";
@@ -37,7 +38,12 @@ export type CanonicalRequest = {
 };
 
 export type CanonicalStreamEvent =
-  | { type: "message_start"; model: string }
+  | {
+      type: "message_start";
+      model: string;
+      /** Prompt/cache awal (anthropic mengirimnya di message_start). */
+      usage?: { prompt_tokens: number; cached_tokens?: number };
+    }
   | { type: "content_start" }
   | { type: "content_delta"; text: string }
   | {
@@ -49,7 +55,11 @@ export type CanonicalStreamEvent =
   | {
       type: "finish";
       finish_reason: string;
-      usage?: { prompt_tokens: number; completion_tokens: number };
+      usage?: {
+        prompt_tokens: number;
+        completion_tokens: number;
+        cached_tokens?: number;
+      };
     }
   | { type: "done" };
 
@@ -59,9 +69,24 @@ export type ProviderFormat = "openai" | "anthropic" | "gemini";
 export type StreamTransformer = {
   transform(chunk: Uint8Array): Uint8Array;
   flush(): Uint8Array;
+  /** Decode sekali: hasil bytes + text untuk pemakaian lanjutan. */
+  transformChunk?: (
+    chunk: Uint8Array,
+  ) => { out: Uint8Array; text: string };
   countTokens?: (chunkText: string) => number;
   done?: () => boolean;
   terminate?: () => Uint8Array;
+  /**
+   * Usage resmi dari event `finish` provider (jika ada). Dipakai executor
+   * untuk mencatat prompt/completion/cached tokens yang akurat di request_logs.
+   */
+  getUsage?:
+    | (() => {
+        prompt_tokens: number;
+        completion_tokens: number;
+        cached_tokens?: number;
+      } | null)
+    | undefined;
 };
 
 export function messageText(message: CanonicalMessage): string | null {

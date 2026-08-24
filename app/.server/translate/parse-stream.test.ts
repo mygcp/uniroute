@@ -2,15 +2,27 @@ import { describe, expect, test } from "bun:test";
 import { parseFrame, tokenizeSse } from "./parse-stream";
 
 describe("tokenizeSse", () => {
+  const dec = () => new TextDecoder();
   test("splits frames across chunk boundaries", () => {
     const enc = new TextEncoder();
     const sse = "data: {\"a\":1}\n\ndata: {\"b\":2}\n\n";
     const half = Math.ceil(sse.length / 2);
-    const first = tokenizeSse(enc.encode(sse.slice(0, half)));
+    const first = tokenizeSse(enc.encode(sse.slice(0, half)), "", dec());
     expect(first.frames).toHaveLength(1);
-    const second = tokenizeSse(enc.encode(sse.slice(half)), first.rest);
+    const second = tokenizeSse(enc.encode(sse.slice(half)), first.rest, dec());
     expect(second.frames).toHaveLength(1);
     expect(second.rest).toBe("");
+  });
+
+  test("normalizes CRLF frame separators", () => {
+    const enc = new TextEncoder();
+    const r = tokenizeSse(
+      enc.encode("data: {\"a\":1}\r\n\r\ndata: {\"b\":2}\r\n\r\n"),
+      "",
+      dec(),
+    );
+    expect(r.frames).toEqual(['{"a":1}', '{"b":2}']);
+    expect(r.rest).toBe("");
   });
 });
 
@@ -106,12 +118,52 @@ describe("parseFrame gemini", () => {
   test("finish with usage", () => {
     const ev = parseFrame(
       "gemini",
-      '{"candidates":[{"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":5,"candidatesTokenCount":6}}',
+      '{"candidates":[{"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":5,"candidatesTokenCount":6,"cachedContentTokenCount":2}}',
     );
     expect(ev).toEqual({
       type: "finish",
       finish_reason: "STOP",
-      usage: { prompt_tokens: 5, completion_tokens: 6 },
+      usage: { prompt_tokens: 5, completion_tokens: 6, cached_tokens: 2 },
     });
+  });
+});
+
+describe("usage capture edge cases", () => {
+  test("openai usage-only final chunk is captured as empty finish", () => {
+    const ev = parseFrame(
+      "openai",
+      '{"usage":{"prompt_tokens":11,"completion_tokens":7,"prompt_tokens_details":{"cached_tokens":4}}}',
+    );
+    expect(ev?.type).toBe("finish");
+    if (ev?.type === "finish") {
+      expect(ev.finish_reason).toBe("");
+      expect(ev.usage).toEqual({
+        prompt_tokens: 11,
+        completion_tokens: 7,
+        cached_tokens: 4,
+      });
+    }
+  });
+
+  test("anthropic message_start carries input + cache tokens", () => {
+    const ev = parseFrame(
+      "anthropic",
+      '{"type":"message_start","message":{"model":"claude","usage":{"input_tokens":10,"cache_read_input_tokens":5,"cache_creation_input_tokens":2}}}',
+    );
+    expect(ev?.type).toBe("message_start");
+    if (ev?.type === "message_start") {
+      expect(ev.usage).toEqual({ prompt_tokens: 17, cached_tokens: 7 });
+    }
+  });
+
+  test("gemini cachedContentTokenCount", () => {
+    const ev = parseFrame(
+      "gemini",
+      '{"candidates":[{"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":5,"candidatesTokenCount":6,"cachedContentTokenCount":2}}',
+    );
+    expect(ev?.type).toBe("finish");
+    if (ev?.type === "finish" && ev.usage) {
+      expect(ev.usage.cached_tokens).toBe(2);
+    }
   });
 });

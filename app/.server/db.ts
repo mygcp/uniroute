@@ -18,6 +18,13 @@ const require = createRequire(import.meta.url);
 let db!: SqliteApi;
 let opened = false;
 
+/**
+ * Prepared-statement cache untuk driver tanpa cache internal (node:sqlite).
+ * bun:sqlite sudah meng-cache `.query()`, jadi jalur itu tidak disentuh.
+ * Semua SQL di aplikasi adalah literal statis — ukuran cache terbatas.
+ */
+const stmtCache = new Map<string, StatementApi>();
+
 function openDb(): void {
 	const dbPath = process.env.DATABASE_URL ?? "./data/uniroute.db";
 	mkdirSync(path.dirname(dbPath), { recursive: true });
@@ -35,6 +42,8 @@ function openDb(): void {
 		db = new DatabaseSync(dbPath);
 	}
 	db.exec("PRAGMA journal_mode = WAL;");
+	// WAL + NORMAL: write jauh lebih cepat dan tetap aman (durable di checkpoint).
+	db.exec("PRAGMA synchronous = NORMAL;");
 	db.exec("PRAGMA foreign_keys = ON;");
 	opened = true;
 	try {
@@ -62,9 +71,13 @@ export function query(sql: string): StatementApi {
 	if (typeof q === "function") {
 		return q.call(conn, sql) as StatementApi;
 	}
+	const cached = stmtCache.get(sql);
+	if (cached) return cached;
 	const prepare = (conn as { prepare?: (sql: string) => unknown }).prepare;
 	if (typeof prepare === "function") {
-		return prepare.call(conn, sql) as StatementApi;
+		const stmt = prepare.call(conn, sql) as StatementApi;
+		stmtCache.set(sql, stmt);
+		return stmt;
 	}
 	throw new Error("sqlite API not available");
 }
@@ -79,6 +92,8 @@ export function closeDb(): void {
 		/* already closed */
 	}
 	opened = false;
+	// Statement lama terikat ke koneksi yang sudah ditutup — jangan dipakai ulang.
+	stmtCache.clear();
 }
 
 /** Re-open the connection from the current DATABASE_URL on next use. */
@@ -418,11 +433,62 @@ CREATE INDEX IF NOT EXISTS idx_audit_key ON key_audit_logs (key_id, created_at);
   ensureColumn("combo_steps", "account_id", "account_id INTEGER");
   ensureColumn("combo_steps", "account_ids", "account_ids TEXT");
 	ensureColumn("provider_credentials", "proxy_pool_id", "proxy_pool_id INTEGER");
+	ensureColumn("proxy_pools", "strategy", "strategy TEXT NOT NULL DEFAULT 'round_robin'");
+	ensureColumn(
+		"request_logs",
+		"via_proxy",
+		"via_proxy INTEGER NOT NULL DEFAULT 0",
+	);
+	ensureColumn("request_logs", "proxy_id", "proxy_id INTEGER");
+	ensureColumn("request_logs", "endpoint", "endpoint TEXT");
+	ensureColumn("request_logs", "upstream_tls", "upstream_tls INTEGER");
+	ensureColumn("request_logs", "cached_tokens", "cached_tokens INTEGER");
+	ensureColumn("proxy_logs", "client_ip", "client_ip TEXT");
+	ensureColumn("proxy_logs", "api_key_id", "api_key_id INTEGER");
+	ensureColumn("proxy_logs", "provider_id", "provider_id TEXT");
+	ensureColumn("proxy_logs", "proxy_id", "proxy_id INTEGER");
+	ensureColumn("proxy_logs", "latency_ms", "latency_ms INTEGER");
+	ensureColumn("proxy_logs", "endpoint", "endpoint TEXT");
+
+	db.exec(`CREATE TABLE IF NOT EXISTS chat_sessions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  provider_id TEXT NOT NULL,
+  title TEXT NOT NULL DEFAULT 'New chat',
+  model TEXT,
+  created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+  updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+);
+CREATE TABLE IF NOT EXISTS chat_messages (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id INTEGER NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
+  role TEXT NOT NULL,
+  content TEXT NOT NULL,
+  model TEXT,
+  latency_ms INTEGER,
+  created_at INTEGER NOT NULL DEFAULT (unixepoch())
+);
+CREATE INDEX IF NOT EXISTS idx_chat_messages_session ON chat_messages (session_id, id);
+CREATE INDEX IF NOT EXISTS idx_chat_sessions_provider ON chat_sessions (provider_id, updated_at);`);
+
+
 	ensureColumn("outbound_proxies", "success_count", "success_count INTEGER NOT NULL DEFAULT 0");
 	ensureColumn("outbound_proxies", "fail_count", "fail_count INTEGER NOT NULL DEFAULT 0");
 	ensureColumn("outbound_proxies", "last_ok_at", "last_ok_at INTEGER");
 	ensureColumn("outbound_proxies", "last_latency_ms", "last_latency_ms INTEGER");
 	ensureColumn("outbound_proxies", "last_error", "last_error TEXT");
+
+	// Indeks query panas: dashboard/usage/logs memfilter & memgrouping
+	// berdasarkan created_at/status terus-menerus.
+	db.exec(`CREATE INDEX IF NOT EXISTS idx_request_logs_created_at
+    ON request_logs (created_at);
+CREATE INDEX IF NOT EXISTS idx_request_logs_status_created
+    ON request_logs (status, created_at);
+CREATE INDEX IF NOT EXISTS idx_proxy_logs_created_at
+    ON proxy_logs (created_at);
+CREATE INDEX IF NOT EXISTS idx_combo_metrics_ts
+    ON combo_metrics (timestamp);
+CREATE INDEX IF NOT EXISTS idx_webhook_events_retry
+    ON webhook_events (status, next_retry_at);`);
 
 	// Migrate legacy single-key table (provider_id PRIMARY KEY) to multi-key schema.
 	{

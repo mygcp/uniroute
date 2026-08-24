@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { X } from "lucide-react";
 import type { TagSuggestion } from "../../.server/suggest";
 import {
@@ -42,6 +42,17 @@ export function TagInput({
 		() => filterSuggestions(options, chips, text),
 		[options, chips, text],
 	);
+
+	useEffect(() => {
+		if (!open) return;
+		const handler = (e: MouseEvent) => {
+			if (rootRef.current && !rootRef.current.contains(e.target as Node)) {
+				closeDropdown();
+			}
+		};
+		document.addEventListener("mousedown", handler);
+		return () => document.removeEventListener("mousedown", handler);
+	}, [open]);
 
 	const closeDropdown = () => {
 		if (!openRef.current) return;
@@ -118,7 +129,11 @@ export function TagInput({
 					onFocus={openDropdown}
 					onChange={(e) => {
 						setText(e.target.value);
-						openDropdown();
+						if (e.target.value) {
+							openDropdown();
+						} else {
+							closeDropdown();
+						}
 						setHighlight(0);
 					}}
 					onKeyDown={(e) => {

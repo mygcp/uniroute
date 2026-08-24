@@ -13,14 +13,19 @@ import {
 	resolveClientKey,
 	type ClientKey,
 } from "./client-key";
+import { getRoutingPoolId } from "./credential";
 import { compress, isEnabled } from "./compressor";
-import { executeJson, executeStreaming } from "./executor";
+import { executeJson, executeStreaming, type ProxyUsedInfo } from "./executor";
 import { checkAllowlist } from "./guard";
 import { resolveCombo } from "./combo";
 import { runComboEngine } from "./combo-runner";
 import { recordProxyLog, recordRequestLog, type RequestLog } from "./logger";
-import { getPoolForApiKey, getPoolForProvider } from "./outbound-proxy";
-import { getProviders, reload, type Provider } from "./registry";
+import { broadcast } from "./log-stream";
+import {
+  getPoolForApiKey,
+  getPoolForProvider,
+} from "./outbound-proxy";
+import { getProviders, type Provider } from "./registry";
 import { evaluateRules } from "./rules";
 import { getRegistryEntry } from "~/registry";
 import {
@@ -164,6 +169,8 @@ function orderCandidates(
 export type ProxyHandlerConfig = {
 	clientFormat: ClientFormat;
 	parse: (body: Record<string, unknown>) => CanonicalRequest;
+	/** Label endpoint untuk request_logs (mis. "chat-completions"). */
+	endpoint?: string;
 };
 
 export async function handleProxy(
@@ -187,6 +194,13 @@ export async function handleProxy(
 
 	const clientKey = authorize(request, canonical);
 	if (!clientKey.ok) {
+		recordProxyLog({
+			level: "warn",
+			source: "auth",
+			message: `request denied: ${clientKey.error}`,
+			client_ip: clientIpFromRequest(request),
+			endpoint: config.endpoint ?? "chat",
+		});
 		return json({ error: { message: clientKey.error } }, clientKey.status);
 	}
 
@@ -349,7 +363,6 @@ export async function handleProxy(
 			clientKey.rule?.pinned_provider_id,
 		);
 		markUsed(selected);
-		reload();
 
 		const apiKeyPoolId = clientKey.rule
 			? (getPoolForApiKey(clientKey.rule.id)?.id ?? undefined)
@@ -406,6 +419,8 @@ export async function handleProxy(
 			const onComplete = (
 				log: Partial<RequestLog> & Pick<RequestLog, "status">,
 			) => {
+				// Metadata proxy sudah ditangkap saat egress (onProxyUsed) —
+				// tidak perlu query ulang di sini.
 				recordRequestLog({
 					model: effectiveModel,
 					provider_id: provider.id,
@@ -413,7 +428,28 @@ export async function handleProxy(
 					rule_applied: ruleApplied,
 					...log,
 					api_key_id: clientKey.rule?.id ?? null,
+					via_proxy: usedProxy != null ? 1 : 0,
+					proxy_id: usedProxy?.id ?? null,
+					proxy_name: usedProxy?.name ?? null,
+					proxy_host: usedProxy?.host ?? null,
+					proxy_port: usedProxy?.port ?? null,
+					endpoint: config.endpoint ?? "chat",
+					upstream_tls: transformed.url.startsWith("https://") ? 1 : 0,
 				} as never);
+				if (usedProxy != null) {
+					recordProxyLog({
+						level: "info",
+						source: "egress",
+						message: `upstream ${provider.id} via proxy #${usedProxy.id}`,
+						proxy_id: usedProxy.id,
+						provider_id: provider.id,
+						client_ip: logClientIp,
+						api_key_id: logApiKeyId,
+						latency_ms: log.duration_ms ?? null,
+						endpoint: config.endpoint ?? "chat",
+					});
+				}
+				broadcast({ type: "request-end", reqId: reqStartId });
 				if (clientKey.rule) {
 					recordRequestUsage(clientKey.rule.id, {
 						model: effectiveModel,
@@ -429,6 +465,32 @@ export async function handleProxy(
 			};
 
 			const providerPoolId = getPoolForProvider(provider.id)?.id ?? undefined;
+			// Pool milik kredensial (akun) yang dipakai untuk auth provider ini.
+			const accountPoolId = getRoutingPoolId(provider.id);
+
+			// Metadata egress untuk request log (proxy terakhir yang dipakai).
+			let usedProxy: ProxyUsedInfo | null = null;
+			const onProxyUsed = (info: ProxyUsedInfo | null): void => {
+				if (info != null) usedProxy = info;
+			};
+			const logClientIp = clientIpFromRequest(request);
+			const logApiKeyId = clientKey.rule?.id ?? null;
+
+			// Umumkan START ke monitor realtime (tidak disimpan ke DB) supaya
+			// request paralel terlihat sebagai baris "running" sejak awal.
+			const reqStartId = `${Date.now().toString(36)}-${Math.random()
+				.toString(36)
+				.slice(2, 7)}`;
+			broadcast({
+				type: "request-start",
+				reqId: reqStartId,
+				model: effectiveModel,
+				provider_id: provider.id,
+				endpoint: config.endpoint ?? "chat",
+				client_ip: logClientIp,
+				api_key_id: logApiKeyId,
+				started_at: Date.now(),
+			});
 
 			if (canonical.stream) {
 				response = await executeStreaming({
@@ -441,7 +503,10 @@ export async function handleProxy(
 						config.clientFormat,
 					),
 					onComplete,
-					apiKeyPoolId,
+					onProxyUsed,
+					logClientIp,
+					logApiKeyId,
+					apiKeyPoolId,					accountPoolId,
 					providerPoolId,
 					providerId: provider.id,
 				});
@@ -452,7 +517,11 @@ export async function handleProxy(
 					body: transformed.body,
 					signal: request.signal,
 					onComplete,
+					onProxyUsed,
+					logClientIp,
+					logApiKeyId,
 					apiKeyPoolId,
+					accountPoolId,
 					providerPoolId,
 					providerId: provider.id,
 				});

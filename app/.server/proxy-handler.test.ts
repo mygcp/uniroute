@@ -16,12 +16,16 @@ beforeAll(async () => {
   const auth = await import("./auth");
   const handler = await import("./proxy-handler");
   const translate = await import("./translate/from-openai-chat");
+  const reg = await import("./registry");
   seed = db.seed;
   setRequireApiKey = ck.setRequireApiKey;
   createSession = auth.createSession;
   handleProxy = handler.handleProxy;
   parseChat = translate.parse;
   seed();
+  // Registry tidak lagi di-reload per-request (optimasi jalur panas) —
+  // sinkronkan cache dengan DB hasil seed ini secara eksplisit.
+  reg.reload();
 });
 
 afterAll(() => {

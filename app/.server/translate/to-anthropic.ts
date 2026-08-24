@@ -1,6 +1,13 @@
 import type { CanonicalMessage, CanonicalRequest } from "./canonical";
 
-function toBlock(part: { type: string; text?: string; image_url?: string; data?: string; media_type?: string }): Record<string, unknown> {
+function toBlock(part: {
+  type: string;
+  text?: string;
+  image_url?: string;
+  data?: string;
+  media_type?: string;
+  format?: string;
+}): Record<string, unknown> | null {
   if (part.type === "text") return { type: "text", text: part.text };
   if (part.type === "image") {
     if (part.image_url) {
@@ -17,6 +24,8 @@ function toBlock(part: { type: string; text?: string; image_url?: string; data?:
       };
     }
   }
+  // Anthropic messages API tidak mendukung audio → bagian diabaikan.
+  if (part.type === "audio") return null;
   return { type: "text", text: "" };
 }
 
@@ -25,7 +34,10 @@ function contentBlocks(message: CanonicalMessage): Record<string, unknown>[] {
   if (typeof message.content === "string" && message.content !== "") {
     blocks.push({ type: "text", text: message.content });
   } else if (Array.isArray(message.content)) {
-    for (const p of message.content) blocks.push(toBlock(p));
+    for (const p of message.content) {
+      const block = toBlock(p);
+      if (block) blocks.push(block);
+    }
   }
   if (message.tool_calls && message.tool_calls.length > 0) {
     for (const tc of message.tool_calls) {

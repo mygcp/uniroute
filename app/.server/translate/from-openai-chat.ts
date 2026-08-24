@@ -42,6 +42,17 @@ function parseContentPart(part: unknown): CanonicalContentPart | null {
     const url = typeof img === "string" ? img : (img as Record<string, unknown> | undefined)?.url;
     if (typeof url === "string") return { type: "image", image_url: url };
   }
+  if (p.type === "input_audio") {
+    const ia = p.input_audio as Record<string, unknown> | undefined;
+    const data = typeof ia?.data === "string" ? ia.data : "";
+    if (data) {
+      return {
+        type: "audio",
+        data,
+        format: typeof ia?.format === "string" ? ia.format : undefined,
+      };
+    }
+  }
   return null;
 }
 

@@ -16,12 +16,7 @@ import { listTemplates, type KeyTemplate } from "../.server/key-templates";
 import { PageHeader } from "../components/ui/page-header";
 import { Card } from "../components/ui/card";
 import { Button } from "../components/ui/button";
-import {
-	Input,
-	Label,
-	Select,
-	Checkbox,
-} from "../components/ui/field";
+import { Input, Label, Select, Checkbox } from "../components/ui/field";
 import { CopyButton } from "../components/ui/copy-button";
 import { TagInput } from "../components/ui/tag-input";
 
@@ -433,28 +428,48 @@ export default function CreateKey({
 				<Section title="Budget & Quota">
 					<div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
 						{[
-						["budget_monthly", "Monthly Budget (USD)", "USD cap per month, e.g. 100"],
-						["budget_daily", "Daily Budget (USD)", "USD cap per day, e.g. 10"],
-						["budget_per_request", "Per-request (USD)", "Max USD per request, e.g. 0.002"],
-						["quota_tokens", "Tokens/Month", "Token cap per month, e.g. 100000"],
-						["quota_req_day", "Requests/Day", "Daily request cap, e.g. 1000"],
-						["quota_concurrent", "Concurrent", "Max active sessions, e.g. 5"],
-						["quota_rpm", "Requests/Min", "Rate limit per minute, e.g. 60"],
-						["quota_tpm", "Tokens/Min", "Token rate per minute, e.g. 100000"],
-						["alert_threshold", "Alert at (0..1)", "Fraction of budget before warning, e.g. 0.8"],
-					].map(([name, label, placeholder]) => (
-						<div key={name as string}>
-							<Label htmlFor={name as string}>{label}</Label>
-							<Input
-								id={name as string}
-								name={name}
-								type="number"
-								step="any"
-								placeholder={placeholder as string}
-								autoComplete="off"
-							/>
-						</div>
-					))}
+							[
+								"budget_monthly",
+								"Monthly Budget (USD)",
+								"USD cap per month, e.g. 100",
+							],
+							[
+								"budget_daily",
+								"Daily Budget (USD)",
+								"USD cap per day, e.g. 10",
+							],
+							[
+								"budget_per_request",
+								"Per-request (USD)",
+								"Max USD per request, e.g. 0.002",
+							],
+							[
+								"quota_tokens",
+								"Tokens/Month",
+								"Token cap per month, e.g. 100000",
+							],
+							["quota_req_day", "Requests/Day", "Daily request cap, e.g. 1000"],
+							["quota_concurrent", "Concurrent", "Max active sessions, e.g. 5"],
+							["quota_rpm", "Requests/Min", "Rate limit per minute, e.g. 60"],
+							["quota_tpm", "Tokens/Min", "Token rate per minute, e.g. 100000"],
+							[
+								"alert_threshold",
+								"Alert at (0..1)",
+								"Fraction of budget before warning, e.g. 0.8",
+							],
+						].map(([name, label, placeholder]) => (
+							<div key={name as string}>
+								<Label htmlFor={name as string}>{label}</Label>
+								<Input
+									id={name as string}
+									name={name}
+									type="number"
+									step="any"
+									placeholder={placeholder as string}
+									autoComplete="off"
+								/>
+							</div>
+						))}
 					</div>
 					<label className="mt-3 flex items-center gap-2 text-sm">
 						<Checkbox name="auto_block" value="1" defaultChecked />
@@ -536,7 +551,7 @@ export default function CreateKey({
 							<Input
 								id="access_timezone"
 								name="access_timezone"
-								placeholder="Asia/Jakarta"
+								placeholder="Europe/London"
 								autoComplete="off"
 							/>
 						</div>

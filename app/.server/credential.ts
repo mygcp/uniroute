@@ -31,13 +31,6 @@ export function getApiKey(providerId: string): string | null {
   return fallback?.api_key ?? null;
 }
 
-export function hasApiKey(providerId: string): boolean {
-  const row = query(
-    "SELECT 1 as x FROM provider_credentials WHERE provider_id = ? LIMIT 1",
-  ).get(providerId) as { x: number } | undefined;
-  return !!row;
-}
-
 /** Tambah API key baru (multi account). Optionally becomes the routing key. */
 export function addApiKey(
   providerId: string,
@@ -100,24 +93,25 @@ export function setApiKeyActive(id: number, active: boolean): void {
   ).run(active ? 1 : 0, id);
 }
 
-export function getRoutingCredential(
-  providerId: string,
-): { api_key: string } | null {
-  const row = query(
-    "SELECT api_key FROM provider_credentials WHERE provider_id = ? AND is_routing = 1 AND is_active = 1 ORDER BY id LIMIT 1",
-  ).get(providerId) as { api_key: string } | undefined;
-  if (row) return row;
-  const fallback = query(
-    "SELECT api_key FROM provider_credentials WHERE provider_id = ? AND is_active = 1 ORDER BY id LIMIT 1",
-  ).get(providerId) as { api_key: string } | undefined;
-  return fallback ?? null;
-}
-
 /** Set proxy pool assigned to one provider credential (API key). Null clears it. */
 export function setApiKeyProxyPool(id: number, poolId: number | null): void {
   query(
     "UPDATE provider_credentials SET proxy_pool_id = ?, updated_at = unixepoch() WHERE id = ?",
   ).run(poolId, id);
+}
+
+/**
+ * Hanya `proxy_pool_id` kredensial yang dipakai routing (routing key dulu,
+ * fallback key aktif tertua). Query satu kolom — jangan tarik baris penuh
+ * (termasuk api_key) hanya untuk baca pool di jalur panas.
+ */
+export function getRoutingPoolId(
+  providerId: string,
+): number | undefined {
+  const row = query(
+    "SELECT proxy_pool_id FROM provider_credentials WHERE provider_id = ? AND is_active = 1 ORDER BY is_routing DESC, id LIMIT 1",
+  ).get(providerId) as { proxy_pool_id: number | null } | undefined;
+  return row ? (row.proxy_pool_id ?? undefined) : undefined;
 }
 
 /** Full row of the credential getApiKey() would resolve (routing, else first active). */

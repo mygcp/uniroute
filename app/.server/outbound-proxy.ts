@@ -24,11 +24,14 @@ export interface ProxyConfig {
 	updated_at: number;
 }
 
+export type PoolStrategy = "round_robin" | "priority" | "random";
+
 export interface ProxyPool {
 	id: number;
 	name: string;
 	proxy_ids: number[];
 	is_active: boolean;
+	strategy: PoolStrategy;
 	created_at: number;
 	updated_at: number;
 }
@@ -56,6 +59,7 @@ export interface CreatePoolInput {
 	name: string;
 	proxy_ids?: number[];
 	is_active?: boolean;
+	strategy?: PoolStrategy;
 }
 
 export type UpdatePoolInput = Partial<CreatePoolInput>;
@@ -94,6 +98,7 @@ interface PoolRow {
 	name: string;
 	proxy_ids: string;
 	is_active: number;
+	strategy?: string;
 	created_at: number;
 	updated_at: number;
 }
@@ -133,6 +138,11 @@ function mapPool(row: PoolRow): ProxyPool {
 		name: row.name,
 		proxy_ids: parseProxyIds(row.proxy_ids),
 		is_active: row.is_active === 1,
+		strategy: (["round_robin", "priority", "random"] as const).includes(
+			row.strategy as PoolStrategy,
+		)
+			? (row.strategy as PoolStrategy)
+			: "round_robin",
 		created_at: row.created_at,
 		updated_at: row.updated_at,
 	};
@@ -300,11 +310,12 @@ export function getPool(id: number): ProxyPool | null {
 
 export function createPool(input: CreatePoolInput): ProxyPool {
 	query(
-		"INSERT INTO proxy_pools (name, proxy_ids, is_active) VALUES (?, ?, ?)",
+		"INSERT INTO proxy_pools (name, proxy_ids, is_active, strategy) VALUES (?, ?, ?, ?)",
 	).run(
 		input.name,
 		JSON.stringify(input.proxy_ids ?? []),
 		input.is_active === false ? 0 : 1,
+		input.strategy ?? "round_robin",
 	);
 	const row = query("SELECT last_insert_rowid() AS id").get() as { id: number };
 	const created = getPool(row.id);
@@ -336,6 +347,12 @@ export function updatePool(
 		stmts.push({
 			sql: "UPDATE proxy_pools SET is_active = ? WHERE id = ?",
 			value: input.is_active ? 1 : 0,
+		});
+	}
+	if (input.strategy !== undefined) {
+		stmts.push({
+			sql: "UPDATE proxy_pools SET strategy = ? WHERE id = ?",
+			value: input.strategy,
 		});
 	}
 	if (stmts.length === 0) return current;

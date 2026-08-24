@@ -1,10 +1,17 @@
-import { useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 
 type Usage = {
 	prompt_tokens?: number;
 	completion_tokens?: number;
 };
 
+export type ChatTurn = { role: "user" | "assistant"; content: string };
+
+/**
+ * Streaming chat hook dengan update ber-batching rAF: delta SSE diakumulasi
+ * di ref dan di-flush maksimal sekali per frame — jauh lebih halus daripada
+ * setState per chunk (yang memicu render puluhan kali per detik).
+ */
 export function useStreaming() {
 	const [response, setResponse] = useState("");
 	const [usage, setUsage] = useState<Usage | null>(null);
@@ -13,12 +20,43 @@ export function useStreaming() {
 	const [error, setError] = useState("");
 	const abortRef = useRef<AbortController | null>(null);
 
+	// Buffer delta + jadwal flush per frame (fallback timer saat tab hidden).
+	const bufRef = useRef("");
+	const rafRef = useRef<number | null>(null);
+	const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+	const clearSchedule = () => {
+		if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
+		if (timerRef.current != null) clearTimeout(timerRef.current);
+		rafRef.current = null;
+		timerRef.current = null;
+	};
+	const flush = useCallback(() => {
+		clearSchedule();
+		if (bufRef.current === "") return;
+		const chunk = bufRef.current;
+		bufRef.current = "";
+		setResponse((prev) => prev + chunk);
+	}, []);
+
+	const schedule = useCallback(() => {
+		if (rafRef.current != null || timerRef.current != null) return;
+		if (typeof document !== "undefined" && document.hidden) {
+			// rAF berhenti saat tab hidden — pakai timer agar stream tetap jalan.
+			timerRef.current = setTimeout(flush, 32);
+		} else {
+			rafRef.current = requestAnimationFrame(flush);
+		}
+	}, [flush]);
+
 	const send = async (
 		model: string,
 		prompt: string,
-		stream: boolean,
-		systemPrompt?: string,
-		apiKey?: string,
+		useStream = true,
+		opts?: {
+			history?: ChatTurn[];
+			systemPrompt?: string;
+			apiKey?: string;
+		},
 	) => {
 		abortRef.current = new AbortController();
 		setStreaming(true);
@@ -26,42 +64,43 @@ export function useStreaming() {
 		setUsage(null);
 		setError("");
 		setDone(false);
+		bufRef.current = "";
+
+		const messages = [
+			...(opts?.systemPrompt
+				? [{ role: "system" as const, content: opts.systemPrompt }]
+				: []),
+			...(opts?.history ?? []),
+			{ role: "user" as const, content: prompt },
+		];
 
 		try {
 			const res = await fetch("/v1/chat/completions", {
 				method: "POST",
 				headers: {
 					"Content-Type": "application/json",
-					...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+					...(opts?.apiKey ? { Authorization: `Bearer ${opts.apiKey}` } : {}),
 				},
-				body: JSON.stringify({
-					model,
-					messages: [
-						...(systemPrompt
-							? [{ role: "system" as const, content: systemPrompt }]
-							: []),
-						{ role: "user" as const, content: prompt },
-					],
-					stream,
-				}),
+				body: JSON.stringify({ model, messages, stream: useStream }),
 				signal: abortRef.current.signal,
 			});
 
 			if (!res.ok) {
 				const text = await res.text();
+				flush();
 				setError(text);
 				setStreaming(false);
 				return;
 			}
 
-			if (!stream || !res.body) {
+			if (!useStream || !res.body) {
 				const json = (await res.json()) as {
 					choices?: { message?: { content?: string } }[];
 					usage?: Usage;
 				};
-				setResponse(
-					json.choices?.[0]?.message?.content ?? JSON.stringify(json),
-				);
+				bufRef.current =
+					json.choices?.[0]?.message?.content ?? JSON.stringify(json);
+				flush();
 				setUsage(json.usage ?? null);
 				setDone(true);
 				setStreaming(false);
@@ -81,6 +120,7 @@ export function useStreaming() {
 					if (!line.startsWith("data:")) continue;
 					const data = line.slice(5).trim();
 					if (data === "[DONE]") {
+						flush();
 						setDone(true);
 						break;
 					}
@@ -90,16 +130,21 @@ export function useStreaming() {
 							usage?: Usage;
 						};
 						const delta = parsed.choices?.[0]?.delta?.content ?? "";
-						if (delta) setResponse((prev) => prev + delta);
+						if (delta) {
+							bufRef.current += delta;
+							schedule();
+						}
 						if (parsed.usage) setUsage(parsed.usage);
 					} catch {
 						/* skip malformed */
 					}
 				}
 			}
+			flush();
 			setStreaming(false);
 			setDone(true);
 		} catch (err) {
+			flush();
 			if (err instanceof DOMException && err.name === "AbortError") {
 				setStreaming(false);
 				setDone(true);

@@ -110,7 +110,3 @@ export function createStreamTransformer() {
 
   return { transform, flush };
 }
-
-export function transformStreamChunk(chunk: Uint8Array): Uint8Array {
-  return createStreamTransformer().transform(chunk);
-}

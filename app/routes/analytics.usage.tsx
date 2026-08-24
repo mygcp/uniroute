@@ -165,6 +165,13 @@ export default function AnalyticsUsage({ loaderData }: Route.ComponentProps) {
           delta={deltaProps(trends.outputTokens, true)}
         />
         <StatCard
+          title="Cache Tokens"
+          value={fmtTokens(summary.cachedTokens)}
+          accent="bg-primary/60"
+          delta={deltaProps(trends.cachedTokens, true)}
+          subline="Served from provider cache"
+        />
+        <StatCard
           title="Est. Cost"
           value={fmtCost(summary.cost)}
           accent="bg-success"
@@ -229,7 +236,7 @@ export default function AnalyticsUsage({ loaderData }: Route.ComponentProps) {
       <Card className="mb-6">
         <CardHeader className="flex-wrap">
           <CardTitle>Top {breakdown.length || 10} — {DIMENSION_LABEL[dimension]}</CardTitle>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <Tabs
               tabs={METRICS.map((m) => (m === "tokens" ? "Tokens" : "Cost"))}
               active={metric === "tokens" ? "Tokens" : "Cost"}

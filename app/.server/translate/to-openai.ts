@@ -16,6 +16,12 @@ function toContentPart(part: CanonicalMessage["content"]): unknown {
         };
       }
     }
+    if (p.type === "audio") {
+      return {
+        type: "input_audio",
+        input_audio: { data: p.data, format: p.format ?? "wav" },
+      };
+    }
     return null;
   }).filter(Boolean);
 }

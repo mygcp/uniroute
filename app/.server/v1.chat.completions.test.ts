@@ -14,11 +14,14 @@ beforeAll(async () => {
   const ck = await import("./client-key");
   const auth = await import("./auth");
   const route = await import("../routes/v1.chat.completions");
+  const reg = await import("./registry");
   seed = db.seed;
   setRequireApiKey = ck.setRequireApiKey;
   createSession = auth.createSession;
   action = route.action as unknown as (args: { request: Request }) => Promise<Response>;
   seed();
+  // Registry di-cache antar test file — sinkronkan dengan DB hasil seed ini.
+  reg.reload();
 });
 
 afterAll(() => {

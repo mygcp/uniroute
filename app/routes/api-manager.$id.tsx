@@ -850,7 +850,7 @@ function EditKeyForm({
 					<Input
 						id="edit-access-timezone"
 						name="access_timezone"
-						placeholder="Timezone"
+						placeholder="Asia/Jakarta"
 						defaultValue={data.access_hours?.timezone ?? ""}
 						autoComplete="off"
 					/>

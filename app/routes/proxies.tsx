@@ -1,5 +1,5 @@
 import { Form, Link, redirect, useFetcher } from "react-router";
-import { memo, useCallback, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import type { Route } from "./+types/proxies";
 import { query } from "../.server/db";
 import {
@@ -27,7 +27,7 @@ import { Plus, Trash2, Plug, Download, Globe, RefreshCw } from "lucide-react";
 import { Button } from "../components/ui/button";
 import { Card } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
-import { Checkbox, Input, Select, Textarea } from "../components/ui/field";
+import { Checkbox, Input, Label, Select, Textarea } from "../components/ui/field";
 import { Tabs } from "../components/ui/tabs";
 import { Toggle } from "../components/ui/toggle";
 import { PageHeader } from "../components/ui/page-header";
@@ -282,6 +282,50 @@ export async function action({ request }: Route.ActionArgs) {
 		return redirect("/proxies");
 	}
 
+	// Hapus semua proxy yang terakhir kali dites gagal (last_error != NULL).
+	if (intent === "delete-errors") {
+		const rows = query(
+			"SELECT id FROM outbound_proxies WHERE last_error IS NOT NULL",
+		).all() as unknown as { id: number }[];
+		for (const r of rows) deleteProxy(Number(r.id));
+		return redirect("/proxies");
+	}
+
+	if (intent === "bulk-active") {
+		const active = form.get("active") === "1";
+		for (const id of form.getAll("ids").map(Number)) {
+			const current = getProxy(id);
+			if (current && current.is_active !== active) {
+				updateProxy(id, { is_active: active });
+			}
+		}
+		return redirect("/proxies");
+	}
+
+	// Test banyak proxy sekaligus (semua atau seleksi) lewat URL kustom.
+	if (intent === "test-many") {
+		const ids = [...new Set(form.getAll("ids").map(Number))].filter((n) =>
+			Number.isFinite(n),
+		);
+		const customUrl = String(form.get("url") || "").trim();
+		const results: Array<{ id: number; ok: boolean; latencyMs: number }> = [];
+		const batch = 6;
+		for (let i = 0; i < ids.length; i += batch) {
+			await Promise.all(
+				ids.slice(i, i + batch).map(async (id) => {
+					const proxy = getProxy(id);
+					if (!proxy) return;
+					const r = await testProxyConnection(
+						proxy,
+						customUrl || undefined,
+					);
+					results.push({ id, ok: r.ok, latencyMs: r.latencyMs });
+				}),
+			);
+		}
+		return { manyTests: results };
+	}
+
 	if (intent === "test") {
 		const id = Number(form.get("id"));
 		const proxy = getProxy(id);
@@ -402,13 +446,24 @@ export async function action({ request }: Route.ActionArgs) {
 	}
 
 	if (intent === "create-pool") {
-		createPool({ name: String(form.get("name") || ""), proxy_ids: [] });
+		createPool({
+			name: String(form.get("name") || ""),
+			proxy_ids: [],
+			strategy: String(form.get("strategy")) as
+				| "round_robin"
+				| "priority"
+				| "random",
+		});
 		return redirect("/proxies");
 	}
 
 	if (intent === "update-pool") {
 		updatePool(Number(form.get("id")), {
 			proxy_ids: form.getAll("proxy_ids").map(Number),
+			strategy: String(form.get("strategy")) as
+				| "round_robin"
+				| "priority"
+				| "random",
 		});
 		return redirect("/proxies");
 	}
@@ -482,6 +537,14 @@ export async function action({ request }: Route.ActionArgs) {
 
 type ProxyRow = Route.ComponentProps["loaderData"]["proxies"][number];
 
+type Health = "ok" | "error" | "unknown";
+
+function healthOf(p: ProxyRow): Health {
+	if (p.last_error) return "error";
+	if (p.last_ok_at) return "ok";
+	return "unknown";
+}
+
 type ConfirmFn = (opts: {
 	title: string;
 	description?: string;
@@ -492,17 +555,38 @@ type ConfirmFn = (opts: {
 
 const ProxyListRow = memo(function ProxyListRow({
 	proxy,
-	test,
-	onTest,
+	selected,
+	onToggle,
+	batchResult,
 	confirm,
 }: {
 	proxy: ProxyRow;
-	test: { id: number; ok: boolean; latencyMs: number } | null;
-	onTest: (id: number) => void;
+	selected: boolean;
+	onToggle: (id: number, checked: boolean) => void;
+	batchResult: { ok: boolean; latencyMs: number } | undefined;
 	confirm: ConfirmFn;
 }) {
+	// Fetcher per-baris: klik test di satu baris tidak akan mengganggu
+	// baris lain atau hasil batch (test all) sebelumnya.
+	const rowFetcher = useFetcher<{
+		test: { id: number; ok: boolean; latencyMs: number };
+	}>();
+	const testing = rowFetcher.state !== "idle";
+	const single = rowFetcher.data?.test;
+	const result =
+		single && single.id === proxy.id
+			? { ok: single.ok, latencyMs: single.latencyMs }
+			: (batchResult ?? null);
+	const health = healthOf(proxy);
 	return (
 		<TRow key={proxy.id}>
+			<TCell className="w-8 px-4 py-3">
+				<Checkbox
+					checked={selected}
+					onChange={(e) => onToggle(proxy.id, e.target.checked)}
+					aria-label={`Select proxy ${proxy.name}`}
+				/>
+			</TCell>
 			<TCell className="px-4 py-3 font-medium text-foreground">
 				<Link to={`/proxies/${proxy.id}`} prefetch="intent" className="hover:text-primary">
 					{proxy.name}
@@ -533,6 +617,32 @@ const ProxyListRow = memo(function ProxyListRow({
 				</Badge>
 			</TCell>
 			<TCell className="px-4 py-3">
+				<span
+					title={
+						health === "error"
+							? `Last error: ${proxy.last_error}`
+							: `Success/fail: ${proxy.success_count}/${proxy.fail_count}`
+					}
+				>
+					<Badge
+						tone={
+							health === "ok"
+								? "success"
+								: health === "error"
+									? "danger"
+									: "neutral"
+						}
+						style="subtle"
+					>
+						{health === "ok"
+							? `Healthy${proxy.last_latency_ms != null ? ` · ${proxy.last_latency_ms}ms` : ""}`
+							: health === "error"
+								? "Error"
+								: "Untested"}
+					</Badge>
+				</span>
+			</TCell>
+			<TCell className="px-4 py-3">
 				<div className="flex items-center justify-end gap-2">
 					<Button
 						size="icon"
@@ -540,9 +650,15 @@ const ProxyListRow = memo(function ProxyListRow({
 						type="button"
 						title="Test connection"
 						aria-label="Test connection"
-						onClick={() => onTest(proxy.id)}
+						disabled={testing}
+						onClick={() =>
+							rowFetcher.submit(
+								{ intent: "test", id: String(proxy.id) },
+								{ method: "POST" },
+							)
+						}
 					>
-						<Plug size={15} />
+						{testing ? <Spinner size={15} /> : <Plug size={15} />}
 					</Button>
 					<Toggle
 						checked={Boolean(proxy.is_active)}
@@ -591,13 +707,13 @@ const ProxyListRow = memo(function ProxyListRow({
 						</Button>
 					</Form>
 				</div>
-				{test && (
+				{result && (
 					<div
 						className={`mt-1 text-right text-xs ${
-							test.ok ? "text-success" : "text-danger"
+							result.ok ? "text-success" : "text-danger"
 						}`}
 					>
-						{test.ok ? `OK · ${test.latencyMs}ms` : "failed"}
+						{result.ok ? `OK · ${result.latencyMs}ms` : "failed"}
 					</div>
 				)}
 			</TCell>
@@ -663,13 +779,17 @@ const SavedProxyRow = memo(function SavedProxyRow({
 	proxy,
 	selected,
 	onToggle,
-	onTest,
 }: {
 	proxy: ProxyRow;
 	selected: boolean;
 	onToggle: (id: number, checked: boolean) => void;
-	onTest: (id: number) => void;
 }) {
+	// Fetcher per-baris agar klik test tidak saling membatalkan antar baris.
+	const rowFetcher = useFetcher<{
+		test: { id: number; ok: boolean; latencyMs: number };
+	}>();
+	const testing = rowFetcher.state !== "idle";
+	const result = rowFetcher.data?.test;
 	return (
 		<TRow key={proxy.id}>
 			<TCell className="px-2 py-1.5">
@@ -702,14 +822,91 @@ const SavedProxyRow = memo(function SavedProxyRow({
 					type="button"
 					title="Test connection"
 					aria-label="Test connection"
-					onClick={() => onTest(proxy.id)}
+					disabled={testing}
+					onClick={() =>
+						rowFetcher.submit(
+							{ intent: "test", id: String(proxy.id) },
+							{ method: "POST" },
+						)
+					}
 				>
-					<Plug size={15} />
+					{testing ? <Spinner size={15} /> : <Plug size={15} />}
 				</Button>
+				{result && result.id === proxy.id && (
+					<div
+						className={`mt-1 text-right text-xs ${
+							result.ok ? "text-success" : "text-danger"
+						}`}
+					>
+						{result.ok ? `OK · ${result.latencyMs}ms` : "failed"}
+					</div>
+				)}
 			</TCell>
 		</TRow>
 	);
 });
+
+function BulkActiveForm({
+	ids,
+	active,
+	label,
+}: {
+	ids: Set<number>;
+	active: "1" | "0";
+	label: string;
+}) {
+	return (
+		<Form method="post">
+			<input type="hidden" name="intent" value="bulk-active" />
+			<input type="hidden" name="active" value={active} />
+			{[...ids].map((id) => (
+				<input key={id} type="hidden" name="ids" value={id} />
+			))}
+			<Button size="sm" variant={active === "1" ? "secondary" : "outline"} type="submit">
+				{label}
+			</Button>
+		</Form>
+	);
+}
+
+function BulkDeleteForm({
+	ids,
+	confirm,
+}: {
+	ids: Set<number>;
+	confirm: ConfirmFn;
+}) {
+	return (
+		<Form
+			method="post"
+			onSubmit={async (e) => {
+				if (
+					!(await confirm({
+						title: "Delete selected proxies?",
+						description: `${ids.size} selected proxies will be permanently removed.`,
+						confirmLabel: "Delete",
+						variant: "danger",
+					}))
+				) {
+					e.preventDefault();
+				}
+			}}
+		>
+			<input type="hidden" name="intent" value="delete-many" />
+			{[...ids].map((id) => (
+				<input key={id} type="hidden" name="ids" value={id} />
+			))}
+			<Button
+				size="sm"
+				variant="outline"
+				type="submit"
+				className="gap-1.5 text-danger"
+			>
+				<Trash2 size={13} /> Delete
+			</Button>
+		</Form>
+	);
+}
 
 //---------------------------------------------------------------------------
 // Component
@@ -724,9 +921,13 @@ export default function Proxies({ loaderData }: Route.ComponentProps) {
 	const [savedSelected, setSavedSelected] = useState<Set<number>>(new Set());
 	const [loadedSig, setLoadedSig] = useState<string | null>(null);
 
-	const testFetcher = useFetcher<{
-		test: { id: number; ok: boolean; latencyMs: number };
-	}>();
+	// Advanced list management state
+	const [listSel, setListSel] = useState<Set<number>>(new Set());
+	const [listSearch, setListSearch] = useState("");
+	const [listFilter, setListFilter] = useState<
+		"all" | "active" | "inactive" | "ok" | "error"
+	>("all");
+
 	const importFetcher = useFetcher<{
 		importResult: { imported: number; errors: string[] };
 	}>();
@@ -737,6 +938,10 @@ export default function Proxies({ loaderData }: Route.ComponentProps) {
 	}>();
 	const customTestFetcher = useFetcher<{
 		customTest: { ok: boolean; latencyMs: number; status: number | null };
+	}>();
+	const manyTestFetcher = useFetcher<{
+		manyTests?: Array<{ id: number; ok: boolean; latencyMs: number }>;
+		error?: string;
 	}>();
 
 	const tabs: Array<{ key: TabKey; label: string }> = [
@@ -775,17 +980,10 @@ export default function Proxies({ loaderData }: Route.ComponentProps) {
 
 	// Route fetcher-driven actions through refs so the callbacks stay stable
 	// across renders (keeps the memoized rows from re-rendering).
-	const testFetcherRef = useRef(testFetcher);
-	testFetcherRef.current = testFetcher;
 	const batchFetcherRef = useRef(batchFetcher);
 	batchFetcherRef.current = batchFetcher;
-
-	const testProxy = useCallback((id: number) => {
-		testFetcherRef.current.submit(
-			{ intent: "test", id: String(id) },
-			{ method: "POST" },
-		);
-	}, []);
+	const manyTestFetcherRef = useRef(manyTestFetcher);
+	manyTestFetcherRef.current = manyTestFetcher;
 
 	const testStagedRow = useCallback((row: FreeProxyRow) => {
 		batchFetcherRef.current.submit(
@@ -795,6 +993,76 @@ export default function Proxies({ loaderData }: Route.ComponentProps) {
 	}, []);
 
 	const selectedRows = staging.filter((r) => selected.has(rowKey(r)));
+
+	// --- advanced list management -------------------------------------------
+	const manyTests = new Map(
+		(manyTestFetcher.data?.manyTests ?? []).map((r) => [r.id, r]),
+	);
+	const manyRunning = manyTestFetcher.state !== "idle";
+	const manySummary = manyTestFetcher.data?.manyTests
+		? {
+				total: manyTestFetcher.data.manyTests.length,
+				ok: manyTestFetcher.data.manyTests.filter((r) => r.ok).length,
+			}
+		: null;
+
+	const filteredProxies = (() => {
+		const q = listSearch.trim().toLowerCase();
+		return loaderData.proxies.filter((p) => {
+			if (listFilter === "active" && !p.is_active) return false;
+			if (listFilter === "inactive" && p.is_active) return false;
+			if (listFilter === "ok" && healthOf(p) !== "ok") return false;
+			if (listFilter === "error" && healthOf(p) !== "error") return false;
+			if (
+				q &&
+				!`${p.name} ${p.type} ${p.host}:${p.port}`
+					.toLowerCase()
+					.includes(q)
+			)
+				return false;
+			return true;
+		});
+	})();
+	const shownIds = filteredProxies.map((p) => p.id);
+	const allShownSelected =
+		shownIds.length > 0 && shownIds.every((id) => listSel.has(id));
+	const errorCount = loaderData.proxies.filter(
+		(p) => healthOf(p) === "error",
+	).length;
+
+	const markListSel = useCallback((id: number, checked: boolean) => {
+		setListSel((prev) => {
+			const next = new Set(prev);
+			if (checked) next.add(id);
+			else next.delete(id);
+			return next;
+		});
+	}, []);
+
+	// Buang seleksi untuk proxy yang sudah tidak ada (setelah delete/bulk).
+	useEffect(() => {
+		setListSel((prev) => {
+			if (prev.size === 0) return prev;
+			const next = new Set(
+				[...prev].filter((id) =>
+					loaderData.proxies.some((p) => p.id === id),
+				),
+			);
+			return next.size === prev.size ? prev : next;
+		});
+	}, [loaderData.proxies]);
+
+	const submitManyTest = useCallback(
+		(ids: number[], url: string) => {
+			if (ids.length === 0) return;
+			const fd = new FormData();
+			fd.set("intent", "test-many");
+			fd.set("url", url);
+			for (const id of ids) fd.append("ids", String(id));
+			manyTestFetcherRef.current.submit(fd, { method: "POST" });
+		},
+		[],
+	);
 
 	const { dialog, confirm } = useConfirm();
 
@@ -840,36 +1108,223 @@ export default function Proxies({ loaderData }: Route.ComponentProps) {
 							description="Use the Free Proxy tab to fetch some, or the Import tab to paste them."
 						/>
 					) : (
-						<Table>
-							<THead>
-								<TRow>
-									<THeadCell>Name</THeadCell>
-									<THeadCell>Type</THeadCell>
-									<THeadCell>Address</THeadCell>
-									<THeadCell>Auth</THeadCell>
-									<THeadCell>Last Used</THeadCell>
-									<THeadCell>Status</THeadCell>
-									<THeadCell className="text-right">Actions</THeadCell>
-								</TRow>
-							</THead>
-							<tbody>
-								{loaderData.proxies.map((p) => {
-									const test =
-										testFetcher.data?.test?.id === p.id
-											? testFetcher.data.test
-											: null;
-									return (
-										<ProxyListRow
-											key={p.id}
-											proxy={p}
-											test={test}
-											onTest={testProxy}
-											confirm={confirm}
-										/>
-									);
-								})}
-							</tbody>
-						</Table>
+						<>
+							{/* Toolbar: search, health filter, custom test URL */}
+							<div className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-3">
+								<Input
+									value={listSearch}
+									onChange={(e) => setListSearch(e.target.value)}
+									placeholder="Search name / host…"
+									className="w-48"
+								/>
+								<Select
+									value={listFilter}
+									onChange={(e) =>
+										setListFilter(
+											e.target.value as typeof listFilter,
+										)
+									}
+									className="w-36"
+								>
+									<option value="all">All</option>
+									<option value="active">Active</option>
+									<option value="inactive">Inactive</option>
+									<option value="ok">Healthy</option>
+									<option value="error">Error</option>
+								</Select>
+								<span className="text-xs text-muted-foreground">
+									{filteredProxies.length} of {loaderData.proxies.length}
+								</span>
+
+								{errorCount > 0 && (
+									<>
+										<Button
+											size="sm"
+											variant="ghost"
+											type="button"
+											className="text-xs"
+											title="Select all proxies whose last test failed"
+											onClick={() => {
+												const next = new Set(listSel);
+												for (const p of loaderData.proxies) {
+													if (healthOf(p) === "error") next.add(p.id);
+												}
+												setListSel(next);
+											}}
+										>
+											Select errors ({errorCount})
+										</Button>
+										<Form
+											method="post"
+											onSubmit={async (e) => {
+												if (
+													!(await confirm({
+														title: "Delete all error proxies?",
+														description: `${errorCount} proxies whose last connection test failed will be permanently removed.`,
+														confirmLabel: "Delete",
+														variant: "danger",
+													}))
+												) {
+													e.preventDefault();
+												}
+											}}
+										>
+											<input type="hidden" name="intent" value="delete-errors" />
+											<Button
+												size="sm"
+												variant="outline"
+												type="submit"
+												className="gap-1.5 text-danger"
+											>
+												<Trash2 size={13} /> Delete error ({errorCount})
+											</Button>
+										</Form>
+									</>
+								)}
+
+								<div className="ml-auto flex flex-wrap items-center gap-2">
+									<Input
+										defaultValue="https://api.openai.com/v1/models"
+										id="bulk-test-url"
+										placeholder="Test URL"
+										className="w-64 font-mono text-xs"
+									/>
+									<Button
+										size="sm"
+										variant="outline"
+										type="button"
+										disabled={manyRunning}
+										onClick={() => {
+											const url =
+												(
+													document.getElementById(
+														"bulk-test-url",
+													) as HTMLInputElement | null
+												)?.value.trim() ?? "";
+											submitManyTest(
+												loaderData.proxies.map((p) => p.id),
+												url,
+											);
+										}}
+									>
+										<RefreshCw size={13} />
+										{manyRunning ? "Testing…" : "Test all"}
+										{manyRunning && <Spinner size={13} />}
+									</Button>
+									<Button
+										size="sm"
+										variant="outline"
+										type="button"
+										disabled={manyRunning || listSel.size === 0}
+										onClick={() => {
+											const url =
+												(
+													document.getElementById(
+														"bulk-test-url",
+													) as HTMLInputElement | null
+												)?.value.trim() ?? "";
+											submitManyTest([...listSel], url);
+										}}
+									>
+										<Plug size={13} /> Test selected ({listSel.size})
+									</Button>
+								</div>
+							</div>
+
+							{/* Bulk selection bar */}
+							{listSel.size > 0 && (
+								<div className="flex flex-wrap items-center gap-2 border-b border-border bg-muted px-4 py-2">
+									<span className="text-xs font-medium text-foreground">
+										{listSel.size} selected
+									</span>
+									<Button
+										size="sm"
+										variant="ghost"
+										type="button"
+										className="text-xs"
+										onClick={() =>
+											setListSel(new Set(shownIds))
+										}
+									>
+										Select shown
+									</Button>
+									<Button
+										size="sm"
+										variant="ghost"
+										type="button"
+										className="text-xs"
+										onClick={() => setListSel(new Set())}
+									>
+										Clear
+									</Button>
+									<BulkActiveForm ids={listSel} active="1" label="Activate" />
+									<BulkActiveForm ids={listSel} active="0" label="Deactivate" />
+									<BulkDeleteForm ids={listSel} confirm={confirm} />
+								</div>
+							)}
+
+							{manySummary && !manyRunning && (
+								<div className="border-b border-border px-4 py-2 text-xs">
+									<span className="font-medium text-success">
+										{manySummary.ok} OK
+									</span>{" "}
+									<span className="text-danger">
+										{manySummary.total - manySummary.ok} failed
+									</span>{" "}
+									<span className="text-muted-foreground">
+										— health &amp; latency tersimpan ke database.
+									</span>
+								</div>
+							)}
+							{manyTestFetcher.data?.error ? (
+								<div className="border-b border-border px-4 py-2 text-xs text-danger">
+									{String(manyTestFetcher.data.error)}
+								</div>
+							) : null}
+
+							<div className="max-h-[70vh] overflow-auto">
+								<Table>
+									<THead className="sticky top-0 z-10 bg-surface">
+										<TRow>
+											<THeadCell className="w-8 px-4">
+												<Checkbox
+													checked={allShownSelected}
+													onChange={(e) => {
+														const next = new Set(listSel);
+														for (const id of shownIds) {
+															if (e.target.checked) next.add(id);
+															else next.delete(id);
+														}
+														setListSel(next);
+													}}
+													aria-label="Select all shown proxies"
+												/>
+											</THeadCell>
+											<THeadCell>Name</THeadCell>
+											<THeadCell>Type</THeadCell>
+											<THeadCell>Address</THeadCell>
+											<THeadCell>Auth</THeadCell>
+											<THeadCell>Last Used</THeadCell>
+											<THeadCell>Status</THeadCell>
+											<THeadCell>Health</THeadCell>
+											<THeadCell className="text-right">Actions</THeadCell>
+										</TRow>
+									</THead>
+									<tbody>
+										{filteredProxies.map((p) => (
+											<ProxyListRow
+												key={p.id}
+												proxy={p}
+												selected={listSel.has(p.id)}
+												onToggle={markListSel}
+												batchResult={manyTests.get(p.id)}
+												confirm={confirm}
+											/>
+										))}
+									</tbody>
+								</Table>
+							</div>
+						</>
 					)}
 				</Card>
 			)}
@@ -1181,7 +1636,6 @@ export default function Proxies({ loaderData }: Route.ComponentProps) {
 												proxy={p}
 												selected={savedSelected.has(p.id)}
 												onToggle={markSavedSelected}
-												onTest={testProxy}
 											/>
 										))}
 									</tbody>
@@ -1280,10 +1734,17 @@ export default function Proxies({ loaderData }: Route.ComponentProps) {
 						<div className="space-y-4">
 							{loaderData.pools.map((pool) => (
 								<div key={pool.id} className="rounded-lg border border-border p-4">
-									<div className="mb-3 flex items-center justify-between">
+									<div className="mb-3 flex flex-wrap items-center justify-between gap-2">
 										<h3 className="text-sm font-semibold text-foreground">
 											{pool.name}
-											<span className="ml-2 text-xs font-normal text-muted-foreground">
+											<Badge tone="info" style="subtle" className="ml-2">
+												{pool.strategy === "priority"
+													? "priority"
+													: pool.strategy === "random"
+														? "random"
+														: "round-robin"}
+											</Badge>
+											<span className="ml-1 text-xs font-normal text-muted-foreground">
 												{pool.proxy_ids.length} proxies ·{" "}
 												{pool.is_active ? "active" : "inactive"}
 											</span>
@@ -1320,6 +1781,26 @@ export default function Proxies({ loaderData }: Route.ComponentProps) {
 									<Form method="post">
 										<input type="hidden" name="intent" value="update-pool" />
 										<input type="hidden" name="id" value={pool.id} />
+										<div className="mb-3 flex items-end gap-2">
+											<div className="flex-1">
+												<Label className="mb-1 text-[11px]">
+													Rotation strategy
+												</Label>
+												<Select
+													name="strategy"
+													defaultValue={pool.strategy}
+													className="h-8 text-xs"
+												>
+													<option value="round_robin">
+														Round-robin (rotate evenly)
+													</option>
+													<option value="priority">
+														Priority (first in list first)
+													</option>
+													<option value="random">Random</option>
+												</Select>
+											</div>
+										</div>
 										<div className="max-h-48 space-y-1 overflow-y-auto rounded-lg border border-border p-2">
 											{loaderData.proxies.map((p) => (
 												<label
@@ -1357,9 +1838,14 @@ export default function Proxies({ loaderData }: Route.ComponentProps) {
 								</div>
 							))}
 						</div>
-						<Form method="post" className="mt-4 flex gap-2">
+						<Form method="post" className="mt-4 flex flex-wrap gap-2">
 							<input type="hidden" name="intent" value="create-pool" />
-							<Input name="name" placeholder="Pool name" />
+							<Input name="name" placeholder="Pool name" className="flex-1" />
+							<Select name="strategy" defaultValue="round_robin" className="w-auto">
+								<option value="round_robin">Round-robin</option>
+								<option value="priority">Priority</option>
+								<option value="random">Random</option>
+							</Select>
 							<Button type="submit">Create pool</Button>
 						</Form>
 					</Card>

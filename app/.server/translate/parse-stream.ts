@@ -1,12 +1,15 @@
 import type { CanonicalStreamEvent, ProviderFormat } from "./canonical";
 
-const decoder = new TextDecoder();
+const encoder = new TextEncoder();
 
 export function tokenizeSse(
   input: Uint8Array,
-  pending = "",
+  pending: string,
+  decoder: TextDecoder,
 ): { frames: string[]; rest: string } {
-  const text = pending + decoder.decode(input, { stream: true });
+  let text = pending + decoder.decode(input, { stream: true });
+  // Normalisasi CRLF (beberapa provider memakai \r\n\r\n sebagai pemisah frame).
+  if (text.includes("\r")) text = text.replaceAll("\r\n", "\n");
   const parts = text.split("\n\n");
   const rest = parts.pop() ?? "";
   const frames: string[] = [];
@@ -24,7 +27,7 @@ export function tokenizeSse(
 function parseOpenAi(json: Record<string, unknown>): CanonicalStreamEvent | null {
   const choices = Array.isArray(json.choices) ? json.choices : [];
   const choice = choices[0] as Record<string, unknown> | undefined;
-  if (!choice) return null;
+  if (!choice) return usageOnlyEvent(json);
   const delta = (choice.delta ?? {}) as Record<string, unknown>;
   if (typeof delta.content === "string") {
     return { type: "content_delta", text: delta.content };
@@ -42,26 +45,79 @@ function parseOpenAi(json: Record<string, unknown>): CanonicalStreamEvent | null
     }
   }
   if (typeof choice.finish_reason === "string") {
-    const usage = json.usage as Record<string, unknown> | undefined;
-    return {
-      type: "finish",
-      finish_reason: choice.finish_reason,
-      usage:
-        usage && typeof usage.prompt_tokens === "number" && typeof usage.completion_tokens === "number"
-          ? { prompt_tokens: usage.prompt_tokens, completion_tokens: usage.completion_tokens }
-          : undefined,
-    };
+    return openAiFinish(choice.finish_reason, json);
+  }
+  return usageOnlyEvent(json);
+}
+
+/** Bangun event finish dari payload usage OpenAI (cached bila ada). */
+function openAiFinish(
+  finishReason: string,
+  json: Record<string, unknown>,
+): CanonicalStreamEvent {
+  const usage = json.usage as Record<string, unknown> | undefined;
+  const details = (usage?.prompt_tokens_details ?? null) as
+    | Record<string, unknown>
+    | null;
+  const cached =
+    typeof details?.cached_tokens === "number" ? details.cached_tokens : undefined;
+  const usageOut =
+    usage &&
+    typeof usage.prompt_tokens === "number" &&
+    typeof usage.completion_tokens === "number"
+      ? {
+          prompt_tokens: usage.prompt_tokens,
+          completion_tokens: usage.completion_tokens,
+          ...(cached !== undefined ? { cached_tokens: cached } : {}),
+        }
+      : undefined;
+  return {
+    type: "finish",
+    finish_reason: finishReason,
+    usage: usageOut,
+  };
+}
+
+/** Chunk tanpa choices tapi membawa usage → finish kosong khusus usage. */
+function usageOnlyEvent(
+  json: Record<string, unknown>,
+): CanonicalStreamEvent | null {
+  const usage = json.usage as Record<string, unknown> | undefined;
+  if (
+    usage &&
+    typeof usage.prompt_tokens === "number" &&
+    typeof usage.completion_tokens === "number"
+  ) {
+    return openAiFinish("", json);
   }
   return null;
 }
+
 
 function parseAnthropic(json: Record<string, unknown>): CanonicalStreamEvent | null {
   const type = json.type;
   if (type === "message_start") {
     const message = (json.message ?? {}) as Record<string, unknown>;
+    const usage = (message.usage ?? null) as Record<string, unknown> | null;
+    const input = typeof usage?.input_tokens === "number" ? usage.input_tokens : 0;
+    const cacheRead =
+      typeof usage?.cache_read_input_tokens === "number"
+        ? usage.cache_read_input_tokens
+        : 0;
+    const cacheCreate =
+      typeof usage?.cache_creation_input_tokens === "number"
+        ? usage.cache_creation_input_tokens
+        : 0;
     return {
       type: "message_start",
       model: typeof message.model === "string" ? message.model : "",
+      usage:
+        input > 0 || cacheRead > 0 || cacheCreate > 0
+          ? {
+              prompt_tokens: input + cacheRead + cacheCreate,
+              cached_tokens: cacheRead + cacheCreate || undefined,
+            }
+          : undefined,
     };
   }
   if (type === "content_block_start") {
@@ -94,7 +150,18 @@ function parseAnthropic(json: Record<string, unknown>): CanonicalStreamEvent | n
       finish_reason: typeof delta.stop_reason === "string" ? delta.stop_reason : "stop",
       usage:
         usage && typeof usage.input_tokens === "number" && typeof usage.output_tokens === "number"
-          ? { prompt_tokens: usage.input_tokens, completion_tokens: usage.output_tokens }
+          ? {
+              prompt_tokens: usage.input_tokens,
+              completion_tokens: usage.output_tokens,
+              cached_tokens:
+                (typeof usage.cache_read_input_tokens === "number"
+                  ? usage.cache_read_input_tokens
+                  : 0) +
+                (typeof usage.cache_creation_input_tokens === "number"
+                  ? usage.cache_creation_input_tokens
+                  : 0) ||
+                undefined,
+            }
           : undefined,
     };
   }
@@ -135,7 +202,14 @@ function parseGemini(json: Record<string, unknown>): CanonicalStreamEvent | null
       finish_reason: candidate.finishReason,
       usage:
         meta && typeof meta.promptTokenCount === "number" && typeof meta.candidatesTokenCount === "number"
-          ? { prompt_tokens: meta.promptTokenCount, completion_tokens: meta.candidatesTokenCount }
+          ? {
+              prompt_tokens: meta.promptTokenCount,
+              completion_tokens: meta.candidatesTokenCount,
+              cached_tokens:
+                typeof meta.cachedContentTokenCount === "number"
+                  ? meta.cachedContentTokenCount
+                  : undefined,
+            }
           : undefined,
     };
   }
