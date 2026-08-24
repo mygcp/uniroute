@@ -59,6 +59,11 @@ export interface FetchUpstreamInit extends RequestInit {
 
 const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
 
+/** Batas waktu pembentukan tunnel (TCP + CONNECT/SOCKS handshake). */
+const PROXY_CONNECT_TIMEOUT_MS = 8_000;
+/** Proxy dengan latensi terakhir di atas nilai ini didemosi ke ekor chain. */
+const SLOW_PROXY_MS = 5_000;
+
 // Konstanta byte dipakai di loop parsing panas — hindari alokasi per chunk.
 const CRLF = Buffer.from("\r\n");
 const CRLF_CRLF = Buffer.from("\r\n\r\n");
@@ -108,23 +113,35 @@ export function orderProxiesByStrategy(
 ): ResolvedProxy[] {
 	if (chain.length <= 1) return chain;
 	const strategy = chain[0].strategy;
+	let ordered: ResolvedProxy[];
 	switch (strategy) {
 		case "priority":
-			return [...chain];
+			ordered = [...chain];
+			break;
 		case "random": {
-			const arr = [...chain];
-			for (let i = arr.length - 1; i > 0; i--) {
+			ordered = [...chain];
+			for (let i = ordered.length - 1; i > 0; i--) {
 				const j = Math.floor(Math.random() * (i + 1));
-				[arr[i], arr[j]] = [arr[j]!, arr[i]!];
+				[ordered[i], ordered[j]] = [ordered[j]!, ordered[i]!];
 			}
-			return arr;
+			break;
 		}
 		case "round_robin":
 		default:
-			return [...chain].sort(
+			ordered = [...chain].sort(
 				(a, b) => a.proxy.last_used_at - b.proxy.last_used_at,
 			);
+			break;
 	}
+	// Demosi proxy lambat ke ekor chain — strategi tetap berlaku di antara
+	// proxy yang sehat. Mencegah request jatuh ke proxy yang butuh puluhan
+	// detik padahal ada yang responsif.
+	const isSlow = (r: ResolvedProxy) =>
+		r.proxy.last_latency_ms != null && r.proxy.last_latency_ms > SLOW_PROXY_MS;
+	return [
+		...ordered.filter((r) => !isSlow(r)),
+		...ordered.filter(isSlow),
+	];
 }
 
 function markProxyUsed(id: number): void {
@@ -266,11 +283,52 @@ export async function fetchUpstream(
 // Proxy tunneling (HTTP CONNECT / SOCKS5)
 // ---------------------------------------------------------------------------
 
+/**
+ * Bentukkan tunnel dengan batas waktu ketat: TCP connect + handshake harus
+ * selesai dalam PROXY_CONNECT_TIMEOUT_MS, kalau tidak socket dihancurkan dan
+ * error dilempar → resolver failover ke proxy berikutnya. Tanpa ini, proxy
+ * mati/ lambat bisa menggantung request puluhan detik.
+ */
+async function establishTunnel(
+	proxy: ProxyConfig,
+	targetHost: string,
+	targetPort: number,
+	outerSignal?: AbortSignal,
+): Promise<Socket> {
+	const ctrl = new AbortController();
+	const onOuter = () => ctrl.abort();
+	outerSignal?.addEventListener("abort", onOuter, { once: true });
+	const timer = setTimeout(() => ctrl.abort(), PROXY_CONNECT_TIMEOUT_MS);
+	try {
+		return await (proxy.type === "socks5"
+			? socks5Tunnel(proxy, targetHost, targetPort, ctrl.signal)
+			: httpConnectTunnel(proxy, targetHost, targetPort, ctrl.signal));
+	} catch (err) {
+		// Abort dari timer internal kita = timeout koneksi, bukan pembatalan client.
+		if (
+			err instanceof Error &&
+			err.message === "aborted" &&
+			!outerSignal?.aborted
+		) {
+			throw new Error(
+				`proxy connect timeout (${PROXY_CONNECT_TIMEOUT_MS}ms)`,
+			);
+		}
+		throw err;
+	} finally {
+		clearTimeout(timer);
+		outerSignal?.removeEventListener("abort", onOuter);
+	}
+}
+
 async function connectToProxy(
 	proxy: ProxyConfig,
 	signal?: AbortSignal,
 ): Promise<Socket> {
 	const socket = netConnect({ host: proxy.host, port: proxy.port });
+	// Tanpa ini, destroy(err) pada jalur abort/timeout bisa memancarkan
+	// event 'error' tanpa listener dan menjatuhkan proses.
+	socket.on("error", () => {});
 	let settled = false;
 	const onAbort = () => {
 		if (!settled) {
@@ -405,22 +463,39 @@ async function proxyFetch(
 	const isHttps = target.protocol === "https:";
 	const targetPort = Number(target.port) || (isHttps ? 443 : 80);
 
-	const raw = await (proxy.type === "socks5"
-		? socks5Tunnel(proxy, target.hostname, targetPort, init.signal ?? undefined)
-		: httpConnectTunnel(
-				proxy,
-				target.hostname,
-				targetPort,
-				init.signal ?? undefined,
-			));
+	const raw = await establishTunnel(
+		proxy,
+		target.hostname,
+		targetPort,
+		init.signal ?? undefined,
+	);
 
 	let socket: Socket = raw;
 	if (isHttps) {
 		const tls = tlsConnect({ socket: raw, servername: target.hostname });
+		tls.on("error", () => {});
 		const onAbort = () => tls.destroy(new Error("aborted"));
-		if (init.signal?.aborted) onAbort();
-		else init.signal?.addEventListener("abort", onAbort, { once: true });
-		await once(tls, "secureConnect");
+		const ctrl = new AbortController();
+		const timer = setTimeout(() => ctrl.abort(), PROXY_CONNECT_TIMEOUT_MS);
+		const onSignalAbort = () => ctrl.abort();
+		init.signal?.addEventListener("abort", onSignalAbort, { once: true });
+		try {
+			if (init.signal?.aborted || ctrl.signal.aborted) onAbort();
+			else ctrl.signal.addEventListener("abort", onAbort, { once: true });
+			await once(tls, "secureConnect");
+		} catch (err) {
+			clearTimeout(timer);
+			init.signal?.removeEventListener("abort", onSignalAbort);
+			if (ctrl.signal.aborted && !init.signal?.aborted) {
+				tls.destroy();
+				throw new Error(
+					`proxy TLS handshake timeout (${PROXY_CONNECT_TIMEOUT_MS}ms)`,
+				);
+			}
+			throw err;
+		}
+		clearTimeout(timer);
+		init.signal?.removeEventListener("abort", onSignalAbort);
 		socket = tls;
 	}
 

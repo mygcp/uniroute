@@ -53,6 +53,17 @@ Every use/test updates `success_count`, `fail_count`, `last_ok_at`,
 `last_latency_ms`, `last_error`. These drive the Health badge, the Error
 filter, and the *Delete error* button.
 
+## Slow-proxy protections
+
+- Tunnel establishment (TCP + CONNECT/SOCKS handshake) is capped at **8s**;
+  exceeding it destroys the socket and triggers failover to the next proxy.
+- Proxies whose last latency exceeded **5s** are demoted to the end of the
+  rotation regardless of pool strategy — healthy proxies always go first
+  (locked by a unit test in `proxy-resolver.test.ts`).
+- If every proxy in the assigned chain fails, the request returns 502 with
+  the last proxy error; it does **not** silently fall back to direct egress.
+  Deactivate dead proxies (or unassign the pool) to return to direct.
+
 ## Operational safety
 
 - All config/log writes are atomic (tmp + rename).

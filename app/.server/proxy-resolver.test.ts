@@ -13,6 +13,7 @@ beforeAll(async () => {
 	db.seed();
 });
 
+import { query } from "./db";
 import {
 	createPool,
 	createProxy,
@@ -148,6 +149,24 @@ describe("orderProxiesByStrategy", () => {
 		const chain = resolveProxyPool({ providerPoolId: pool.id })!;
 		// p1 has older last_used_at (0) → picked first
 		expect(orderProxiesByStrategy(chain)[0]?.proxy.id).toBe(p1.id);
+	});
+
+	test("demotes slow proxies to the end regardless of strategy", () => {
+		const fast = createProxy({ name: "fast", type: "http-connect", host: "h", port: 1 });
+		const slow = createProxy({ name: "slow", type: "http-connect", host: "h", port: 2 });
+		// slow pernah dipakai paling baru (LRU menempatkannya pertama) dan
+		// latensinya di atas SLOW_PROXY_MS.
+		query(
+			"UPDATE outbound_proxies SET last_used_at = ?, last_latency_ms = ? WHERE id = ?",
+		).run(Date.now(), 29_640, slow.id);
+		query(
+			"UPDATE outbound_proxies SET last_used_at = ?, last_latency_ms = ? WHERE id = ?",
+		).run(Date.now() - 60_000, 320, fast.id);
+		const pool = createPool({ name: "demote", proxy_ids: [slow.id, fast.id] });
+		const chain = resolveProxyPool({ providerPoolId: pool.id })!;
+		const ordered = orderProxiesByStrategy(chain);
+		expect(ordered[0]?.proxy.id).toBe(fast.id);
+		expect(ordered[ordered.length - 1]?.proxy.id).toBe(slow.id);
 	});
 
 	test("priority keeps the order defined in the pool", () => {

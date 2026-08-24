@@ -1,8 +1,8 @@
 # Chat Playground
 
-Page **Providers → [name] → Chat Playground**: multi-turn streaming chat
-direct to a provider, bypassing the whole gateway pipeline (routing, pools,
-logging).
+Page **Providers → [name] → Chat Playground**: multi-turn streaming chat.
+Requests go through the normal `/v1/chat/completions` pipeline, so routing,
+proxy pools, compression, logging, and client-key rules all apply.
 
 ## Features
 
