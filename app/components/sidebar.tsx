@@ -11,6 +11,7 @@ import {
 	TrendingUp,
 	Network,
 	Bot,
+	Cable,
 	X,
 } from "lucide-react";
 import { Button } from "./ui/button";
@@ -26,6 +27,7 @@ const NAV_ITEMS = [
 
 // Grouped under "Tools" — utilities that configure external tooling.
 const TOOLS_ITEMS = [
+	{ to: "/mcp", label: "MCP Server", icon: Cable },
 	{ to: "/agents", label: "AI Agents", icon: Bot },
 ];
 
