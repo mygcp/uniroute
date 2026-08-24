@@ -2,15 +2,6 @@ import { useMemo, useState } from "react";
 import { useFetcher, useLoaderData } from "react-router";
 import type { Route } from "./+types/mcp";
 import { Cable, ExternalLink, Server } from "lucide-react";
-import {
-  HARNESS_REGISTRY,
-  defaultMcpCommand,
-  installMcp,
-  isHarnessId,
-  isMcpInstalled,
-  removeMcp,
-} from "../.server/agents-config";
-import { TOOLS } from "../.server/mcp-tools";
 import { PageHeader } from "../components/ui/page-header";
 import { Card } from "../components/ui/card";
 import { Button } from "../components/ui/button";
@@ -79,7 +70,13 @@ const CATEGORY_ORDER = [
   "Other",
 ];
 
-export function loader() {
+export async function loader() {
+  // Dynamic import: modul .server tidak boleh masuk graf client bundle.
+  const [{ HARNESS_REGISTRY, defaultMcpCommand, isMcpInstalled }, { TOOLS }] =
+    await Promise.all([
+      import("../.server/agents-config"),
+      import("../.server/mcp-tools"),
+    ]);
   const command = defaultMcpCommand();
   const cmdStr = command.join(" ");
   const httpPort = Number(process.env.UNIROUTE_MCP_PORT ?? 3007);
@@ -122,6 +119,8 @@ export async function action({ request }: Route.ActionArgs) {
   const form = await request.formData();
   const intent = String(form.get("intent"));
   const harness = String(form.get("harness"));
+  const { defaultMcpCommand, installMcp, isHarnessId, removeMcp } =
+    await import("../.server/agents-config");
   if (!isHarnessId(harness)) {
     return Response.json({ ok: false, error: "unknown harness" }, { status: 400 });
   }
@@ -159,10 +158,10 @@ export default function McpPage() {
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState<string>("all");
 
-  const busy =
-    fetcher.state !== "idle" &&
-    isHarnessId(String(fetcher.formData?.get("harness") ?? ""));
-  const busyHarness = busy ? String(fetcher.formData?.get("harness")) : null;
+  const busyHarness =
+    fetcher.state !== "idle"
+      ? String(fetcher.formData?.get("harness") ?? "")
+      : null;
 
   const grouped = useMemo(() => {
     const q = query.trim().toLowerCase();
