@@ -1,87 +1,63 @@
-# Welcome to React Router!
+# UniRoute
 
-A modern, production-ready template for building full-stack React applications using React Router.
-
-[![Open in StackBlitz](https://developer.stackblitz.com/img/open_in_stackblitz.svg)](https://stackblitz.com/github/remix-run/react-router-templates/tree/main/default)
+UniRoute is a self-hosted AI gateway with a web dashboard. It puts multiple
+LLM providers behind a single OpenAI-compatible endpoint and adds routing,
+client API keys, outbound proxies, request logging, usage analytics, and an
+MCP server that lets coding agents manage the gateway through tool calls.
 
 ## Features
 
-- 🚀 Server-side rendering
-- ⚡️ Hot Module Replacement (HMR)
-- 📦 Asset bundling and optimization
-- 🔄 Data loading and mutations
-- 🔒 TypeScript by default
-- 🎉 TailwindCSS for styling
-- 📖 [React Router docs](https://reactrouter.com/)
+- OpenAI-compatible API: `/v1/chat/completions`, `/v1/messages`, `/v1/responses`, `/v1/models` — requests are translated between OpenAI, Anthropic, and Gemini formats automatically.
+- Routing rules for model rewrites, provider fallback chains, and a load-balancing strategy per model.
+- Client API keys with quotas, budgets, expiry, IP rules, auto-block, and rotation.
+- Outbound proxy engine: HTTP CONNECT and SOCKS5 pools with round-robin, priority, or random rotation, health tracking, and egress assignment per client key, account, or provider.
+- Realtime request logs (status, duration, tokens, transport, proxy, endpoint, upstream TLS) and proxy operation logs.
+- Usage analytics split by input/output/cached tokens with cost estimates.
+- Per-provider chat playground with streaming, markdown rendering, and sessions saved to SQLite.
+- Media passthrough: `/v1/images/generations`, `/v1/audio/speech`, `/v1/audio/transcriptions`; vision and audio inputs are translated per provider.
+- MCP server exposing 40 tools, registrable from the dashboard into Claude Code, Codex, and OpenCode.
 
-## Getting Started
+## Quick start
 
-### Installation
-
-Install the dependencies:
-
-```bash
-npm install
-```
-
-### Development
-
-Start the development server with HMR:
+Requires [Bun](https://bun.sh).
 
 ```bash
-npm run dev
+bun install
+bun run dev
 ```
 
-Your application will be available at `http://localhost:5173`.
+Open http://localhost:5173 and log in. The app works without configuration;
+the default password is `CHANGEME`. Copy `.env.example` to `.env` to change
+it. See [docs/configuration.md](docs/configuration.md).
 
-## Building for Production
-
-Create a production build:
+For production:
 
 ```bash
-npm run build
+bun run build && bun run start   # serves on PORT (default 3000)
 ```
 
-## Deployment
+## Documentation
 
-### Docker Deployment
+| Document | Contents |
+| --- | --- |
+| [Getting Started](docs/getting-started.md) | Install, log in, first provider, first request |
+| [Configuration](docs/configuration.md) | Environment variables |
+| [Architecture](docs/architecture.md) | Stack, request flow, data model |
+| [Providers](docs/providers.md) | Providers, API keys, models, vision and audio |
+| [Chat Playground](docs/chat-playground.md) | Multi-turn chat, saved sessions |
+| [Proxy Engine](docs/proxy-engine.md) | Proxies, pools, rotation strategies, egress priority |
+| [Monitoring](docs/monitoring.md) | Request/proxy logs, usage analytics |
+| [API Reference](docs/api-reference.md) | `/v1/*` endpoints and error formats |
+| [AI Agents & MCP](docs/ai-agents.md) | Harness config, MCP server, tool list |
+| [Performance](docs/performance.md) | Measured baseline, hot-path invariants, benchmarks |
+| [Development](docs/development.md) | Scripts, testing, code conventions |
 
-To build and run using Docker:
+## Scripts
 
 ```bash
-docker build -t my-app .
-
-# Run the container
-docker run -p 3000:3000 my-app
+bun run dev         # dev server on :5173
+bun run build       # production build
+bun run start       # serve the build (Bun)
+bun run test        # unit tests
+bun run typecheck   # typegen + tsc
 ```
-
-The containerized application can be deployed to any platform that supports Docker, including:
-
-- AWS ECS
-- Google Cloud Run
-- Azure Container Apps
-- Digital Ocean App Platform
-- Fly.io
-- Railway
-
-### DIY Deployment
-
-If you're familiar with deploying Node applications, the built-in app server is production-ready.
-
-Make sure to deploy the output of `npm run build`
-
-```
-├── package.json
-├── package-lock.json (or pnpm-lock.yaml, or bun.lockb)
-├── build/
-│   ├── client/    # Static assets
-│   └── server/    # Server-side code
-```
-
-## Styling
-
-This template comes with [Tailwind CSS](https://tailwindcss.com/) already configured for a simple default starting experience. You can use whatever CSS framework you prefer.
-
----
-
-Built with ❤️ using React Router.
