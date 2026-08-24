@@ -12,7 +12,16 @@
  * Semua tool beroperasi langsung pada SQLite gateway yang sama.
  */
 
-import { executeTool, TOOLS } from "./mcp-tools";
+import { fileURLToPath } from "node:url";
+import path from "node:path";
+
+// Pin data ke folder repo UniRoute apa pun CWD proses agent — tanpa ini,
+// spawn dari direktori lain membuat/membaca SQLite yang salah (ter-seed
+// kosong) dan semua tool melaporkan data palsu.
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+process.env.DATABASE_URL ??= path.resolve(HERE, "../../data/uniroute.db");
+
+const { executeTool, TOOLS } = await import("./mcp-tools");
 
 type RpcRequest = {
 	jsonrpc?: string;

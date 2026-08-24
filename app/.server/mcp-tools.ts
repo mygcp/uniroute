@@ -16,7 +16,17 @@ import { testProviderConnection } from "./provider-test";
 import { getUsageData } from "./usage";
 import { getStats } from "./stats";
 import { handleProxy } from "./proxy-handler";
+import { createSession, SESSION_COOKIE } from "./auth";
 import { parse } from "./translate/from-openai-chat";
+
+// Sesi admin sekali-per-proses untuk tool yang memanggil pipeline internal:
+// MCP berjalan di dalam gateway, jadi dianggap tepercaya — require_api_key
+// tidak boleh memblokirnya. api_key eksplisit dari agent tetap diprioritaskan.
+let mcpAdminSession: string | null = null;
+function mcpAdminCookie(): string {
+	mcpAdminSession ??= createSession();
+	return `${SESSION_COOKIE}=${mcpAdminSession}`;
+}
 import {
   createClientKey,
   listClientKeys,
@@ -642,6 +652,7 @@ const HANDLERS: Record<string, ToolHandler> = {
     const headers = new Headers({ "Content-Type": "application/json" });
     const apiKey = str(args.api_key);
     if (apiKey) headers.set("Authorization", `Bearer ${apiKey}`);
+    else headers.set("Cookie", mcpAdminCookie());
     const req = new Request("http://uni.local/v1/chat/completions", {
       method: "POST",
       headers,
