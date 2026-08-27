@@ -33,6 +33,13 @@ import {
   setClientKeyActive,
 } from "./client-key";
 import {
+  addApiKey,
+  deleteApiKeyById,
+  listApiKeys,
+  setApiKeyActive,
+  setRoutingKey,
+} from "./credential";
+import {
   getSettings as getCompressionSettings,
   isEnabled as compressionEnabled,
   testCompression,
@@ -94,6 +101,113 @@ export const TOOLS: ToolDef[] = [
       type: "object",
       properties: { provider_id: { type: "string" } },
       required: ["provider_id"],
+    },
+  },
+  {
+    name: "get_provider",
+    description:
+      "Get detailed config of one provider (base_url, auth, weight, status, proxy pool, key/model counts).",
+    inputSchema: {
+      type: "object",
+      properties: { provider_id: { type: "string" } },
+      required: ["provider_id"],
+    },
+  },
+  {
+    name: "create_provider",
+    description:
+      "Create a new upstream provider. id must be unique slug (e.g. 'my-openai'). base_url is required.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        provider_id: { type: "string", description: "Unique slug, e.g. 'my-openai'" },
+        name: { type: "string" },
+        base_url: { type: "string", description: "Upstream base URL, e.g. https://api.openai.com" },
+        auth_type: { type: "string", enum: ["bearer", "apikey", "none"], default: "bearer" },
+        is_active: { type: "boolean", description: "Enable immediately (default false)" },
+        weight: { type: "integer", description: "Load-balancing weight (default 1)" },
+        priority: { type: "integer", description: "Priority (default 0)" },
+      },
+      required: ["provider_id", "name", "base_url"],
+    },
+  },
+  {
+    name: "update_provider",
+    description: "Update an existing provider (name, base_url, auth_type, weight, priority, is_active).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        provider_id: { type: "string" },
+        name: { type: "string" },
+        base_url: { type: "string" },
+        auth_type: { type: "string", enum: ["bearer", "apikey", "none"] },
+        is_active: { type: "boolean" },
+        weight: { type: "integer" },
+        priority: { type: "integer" },
+      },
+      required: ["provider_id"],
+    },
+  },
+  {
+    name: "delete_provider",
+    description: "Permanently delete a provider and its keys/models/assignments. Destructive!",
+    inputSchema: {
+      type: "object",
+      properties: { provider_id: { type: "string" } },
+      required: ["provider_id"],
+    },
+  },
+  {
+    name: "list_provider_keys",
+    description: "List API keys (accounts) for a provider. Secrets are masked.",
+    inputSchema: {
+      type: "object",
+      properties: { provider_id: { type: "string" } },
+      required: ["provider_id"],
+    },
+  },
+  {
+    name: "add_provider_key",
+    description: "Add an upstream API key to a provider (multi-account). Optionally set as routing key.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        provider_id: { type: "string" },
+        api_key: { type: "string", description: "Upstream API key / token" },
+        label: { type: "string", description: "Optional label, e.g. 'account-1'" },
+        is_routing: { type: "boolean", description: "Make this the routing key (default true if first key)" },
+      },
+      required: ["provider_id", "api_key"],
+    },
+  },
+  {
+    name: "delete_provider_key",
+    description: "Permanently delete a provider API key by credential id.",
+    inputSchema: {
+      type: "object",
+      properties: { id: { type: "integer", description: "provider_credentials.id" } },
+      required: ["id"],
+    },
+  },
+  {
+    name: "set_provider_routing_key",
+    description: "Set which provider API key is the routing credential.",
+    inputSchema: {
+      type: "object",
+      properties: { id: { type: "integer", description: "provider_credentials.id" } },
+      required: ["id"],
+    },
+  },
+  {
+    name: "toggle_provider_key",
+    description: "Enable/disable a provider API key without deleting it.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "integer" },
+        active: { type: "boolean" },
+      },
+      required: ["id", "active"],
     },
   },
   {
@@ -513,6 +627,197 @@ const HANDLERS: Record<string, ToolHandler> = {
   async test_provider_connection(args) {
     const r = await testProviderConnection(str(args.provider_id));
     return r as unknown as JsonValue;
+  },
+
+  get_provider(args) {
+    const id = str(args.provider_id);
+    if (!id) return { ok: false, error: "provider_id is required" };
+    const row = query(
+      "SELECT id, name, base_url, auth_type, is_active, weight, priority, current_connections, last_used_at, created_at FROM providers WHERE id = ?",
+    ).get(id) as Record<string, unknown> | undefined;
+    if (!row) return { ok: false, error: "provider not found" };
+    const pool = getPoolForProvider(id);
+    const keyCount = (
+      query("SELECT COUNT(*) as c FROM provider_credentials WHERE provider_id = ?").get(id) as
+        | { c: number }
+        | undefined
+    )?.c ?? 0;
+    const activeKeyCount = (
+      query(
+        "SELECT COUNT(*) as c FROM provider_credentials WHERE provider_id = ? AND is_active = 1",
+      ).get(id) as { c: number } | undefined
+    )?.c ?? 0;
+    const modelCount = (
+      query("SELECT COUNT(*) as c FROM models WHERE provider_id = ? AND is_active = 1").get(id) as
+        | { c: number }
+        | undefined
+    )?.c ?? 0;
+    return {
+      ...providerRow(row),
+      proxy_pool: pool ? { id: pool.id, name: pool.name, proxies: pool.proxy_ids.length } : null,
+      key_count: Number(keyCount),
+      active_key_count: Number(activeKeyCount),
+      model_count: Number(modelCount),
+    };
+  },
+
+  create_provider(args) {
+    const id = str(args.provider_id) || str(args.id);
+    const name = str(args.name);
+    const baseUrl = str(args.base_url) || str(args.baseUrl);
+    if (!id || !name || !baseUrl) {
+      return { ok: false, error: "provider_id, name and base_url are required" };
+    }
+    if (!/^[a-z0-9][a-z0-9._-]*$/i.test(id)) {
+      return { ok: false, error: "provider_id must be slug (alphanumeric, dot, dash, underscore)" };
+    }
+    try {
+      new URL(baseUrl);
+    } catch {
+      return { ok: false, error: "base_url must be a valid URL" };
+    }
+    const exists = query("SELECT id FROM providers WHERE id = ?").get(id) as { id: string } | undefined;
+    if (exists) return { ok: false, error: `provider '${id}' already exists` };
+    const authType = ["bearer", "apikey", "none"].includes(str(args.auth_type))
+      ? str(args.auth_type)
+      : "bearer";
+    const weight = args.weight != null ? Math.max(1, Math.round(num(args.weight))) : 1;
+    const priority = args.priority != null ? Math.round(num(args.priority)) : 0;
+    const isActive = args.is_active === true || args.is_active === "true" || args.is_active === 1 ? 1 : 0;
+    query(
+      `INSERT INTO providers (id, name, base_url, auth_type, is_active, weight, priority) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ).run(id, name, baseUrl, authType, isActive, weight, priority);
+    reload();
+    return { ok: true, provider_id: id, name, base_url: baseUrl, auth_type: authType, is_active: !!isActive, weight, priority };
+  },
+
+  update_provider(args) {
+    const id = str(args.provider_id) || str(args.id);
+    if (!id) return { ok: false, error: "provider_id is required" };
+    const existing = query("SELECT id FROM providers WHERE id = ?").get(id) as { id: string } | undefined;
+    if (!existing) return { ok: false, error: "provider not found" };
+    const fields: string[] = [];
+    const vals: unknown[] = [];
+    if (args.name !== undefined) { fields.push("name = ?"); vals.push(str(args.name)); }
+    if (args.base_url !== undefined || args.baseUrl !== undefined) {
+      const bu = str(args.base_url) || str(args.baseUrl);
+      if (!bu) return { ok: false, error: "base_url cannot be empty" };
+      try { new URL(bu); } catch { return { ok: false, error: "base_url must be a valid URL" }; }
+      fields.push("base_url = ?"); vals.push(bu);
+    }
+    if (args.auth_type !== undefined) {
+      const at = str(args.auth_type);
+      if (!["bearer","apikey","none"].includes(at)) return { ok: false, error: "auth_type must be bearer|apikey|none" };
+      fields.push("auth_type = ?"); vals.push(at);
+    }
+    if (args.is_active !== undefined) {
+      const v = args.is_active === true || args.is_active === "true" || args.is_active === 1 ? 1 : 0;
+      fields.push("is_active = ?"); vals.push(v);
+    }
+    if (args.weight !== undefined) { fields.push("weight = ?"); vals.push(Math.max(1, Math.round(num(args.weight)))); }
+    if (args.priority !== undefined) { fields.push("priority = ?"); vals.push(Math.round(num(args.priority))); }
+    if (fields.length === 0) return { ok: false, error: "no fields to update" };
+    vals.push(id);
+    query(`UPDATE providers SET ${fields.join(", ")} WHERE id = ?`).run(...vals);
+    reload();
+    const updated = query("SELECT id, name, base_url, auth_type, is_active, weight, priority FROM providers WHERE id = ?").get(id);
+    return { ok: true, provider: updated };
+  },
+
+  delete_provider(args) {
+    const id = str(args.provider_id) || str(args.id);
+    if (!id) return { ok: false, error: "provider_id is required" };
+    const exists = query("SELECT id FROM providers WHERE id = ?").get(id) as { id: string } | undefined;
+    if (!exists) return { ok: false, error: "provider not found" };
+    // cleanup assignments & pools auto-singleton
+    unassignPool("provider", id);
+    // auto singleton pools for this provider (mcp-single / provider-single / key-* / acct-*)
+    const autoPools = query("SELECT id, name FROM proxy_pools WHERE name LIKE ?").all(`auto · ${id} · %`) as Array<{ id: number; name: string }>;
+    for (const p of autoPools) {
+      query("DELETE FROM proxy_pool_assignments WHERE proxy_pool_id = ?").run(p.id);
+      query("DELETE FROM proxy_pools WHERE id = ?").run(p.id);
+    }
+    query("DELETE FROM provider_credentials WHERE provider_id = ?").run(id);
+    query("DELETE FROM models WHERE provider_id = ?").run(id);
+    query("DELETE FROM providers WHERE id = ?").run(id);
+    reload();
+    return { ok: true, deleted: id };
+  },
+
+  list_provider_keys(args) {
+    const providerId = str(args.provider_id);
+    if (!providerId) return { ok: false, error: "provider_id is required" };
+    const exists = query("SELECT id FROM providers WHERE id = ?").get(providerId) as { id: string } | undefined;
+    if (!exists) return { ok: false, error: "provider not found" };
+    const rows = listApiKeys(providerId) as Array<Record<string, unknown>>;
+    return rows.map((k) => {
+      const apiKey = String(k.api_key ?? "");
+      const masked = apiKey.length <= 8 ? "••••" : `${apiKey.slice(0, 6)}••••••••${apiKey.slice(-4)}`;
+      return {
+        id: k.id,
+        provider_id: k.provider_id,
+        label: k.label ?? null,
+        masked_key: masked,
+        key_prefix: apiKey.slice(0, 8),
+        is_active: !!k.is_active,
+        is_routing: !!k.is_routing,
+        proxy_pool_id: k.proxy_pool_id ?? null,
+        created_at: k.created_at,
+        updated_at: k.updated_at,
+      };
+    });
+  },
+
+  add_provider_key(args) {
+    const providerId = str(args.provider_id);
+    const apiKey = str(args.api_key);
+    if (!providerId || !apiKey) return { ok: false, error: "provider_id and api_key are required" };
+    const exists = query("SELECT id FROM providers WHERE id = ?").get(providerId) as { id: string } | undefined;
+    if (!exists) return { ok: false, error: "provider not found" };
+    const label = str(args.label) || null;
+    // first key always routing; otherwise respect explicit flag
+    const existingCount = (
+      query("SELECT COUNT(*) as c FROM provider_credentials WHERE provider_id = ?").get(providerId) as { c: number } | undefined
+    )?.c ?? 0;
+    let makeRouting: boolean;
+    if (args.is_routing !== undefined) makeRouting = args.is_routing === true || args.is_routing === "true";
+    else makeRouting = existingCount === 0 ? true : false;
+    addApiKey(providerId, apiKey, label, makeRouting);
+    const inserted = query(
+      "SELECT id, label, is_routing, is_active FROM provider_credentials WHERE provider_id = ? ORDER BY id DESC LIMIT 1",
+    ).get(providerId) as { id: number; label: string | null; is_routing: number; is_active: number } | undefined;
+    return { ok: true, id: inserted?.id ?? null, provider_id: providerId, label, is_routing: !!inserted?.is_routing };
+  },
+
+  delete_provider_key(args) {
+    const id = num(args.id);
+    if (!id) return { ok: false, error: "id is required" };
+    const row = query("SELECT id, provider_id, proxy_pool_id FROM provider_credentials WHERE id = ?").get(id) as
+      | { id: number; provider_id: string; proxy_pool_id: number | null }
+      | undefined;
+    if (!row) return { ok: false, error: "credential not found" };
+    deleteApiKeyById(id);
+    return { ok: true, deleted: id, provider_id: row.provider_id };
+  },
+
+  set_provider_routing_key(args) {
+    const id = num(args.id);
+    if (!id) return { ok: false, error: "id is required" };
+    const row = query("SELECT id FROM provider_credentials WHERE id = ?").get(id) as { id: number } | undefined;
+    if (!row) return { ok: false, error: "credential not found" };
+    setRoutingKey(id);
+    return { ok: true, routing_id: id };
+  },
+
+  toggle_provider_key(args) {
+    const id = num(args.id);
+    if (!id) return { ok: false, error: "id is required" };
+    if (args.active === undefined) return { ok: false, error: "active is required" };
+    const row = query("SELECT id FROM provider_credentials WHERE id = ?").get(id) as { id: number } | undefined;
+    if (!row) return { ok: false, error: "credential not found" };
+    const active = args.active === true || args.active === "true";
+    setApiKeyActive(id, active);
+    return { ok: true, id, active };
   },
 
   list_proxies() {

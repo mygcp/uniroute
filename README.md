@@ -19,6 +19,28 @@ MCP server that lets coding agents manage the gateway through tool calls.
 
 ## Quick start
 
+### Binary (recommended)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/anomalyco/uniroute/main/install.sh | sh
+uni doctor
+uni start --daemon --port 3000   # uni stop / uni restart / uni logs -f / uni status
+```
+
+Or download `uni-*` from [Releases](https://github.com/anomalyco/uniroute/releases), plus `build/` tarball if distributed separately.
+
+Single binary via `bun build --compile` (GH Release builds `uni-linux-x64`, `uni-darwin-arm64`, etc.):
+
+```bash
+bun run compile            # → dist/uni (93M, needs build/ next to it)
+./dist/uni start --daemon
+./dist/uni doctor
+```
+
+Build all targets: `bun run compile:all`.
+
+### From source (Bun)
+
 Requires [Bun](https://bun.sh).
 
 ```bash
@@ -30,10 +52,12 @@ Open http://localhost:5173 and log in. The app works without configuration;
 the default password is `CHANGEME`. Copy `.env.example` to `.env` to change
 it. See [docs/configuration.md](docs/configuration.md).
 
-For production:
+For production (without binary):
 
 ```bash
 bun run build && bun run start   # serves on PORT (default 3000)
+# or via CLI source:
+bun cli/uni.ts start --daemon
 ```
 
 ## Documentation
@@ -52,12 +76,28 @@ bun run build && bun run start   # serves on PORT (default 3000)
 | [Performance](docs/performance.md) | Measured baseline, hot-path invariants, benchmarks |
 | [Development](docs/development.md) | Scripts, testing, code conventions |
 
+## CLI
+
+```bash
+uni start [--port 3000] [-d|--daemon]  # foreground or background
+uni stop
+uni restart [--daemon]
+uni status
+uni logs [-f] [-n 100]
+uni doctor
+uni --help
+```
+
+PID: `data/uniroute.pid` (or `$XDG_DATA_HOME/uniroute/uniroute.pid`), logs: `data/logs/uniroute.log`, overrides `UNIROUTE_PID_FILE`/`UNIROUTE_LOG_FILE`.
+
 ## Scripts
 
 ```bash
 bun run dev         # dev server on :5173
 bun run build       # production build
 bun run start       # serve the build (Bun)
+bun run compile     # build + bun build --compile → dist/uni
+bun run compile:all # cross-compile linux/darwin arm64/x64
 bun run test        # unit tests
 bun run typecheck   # typegen + tsc
 ```
