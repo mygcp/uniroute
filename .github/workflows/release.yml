@@ -39,11 +39,16 @@ jobs:
       - name: compile
         run: bun build cli/uni.ts --compile --minify --sourcemap=none --target=${{ matrix.target }} --outfile dist/${{ matrix.artifact }}
         shell: bash
-      - name: UPX compress (optional)
+      - name: install UPX
         if: runner.os != 'Windows'
-        continue-on-error: true
         run: |
-          if command -v upx >/dev/null 2>&1; then upx --best dist/${{ matrix.artifact }} && ls -lh dist/${{ matrix.artifact }}; else echo "UPX not installed — skip (install upx-ucl for final compression)"; fi
+          if [[ "$RUNNER_OS" == "Linux" ]]; then sudo apt-get update && sudo apt-get install -y upx-ucl; else brew install upx; fi
+        shell: bash
+      - name: UPX compress
+        if: runner.os != 'Windows'
+        run: |
+          upx --best dist/${{ matrix.artifact }} && ls -lh dist/${{ matrix.artifact }}
+          gzip -c dist/${{ matrix.artifact }} | wc -c | awk '{printf "gzip: %.1fM\n", $1/1024/1024}'
         shell: bash
       - name: package tarball (unix)
         if: runner.os != 'Windows'
