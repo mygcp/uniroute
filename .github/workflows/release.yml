@@ -9,8 +9,24 @@ permissions:
   contents: write
 
 jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: bun install --frozen-lockfile
+      - run: bun run build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: build
+          path: build/
+
   build:
+    needs: prepare
     strategy:
+      fail-fast: false
       matrix:
         include:
           - os: ubuntu-latest
@@ -34,15 +50,18 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
+      - uses: actions/download-artifact@v4
+        with:
+          name: build
+          path: build/
       - run: bun install --frozen-lockfile
-      - run: bun run build
       - name: compile
         run: bun build cli/uni.ts --compile --minify --sourcemap=none --target=${{ matrix.target }} --outfile dist/${{ matrix.artifact }}
         shell: bash
       - name: install UPX
         if: runner.os != 'Windows'
         run: |
-          if [[ "$RUNNER_OS" == "Linux" ]]; then sudo apt-get update && sudo apt-get install -y upx-ucl; else brew install upx; fi
+          if [[ "$RUNNER_OS" == "Linux" ]]; then sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends upx-ucl; else brew install upx; fi
         shell: bash
       - name: UPX compress
         if: runner.os != 'Windows'
