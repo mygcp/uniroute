@@ -37,7 +37,6 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bun run build
       - name: compile
-        # Bun 1.3.14 sudah potong 4M di Linux — jaga tetap ramping: --minify, hindari --bytecode
         run: bun build cli/uni.ts --compile --minify --sourcemap=none --target=${{ matrix.target }} --outfile dist/${{ matrix.artifact }}
         shell: bash
       - name: UPX compress (optional)
