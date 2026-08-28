@@ -125,7 +125,7 @@ jobs:
     steps:
       - uses: peter-evans/repository-dispatch@v3
         with:
-          token: ${{ secrets.UNIROUTE_PAT || github.token }}
+          token: ${{ secrets.GITHUB_TOKEN }}
           repository: mygcp/uniroute-android
           event-type: uniroute-tag
           client-payload: '{"tag": "${{ github.ref_name }}"}'
