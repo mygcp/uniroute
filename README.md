@@ -52,7 +52,7 @@ uni update --force
 Single binary via `bun build --compile` (GH Release builds `uni-linux-x64`, `uni-darwin-arm64`, etc.):
 
 ```bash
-bun run compile            # → dist/uni (93M, needs build/ next to it)
+bun run compile            # → dist/uni (needs build/ next to it)
 ./dist/uni start --daemon
 ./dist/uni doctor
 ```
