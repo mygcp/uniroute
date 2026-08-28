@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 # UniRoute installer — downloads uni binary from GitHub Releases
 # Usage: curl -fsSL https://raw.githubusercontent.com/<org>/uniroute/main/install.sh | sh
-#        curl -fsSL .../install.sh | sh -s -- --version v1.1.0
+#        curl -fsSL .../install.sh | sh -s -- --version v1.0.0
 set -eu
 
 REPO="${REPO:-mygcp/uniroute}"

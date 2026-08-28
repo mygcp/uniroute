@@ -27,7 +27,7 @@ MCP server that lets coding agents manage the gateway through tool calls.
 # latest
 curl -fsSL https://raw.githubusercontent.com/mygcp/uniroute/main/install.sh | sh
 # specific version
-curl -fsSL https://raw.githubusercontent.com/mygcp/uniroute/main/install.sh | sh -s -- v1.1.0
+curl -fsSL https://raw.githubusercontent.com/mygcp/uniroute/main/install.sh | sh -s -- v1.0.0
 # custom dir/repo
 BIN_DIR=~/.local/bin REPO=mygcp/uniroute sh install.sh
 

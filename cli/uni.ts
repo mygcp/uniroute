@@ -14,7 +14,7 @@ const VERSION = (() => {
     if (pkg.version) return pkg.version;
   } catch {}
   // fallback hardcoded — keep in sync with package.json
-  return "1.1.0";
+  return "1.0.0";
 })();
 
 function printHelp() {

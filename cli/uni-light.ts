@@ -8,7 +8,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { getPidPath, getLogPath, readPid, writePid, removePid, isAlive } from "./pid";
 import { runDoctor } from "./doctor";
 
-const VERSION = "1.1.0";
+const VERSION = "1.0.0";
 
 function help() {
   console.log(`
