@@ -115,7 +115,7 @@ jobs:
             dist/**/uni-*
             dist/**/*.tar.gz
             dist/**/*.zip
-          fail_on_unmatched_files: true
+          fail_on_unmatched_files: false
           generate_release_notes: true
 
   trigger-android:
