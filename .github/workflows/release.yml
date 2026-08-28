@@ -117,16 +117,3 @@ jobs:
             dist/**/*.zip
           fail_on_unmatched_files: false
           generate_release_notes: true
-
-  trigger-android:
-    needs: release
-    runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/')
-    continue-on-error: true
-    steps:
-      - uses: peter-evans/repository-dispatch@v3
-        with:
-          token: ${{ secrets.UNIROUTE_PAT || secrets.GITHUB_TOKEN }}
-          repository: mygcp/uniroute-android
-          event-type: uniroute-tag
-          client-payload: '{"tag": "${{ github.ref_name }}"}'
