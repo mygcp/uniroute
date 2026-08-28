@@ -70,7 +70,7 @@ jobs:
       - name: UPX compress
         if: matrix.target == 'bun-linux-x64' || startsWith(matrix.target, 'bun-darwin')
         run: |
-          upx --best dist/${{ matrix.artifact }} && ls -lh dist/${{ matrix.artifact }}
+          timeout 90 upx -1 dist/${{ matrix.artifact }} && ls -lh dist/${{ matrix.artifact }} || echo "UPX skip/timeout — keep uncompressed"
           gzip -c dist/${{ matrix.artifact }} | wc -c | awk '{printf "gzip: %.1fM\n", $1/1024/1024}'
         shell: bash
       - name: gzip size (no UPX)
