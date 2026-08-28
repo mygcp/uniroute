@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 import path from "node:path";
 import fs from "node:fs";
+import os from "node:os";
 import { spawn } from "node:child_process";
 import { getPidPath, getLogPath, readPid, writePid, removePid, isAlive } from "./pid";
 import { runDoctor } from "./doctor";
@@ -20,7 +21,7 @@ function printHelp() {
   console.log(`
 UniRoute — self-hosted AI gateway
 
-Usage: uni <command> [options]
+Usage: uni <command> [options]   (also: uniroute)
 
 Commands:
   start [--port PORT] [--host HOST] [-d|--daemon]   Start server (foreground, --daemon backgrounds)
@@ -29,6 +30,7 @@ Commands:
   status                                            Show PID, port, uptime
   logs [-f|--follow] [-n N]                         Tail log file
   doctor                                            Check env, build, db, port
+  update [--check] [--force]                        Self-update binary from GitHub Releases
   version                                           Print version
   help                                              Show this help
 
@@ -44,13 +46,17 @@ Examples:
   uni stop
   uni logs -f
   uni doctor
+  uni update                # download latest binary
+  uni update --check        # only check version
 `.trim());
 }
 
 function parseArgs(argv: string[]) {
   const args = argv.slice(2);
-  const cmd = args[0] ?? "help";
-  const rest = args.slice(1);
+  let cmd = args[0] ?? "help";
+  // alias: uniroute -> uni
+  if (cmd === "uniroute") cmd = args[1] ?? "help";
+  const rest = cmd === args[0] ? args.slice(1) : args.slice(2);
   const flags: Record<string, string | boolean> = {};
   const positionals: string[] = [];
   for (let i = 0; i < rest.length; i++) {
@@ -58,6 +64,8 @@ function parseArgs(argv: string[]) {
     if (a === "--daemon" || a === "-d") flags.daemon = true;
     else if (a === "--follow" || a === "-f") flags.follow = true;
     else if (a === "--daemon-child") flags.daemonChild = true;
+    else if (a === "--check") flags.check = true;
+    else if (a === "--force") flags.force = true;
     else if (a === "--port" && rest[i + 1]) { flags.port = rest[++i]; }
     else if (a.startsWith("--port=")) flags.port = a.split("=")[1];
     else if (a === "--host" && rest[i + 1]) { flags.host = rest[++i]; }
@@ -303,6 +311,141 @@ async function cmdDoctor() {
   process.exit(ok ? 0 : 1);
 }
 
+function getUpdateTarget(): { target: string; artifact: string; ext: string } | null {
+  const os = process.platform; // linux, darwin, win32
+  const arch = process.arch; // x64, arm64
+  if (os === "linux" && arch === "x64") return { target: "bun-linux-x64", artifact: "uni-linux-x64", ext: "" };
+  if (os === "linux" && arch === "arm64") return { target: "bun-linux-arm64", artifact: "uni-linux-arm64", ext: "" };
+  if (os === "darwin" && arch === "x64") return { target: "bun-darwin-x64", artifact: "uni-darwin-x64", ext: "" };
+  if (os === "darwin" && arch === "arm64") return { target: "bun-darwin-arm64", artifact: "uni-darwin-arm64", ext: "" };
+  if (os === "win32") return { target: "bun-windows-x64", artifact: "uni-windows-x64.exe", ext: ".exe" };
+  return null;
+}
+
+async function cmdUpdate(flags: Record<string, string | boolean>) {
+  const repo = process.env.UNIROUTE_REPO ?? process.env.REPO ?? "mygcp/uniroute";
+  const isCompiled = !process.execPath.includes("bun");
+  if (!isCompiled) {
+    console.log(`[uni] update: running via bun (dev) — self-update only for compiled binary`);
+    console.log(`  try: git pull && bun run build`);
+    if (!flags.force) process.exit(0);
+  }
+
+  const current = VERSION;
+  console.log(`[uni] current ${current} — checking ${repo}...`);
+
+  const apiUrl = `https://api.github.com/repos/${repo}/releases/latest`;
+  let latest: { tag_name: string; assets: Array<{ name: string; browser_download_url: string }> };
+  try {
+    const res = await fetch(apiUrl, { headers: { "Accept": "application/vnd.github+json", "User-Agent": "uni-update" } });
+    if (!res.ok) throw new Error(`HTTP ${res.status} ${await res.text().then((t) => t.slice(0, 200))}`);
+    latest = (await res.json()) as typeof latest;
+  } catch (e) {
+    console.error(`[uni] update: failed to fetch latest: ${e instanceof Error ? e.message : String(e)}`);
+    process.exit(1);
+  }
+
+  const tag = latest.tag_name; // e.g. v1.1.0
+  const latestVer = tag.replace(/^v/, "");
+  console.log(`[uni] latest ${tag} (current ${current})`);
+
+  if (latestVer === current && !flags.force) {
+    console.log(`[uni] already up to date`);
+    if (flags.check) process.exit(0);
+    process.exit(0);
+  }
+  if (flags.check) {
+    console.log(`[uni] update available: ${current} -> ${latestVer}`);
+    process.exit(0);
+  }
+
+  const tgt = getUpdateTarget();
+  if (!tgt) {
+    console.error(`[uni] update: unsupported platform ${process.platform}/${process.arch}`);
+    process.exit(1);
+  }
+
+  // prefer bare binary asset (uni-linux-x64) over tar.gz for self-update
+  const asset = latest.assets.find((a) => a.name === tgt.artifact) ?? latest.assets.find((a) => a.name === `${tgt.artifact}.tar.gz`);
+  if (!asset) {
+    console.error(`[uni] update: asset ${tgt.artifact} not found in ${tag}`);
+    console.error(`  available: ${latest.assets.map((a) => a.name).join(", ")}`);
+    process.exit(1);
+  }
+
+  const url = asset.browser_download_url;
+  console.log(`[uni] downloading ${asset.name} from ${url}...`);
+
+  const tmp = path.join(osTmpDir(), `uni-update-${Date.now()}-${tgt.artifact}`);
+  // download
+  try {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const buf = Buffer.from(await res.arrayBuffer());
+    fs.writeFileSync(tmp, buf, { mode: 0o755 });
+  } catch (e) {
+    console.error(`[uni] download failed: ${e instanceof Error ? e.message : String(e)}`);
+    process.exit(1);
+  }
+
+  let newBinary = tmp;
+  // if tar.gz, extract binary inside
+  if (asset.name.endsWith(".tar.gz")) {
+    try {
+      const outDir = `${tmp}.dir`;
+      fs.mkdirSync(outDir, { recursive: true });
+      const proc = Bun.spawnSync(["tar", "-xzf", tmp, "-C", outDir]);
+      if (proc.exitCode !== 0) throw new Error(proc.stderr.toString().slice(0, 300));
+      // find uni binary inside
+      const found = fs.readdirSync(outDir, { recursive: true } as any) as unknown as string[];
+      const binName = tgt.artifact;
+      const candidate = (found as string[]).find((p) => String(p).endsWith(binName)) ?? found.find((p) => String(p).includes("uni-"));
+      if (!candidate) throw new Error("binary not found in tar");
+      const src = path.join(outDir, String(candidate));
+      const extracted = `${tmp}.bin`;
+      fs.copyFileSync(src, extracted);
+      fs.chmodSync(extracted, 0o755);
+      newBinary = extracted;
+    } catch (e) {
+      console.error(`[uni] extract failed: ${e instanceof Error ? e.message : String(e)}`);
+      process.exit(1);
+    }
+  }
+
+  const dest = process.execPath;
+  // safety: if dest is bun, use ~/.local/bin/uni
+  let targetPath = dest;
+  if (dest.includes("bun")) {
+    const homeBin = path.join(os.homedir(), ".local", "bin", "uni");
+    const usrBin = "/usr/local/bin/uni";
+    if (fs.existsSync(homeBin)) targetPath = homeBin;
+    else if (fs.existsSync(usrBin) && (()=>{ try{ fs.accessSync(path.dirname(usrBin), fs.constants.W_OK); return true;}catch{return false}})()) targetPath = usrBin;
+    else {
+      console.log(`[uni] dev mode — new binary at ${newBinary}, copy manually to ~/.local/bin/uni`);
+      console.log(`  mv ${newBinary} ~/.local/bin/uni && chmod +x ~/.local/bin/uni`);
+      process.exit(0);
+    }
+  }
+
+  try {
+    // backup
+    const bak = `${targetPath}.bak`;
+    try { fs.copyFileSync(targetPath, bak); } catch {}
+    fs.copyFileSync(newBinary, targetPath);
+    fs.chmodSync(targetPath, 0o755);
+    console.log(`[uni] updated ${targetPath} ${current} -> ${latestVer} ✓`);
+    console.log(`  run: uni doctor && uni version`);
+  } catch (e) {
+    console.error(`[uni] replace failed (need sudo?): ${e instanceof Error ? e.message : String(e)}`);
+    console.error(`  new binary kept at ${newBinary}`);
+    process.exit(1);
+  }
+}
+
+function osTmpDir(): string {
+  return process.env.TMPDIR ?? process.env.TMP ?? "/tmp";
+}
+
 async function main() {
   const { cmd, flags } = parseArgs(process.argv);
   if (flags.help) { printHelp(); process.exit(0); }
@@ -313,6 +456,7 @@ async function main() {
     case "status": cmdStatus(); break;
     case "logs": cmdLogs(flags); break;
     case "doctor": await cmdDoctor(); break;
+    case "update": await cmdUpdate(flags); break;
     case "version":
     case "--version":
     case "-v": console.log(`uni ${VERSION}`); break;

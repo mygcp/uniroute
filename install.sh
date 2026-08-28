@@ -4,7 +4,7 @@
 #        curl -fsSL .../install.sh | sh -s -- --version v1.1.0
 set -eu
 
-REPO="${REPO:-anomalyco/uniroute}"
+REPO="${REPO:-mygcp/uniroute}"
 VERSION="${1:-latest}"
 BIN_DIR="${BIN_DIR:-$HOME/.local/bin}"
 NAME="uni"
@@ -48,8 +48,11 @@ else
 fi
 chmod +x "$TMP"
 mv "$TMP" "$BIN_DIR/$NAME"
-echo "✓ Installed $BIN_DIR/$NAME"
+# alias uniroute -> uni
+if [ ! -e "$BIN_DIR/uniroute" ]; then ln -sf "$NAME" "$BIN_DIR/uniroute" 2>/dev/null || true; fi
+echo "✓ Installed $BIN_DIR/$NAME (alias $BIN_DIR/uniroute)"
 echo "  Run: $NAME doctor && $NAME start --daemon"
+echo "  Self-update: $NAME update --check && $NAME update"
 if ! echo "$PATH" | grep -q "$BIN_DIR"; then
   echo "  Add to PATH: export PATH=\"\$HOME/.local/bin:\$PATH\""
 fi

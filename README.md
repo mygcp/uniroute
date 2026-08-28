@@ -21,13 +21,33 @@ MCP server that lets coding agents manage the gateway through tool calls.
 
 ### Binary (recommended)
 
+**Install via curl:**
+
 ```bash
-curl -fsSL https://raw.githubusercontent.com/anomalyco/uniroute/main/install.sh | sh
+# latest
+curl -fsSL https://raw.githubusercontent.com/mygcp/uniroute/main/install.sh | sh
+# specific version
+curl -fsSL https://raw.githubusercontent.com/mygcp/uniroute/main/install.sh | sh -s -- v1.1.0
+# custom dir/repo
+BIN_DIR=~/.local/bin REPO=mygcp/uniroute sh install.sh
+
+# verify
 uni doctor
-uni start --daemon --port 3000   # uni stop / uni restart / uni logs -f / uni status
+uni start --daemon --port 3000
+uni status && uni logs -f
 ```
 
-Or download `uni-*` from [Releases](https://github.com/anomalyco/uniroute/releases), plus `build/` tarball if distributed separately.
+Or download `uni-*` from [Releases](https://github.com/mygcp/uniroute/releases) (each `uni-*.tar.gz` contains binary + `build/`).
+
+**Self-update:**
+
+```bash
+uni update --check   # check latest
+uni update           # download latest binary for your OS/arch and replace ~/.local/bin/uni
+uniroute update      # alias — same as uni (create symlink: ln -s $(which uni) ~/.local/bin/uniroute)
+# force even if same version
+uni update --force
+```
 
 Single binary via `bun build --compile` (GH Release builds `uni-linux-x64`, `uni-darwin-arm64`, etc.):
 
@@ -85,7 +105,9 @@ uni restart [--daemon]
 uni status
 uni logs [-f] [-n 100]
 uni doctor
+uni update [--check] [--force]         # self-update from GitHub Releases
 uni --help
+# uniroute is alias for uni
 ```
 
 PID: `data/uniroute.pid` (or `$XDG_DATA_HOME/uniroute/uniroute.pid`), logs: `data/logs/uniroute.log`, overrides `UNIROUTE_PID_FILE`/`UNIROUTE_LOG_FILE`.
