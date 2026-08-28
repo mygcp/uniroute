@@ -108,11 +108,12 @@ jobs:
         with:
           path: dist
           merge-multiple: true
-      - run: ls -R dist; echo "--- files for release:"; ls -lh dist/**/* 2>/dev/null || ls -lh dist/* 2>/dev/null || true
+      - run: ls -R dist; echo "--- files for release:"; find dist -type f -ls
       - uses: softprops/action-gh-release@v2
         with:
           files: |
-            dist/uni-*
-            dist/*.tar.gz
-            dist/*.zip
+            dist/**/uni-*
+            dist/**/*.tar.gz
+            dist/**/*.zip
+          fail_on_unmatched_files: true
           generate_release_notes: true
