@@ -17,6 +17,24 @@ if [ "$LIGHT" = "1" ]; then
 fi
 
 detect_platform() {
+  # Termux/Android pakai Bionic libc, bukan glibc — binary standalone
+  # (bun --compile) tidak bisa jalan langsung ("cannot execute:
+  # required file not found" = ELF interpreter hilang).
+  OS_KERNEL=$(uname -s | tr '[:upper:]' '[:lower:]')
+  OS_RELEASE=$(uname -o 2>/dev/null || echo "")
+  if [ -n "${TERMUX_VERSION:-}" ] || [ "$OS_RELEASE" = "Android" ]; then
+    echo "Termux/Android detected: the standalone binary needs glibc and won't run here." >&2
+    echo "" >&2
+    echo "Pick one:" >&2
+    echo "  1) proot Ubuntu (recommended):" >&2
+    echo "       pkg install proot-distro && proot-distro install ubuntu" >&2
+    echo "       proot-distro login ubuntu  # then re-run this installer inside" >&2
+    echo "  2) light mode with node (no binary):" >&2
+    echo "       pkg install nodejs git && git clone https://github.com/${REPO} uniroute" >&2
+    echo "       cd uniroute && npm ci && npm run build" >&2
+    echo "       curl -fsSL https://raw.githubusercontent.com/${REPO}/main/install.sh | sh -s -- --light" >&2
+    exit 1
+  fi
   OS=$(uname -s | tr '[:upper:]' '[:lower:]')
   ARCH=$(uname -m)
   case "$OS" in
