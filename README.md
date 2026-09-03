@@ -66,19 +66,24 @@ need glibc, so they do NOT run directly on Termux (Bionic libc). Attempting
 to run one fails with `cannot execute: required file not found` — that means
 the ELF interpreter is missing, not that the download is corrupt.
 `install.sh` detects Termux and prints this guidance instead of installing.
-Three supported paths:
+Your options, no root needed unless noted:
 
-(a) proot-distro Ubuntu (recommended — no root needed, full binary works inside):
+(a) proot-distro Ubuntu (separate home dir — feels like a VM):
 
 ```bash
 pkg install proot-distro && proot-distro install ubuntu
 proot-distro login ubuntu  # then re-run the installer inside
 ```
 
-(b) chroot distro (needs a ROOTED device — e.g. boot a distro with
+(b) [termux-desktop](https://github.com/sabamdarif/termux-desktop) Distro
+Container (no root, feels native — same Termux home): distro apps run
+straight from the Termux terminal (`debian` to enter,
+`pdrun <app>` to launch). Set it up, then run the installer there.
+
+(c) chroot distro (needs a ROOTED device — e.g. boot a distro with
 Linux Deploy, chroot into it, then re-run the installer inside).
 
-(c) light mode from source with node (no binary, no root needed):
+(d) light mode from source with node (no binary, no root needed):
 
 ```bash
 pkg install nodejs git

@@ -34,8 +34,11 @@ curl -fsSL https://raw.githubusercontent.com/mygcp/uniroute/main/install.sh | sh
 interpreter is missing, not a corrupt download). The installer detects
 Termux and refuses; use (a) `pkg install proot-distro &&
 proot-distro install ubuntu`, then run the binary installer inside Ubuntu
-(no root needed), (b) chroot into a distro on a ROOTED device, then install
-inside, or (c) light mode from source with node (`pkg install nodejs git`, clone,
+(no root needed, separate home), (b) a
+[termux-desktop](https://github.com/sabamdarif/termux-desktop) Distro
+Container (no root, native feel — same Termux home, `pdrun <app>`),
+(c) chroot into a distro on a ROOTED device, then install
+inside, or (d) light mode from source with node (`pkg install nodejs git`, clone,
 `npm ci`, `npm run build`, installer with `--light`). See README.
 
 ## 2. Configuration
