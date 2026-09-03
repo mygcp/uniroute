@@ -26,10 +26,13 @@ detect_platform() {
     echo "Termux/Android detected: the standalone binary needs glibc and won't run here." >&2
     echo "" >&2
     echo "Pick one:" >&2
-    echo "  1) proot Ubuntu (recommended):" >&2
+    echo "  1) proot Ubuntu, no root needed (recommended):" >&2
     echo "       pkg install proot-distro && proot-distro install ubuntu" >&2
     echo "       proot-distro login ubuntu  # then re-run this installer inside" >&2
-    echo "  2) light mode with node (no binary):" >&2
+    echo "  2) chroot distro, needs a ROOTED device:" >&2
+    echo "       boot a distro (e.g. Linux Deploy) and chroot into it," >&2
+    echo "       then re-run this installer inside the chroot" >&2
+    echo "  3) light mode with node, no binary (no root needed):" >&2
     echo "       pkg install nodejs git && git clone https://github.com/${REPO} uniroute" >&2
     echo "       cd uniroute && npm ci && npm run build" >&2
     echo "       curl -fsSL https://raw.githubusercontent.com/${REPO}/main/install.sh | sh -s -- --light" >&2

@@ -32,9 +32,10 @@ curl -fsSL https://raw.githubusercontent.com/mygcp/uniroute/main/install.sh | sh
 `bun build --compile` and need glibc, so they do NOT run directly on Termux
 (Bionic libc — `cannot execute: required file not found` means the ELF
 interpreter is missing, not a corrupt download). The installer detects
-Termux and refuses; use either (a) `pkg install proot-distro &&
-proot-distro install ubuntu`, then run the binary installer inside Ubuntu,
-or (b) light mode from source with node (`pkg install nodejs git`, clone,
+Termux and refuses; use (a) `pkg install proot-distro &&
+proot-distro install ubuntu`, then run the binary installer inside Ubuntu
+(no root needed), (b) chroot into a distro on a ROOTED device, then install
+inside, or (c) light mode from source with node (`pkg install nodejs git`, clone,
 `npm ci`, `npm run build`, installer with `--light`). See README.
 
 ## 2. Configuration
