@@ -30,15 +30,30 @@ Related MCP tools: see [AI Agents & MCP](ai-agents.md).
 
 ## Egress priority
 
-When a request is executed, proxy sources are tried in order:
+When a request is executed, proxy sources are tried in order
+(`resolveProxyPool` in `app/.server/proxy-resolver.ts`):
 
 ```
 1. client key pool      (assignment on a client API key)
 2. account pool         (per upstream credential — singleton/single proxy)
-3. provider assignment  (pool OR single proxy on the provider page)
-4. global pool          (Proxies → Proxy Pools → Global)
-5. direct               (no proxy)
+3. combo pool           (per-combo proxy pool, stored in combo config)
+4. provider assignment  (pool OR single proxy on the provider page)
+5. global pool          (Proxies → Proxy Pools → Global)
+6. direct               (no proxy)
 ```
+
+Only the first matching level is used: a client-key or account pool wins
+over the combo pool, and the combo pool wins over the provider and global
+pools. A deleted, deactivated, or empty pool is skipped as if unset.
+
+## Per-combo proxy pool
+
+Each combo can pin a proxy pool: set **Proxy pool (optional)** in the add /
+edit form on the **Combo** page (`proxy_pool_id` in the combo config).
+Combos with a pool show a `proxy: <pool name>` badge in the combo list.
+The pool is passed as `comboPoolId` through `combo-runner.ts` and applies
+to every step of the combo run, but only when no client-key or account
+pool is set.
 
 Combination examples:
 

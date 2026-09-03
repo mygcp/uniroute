@@ -8,14 +8,14 @@ MCP server that lets coding agents manage the gateway through tool calls.
 ## Features
 
 - OpenAI-compatible API: `/v1/chat/completions`, `/v1/messages`, `/v1/responses`, `/v1/models` — requests are translated between OpenAI, Anthropic, and Gemini formats automatically.
-- Routing rules for model rewrites, provider fallback chains, and a load-balancing strategy per model.
+- Routing rules for model rewrites, provider fallback chains, and a load-balancing strategy per model (combos); models can also carry custom display names surfaced via `/v1/models`.
 - Client API keys with quotas, budgets, expiry, IP rules, auto-block, and rotation.
-- Outbound proxy engine: HTTP CONNECT and SOCKS5 pools with round-robin, priority, or random rotation, health tracking, and egress assignment per client key, account, or provider.
+- Outbound proxy engine: HTTP CONNECT and SOCKS5 pools with round-robin, priority, or random rotation, health tracking, and egress assignment per client key, account, combo, provider, or global pool.
 - Realtime request logs (status, duration, tokens, transport, proxy, endpoint, upstream TLS) and proxy operation logs.
 - Usage analytics split by input/output/cached tokens with cost estimates.
-- Per-provider chat playground with streaming, markdown rendering, and sessions saved to SQLite.
+- Per-provider chat playground with streaming, thinking/reasoning display, markdown rendering, and sessions saved to SQLite.
 - Media passthrough: `/v1/images/generations`, `/v1/audio/speech`, `/v1/audio/transcriptions`; vision and audio inputs are translated per provider.
-- MCP server exposing 40 tools, registrable from the dashboard into Claude Code, Codex, and OpenCode.
+- MCP server exposing 49 tools, registrable from the dashboard into Claude Code, Codex, and OpenCode.
 
 ## Quick start
 
@@ -58,6 +58,34 @@ bun run compile            # → dist/uni (needs build/ next to it)
 ```
 
 Build all targets: `bun run compile:all`.
+
+### Termux / Android
+
+The standalone `uni-*` binaries are built with `bun build --compile` and
+need glibc, so they do NOT run directly on Termux (Bionic libc). Attempting
+to run one fails with `cannot execute: required file not found` — that means
+the ELF interpreter is missing, not that the download is corrupt.
+`install.sh` detects Termux and prints this guidance instead of installing.
+Two supported paths:
+
+(a) proot-distro Ubuntu (recommended — full binary works inside):
+
+```bash
+pkg install proot-distro && proot-distro install ubuntu
+proot-distro login ubuntu  # then re-run the installer inside
+```
+
+(b) light mode from source with node (no binary):
+
+```bash
+pkg install nodejs git
+git clone https://github.com/mygcp/uniroute uniroute
+cd uniroute && npm ci && npm run build
+curl -fsSL https://raw.githubusercontent.com/mygcp/uniroute/main/install.sh | sh -s -- --light
+```
+
+Light mode installs a `uni` wrapper that runs the repo checkout via
+bun/node, so keep the cloned directory in place.
 
 ### From source (Bun)
 

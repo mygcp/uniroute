@@ -9,8 +9,18 @@ proxy pools, compression, logging, and client-key rules all apply.
 - **Smooth streaming** — SSE deltas are batched per frame (rAF) with a timer
   fallback when the tab is hidden; server-side SSE keep-alive keeps the
   connection from feeling dead during long time-to-first-token.
-- **Live tok/s meter** (chars/4 estimate) and the real value after completion
-  when the provider reports usage.
+- **Thought process** — reasoning models stream their thinking into a
+  collapsible block (open while thinking, labelled "Thought process" once
+  content starts); it is saved per message and re-rendered on reload.
+- **Always-visible tok/s meter** — shown during and after each answer; uses
+  official `usage.completion_tokens` when the provider reports it, otherwise
+  a chars/4 estimate marked `(est.)`.
+- **Copy buttons** — full-response copy on every assistant message plus a
+  Copy button on each fenced code block (flips to "Copied" briefly).
+- **Elapsed time + 24h finish clock** — each answer shows duration (`2.1s`)
+  and the finished-at time (`14:03:22`).
+- **Layout** — assistant messages are full-width; user messages are a
+  right-aligned bubble.
 - **Multi-turn** — full history is sent to the model; Stop aborts the stream;
   Enter sends, Shift+Enter inserts a newline.
 - **Markdown + syntax highlighting** in answers (fenced code, inline code,

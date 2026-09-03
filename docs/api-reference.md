@@ -31,6 +31,22 @@ Common codes: 400 invalid body · 401/403 auth/guard · 404 model/provider not
 found · 429 rate limit/concurrency · 502 upstream failure. Upstream 5xx is
 retried once; **the 120s timeout is not retried**.
 
+## Reasoning passthrough
+
+Thinking/reasoning output is forwarded separately from the answer text,
+translated into each client format:
+
+| Client format | Streaming | Non-streaming |
+| --- | --- | --- |
+| OpenAI Chat | `choices[0].delta.reasoning_content` (DeepSeek/OpenRouter convention) | `message.reasoning_content` |
+| Anthropic | `thinking` content block + `thinking_delta` deltas | `thinking` content block |
+| OpenAI Responses | `reasoning_summary_text.delta` | `reasoning` output item with `summary_text` |
+
+Cross-format responses carry reasoning as `message.reasoning_content`
+(openai-chat), a `thinking` block (anthropic), or a `reasoning` summary
+item (responses). Same-format `openai` → `openai-chat` responses pass
+through untouched, preserving any upstream `reasoning_content` as-is.
+
 ## Media passthrough
 
 | Endpoint | Body | Response |

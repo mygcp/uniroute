@@ -47,9 +47,9 @@ used is logged (`via_proxy`, `proxy_id`) and its health is updated.
 | `routing_rules`, `model_allowlist` | Model rewrite/fallback, guard |
 | `client_api_keys`, `key_usage_daily` | Client keys + quota/budget/scopes |
 | `outbound_proxies`, `proxy_pools`, `proxy_pool_assignments` | Proxy engine (strategy per pool) |
-| `request_logs` | One row per request — status, duration, tokens (in/out/cached), transport (via_proxy/proxy_id), endpoint, TLS |
-| `proxy_logs` | Operational egress/auth/compressor events — client_ip, api_key_id, provider, proxy_id, latency |
-| `chat_sessions`, `chat_messages` | Saved Chat Playground conversations |
+| `request_logs` | One row per request — status, duration, tokens (in/out/cached), transport (via_proxy/proxy_id), endpoint, TLS, rule |
+| `proxy_logs` | Operational egress/auth/compressor events — client_ip, api_key_id, provider, proxy_id, latency, endpoint |
+| `chat_sessions`, `chat_messages` | Saved Chat Playground conversations (messages keep `thinking` for reasoning models) |
 | `settings` | Internal KV (global pool id, reveal toggle, etc.) |
 
 Hot indexes are created automatically for the most-used filter/group columns

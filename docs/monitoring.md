@@ -20,6 +20,7 @@ Fixed columns per row: time · status · model · provider · source ·
 | prompt/completion/cached/total tokens | split per category |
 | est_cost | cost estimate from the pricing table |
 | api_key | client key used (label + id) |
+| rule_applied | routing rule applied (rewrite/fallback target) |
 
 Filters: model, provider, status, source, transport (proxy/direct), plus
 free-text search (errors/rules).
@@ -37,8 +38,9 @@ message & metadata.
 Range day/week/month/year/all:
 
 - Summary cards: **Total · Input · Output · Cache Tokens**, Est. Cost,
-  Requests (+ trend % vs previous period)
-- Time series & breakdowns per provider/model/key
+  Requests (+ trend % vs previous period), **Latency p95** (with p50 subline)
+- Time series & breakdowns per provider/model/key, plus a success-rate
+  trend chart and a "More stats" popover (token split, p95 latency)
 - Top error messages
 
 Cached tokens come from official provider usage (OpenAI

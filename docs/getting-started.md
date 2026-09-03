@@ -2,12 +2,40 @@
 
 ## 1. Install
 
+Pick one:
+
+**Binary (recommended, Linux/macOS):**
+
 ```bash
-bun install
+curl -fsSL https://raw.githubusercontent.com/mygcp/uniroute/main/install.sh | sh
+uni doctor
 ```
 
-Runtime: **Bun** for production. The dev server also runs on Node via Vite,
-but some modules (e.g. SQLite) pick the Bun driver when available.
+**From source (needs [Bun](https://bun.sh)):**
+
+```bash
+bun install
+bun run build && bun run start   # production on PORT (default 3000)
+# or: bun run dev                # development (http://localhost:5173)
+# or via CLI source: bun cli/uni.ts start --daemon
+```
+
+**Light mode (no binary — runs the repo checkout via bun/node):**
+
+```bash
+git clone https://github.com/mygcp/uniroute uniroute
+cd uniroute && bun install && bun run build
+curl -fsSL https://raw.githubusercontent.com/mygcp/uniroute/main/install.sh | sh -s -- --light
+```
+
+**Termux / Android:** the standalone `uni-*` binaries are built with
+`bun build --compile` and need glibc, so they do NOT run directly on Termux
+(Bionic libc — `cannot execute: required file not found` means the ELF
+interpreter is missing, not a corrupt download). The installer detects
+Termux and refuses; use either (a) `pkg install proot-distro &&
+proot-distro install ubuntu`, then run the binary installer inside Ubuntu,
+or (b) light mode from source with node (`pkg install nodejs git`, clone,
+`npm ci`, `npm run build`, installer with `--light`). See README.
 
 ## 2. Configuration
 
@@ -33,19 +61,21 @@ Full list: [configuration.md](configuration.md).
 ## 3. Run
 
 ```bash
-bun run dev      # development (http://localhost:5173)
-# or production:
-bun run build && bun run start   # http://localhost:3000
+uni start --daemon --port 3000   # binary or light wrapper
+uni status && uni logs -f
+# from source without installing: bun run build && bun run start
 ```
 
-Open the dashboard and log in with `PASSWORD`.
+Open the dashboard (`http://localhost:3000`, or `:5173` for `bun run dev`)
+and log in with `PASSWORD`.
 
 ## 4. Add a provider and API key
 
 1. **Providers** page → pick a template or create one manually (id + base URL).
 2. Open the provider detail → **API Keys** tab → add an upstream key.
 3. **Models** tab → **Sync models** to pull the catalog from upstream,
-   then mark one model as *primary*.
+   then mark one model as *primary*. You can also set a custom display
+   name per model (surfaced via `/v1/models`).
 
 An active provider without keys can still be selected for routing, but
 requests to authenticated providers (`bearer`/`apikey`) will fail — add at
@@ -63,6 +93,10 @@ curl http://localhost:3000/v1/chat/completions \
 ```
 
 Client API keys are created in **API Manager** (not upstream keys).
+Keys support quotas, budgets, expiry, and rotation.
+
+Optional: assign an outbound proxy pool per client key, account, combo,
+or provider ([Proxy Engine](proxy-engine.md)).
 
 ## 6. Monitor
 
