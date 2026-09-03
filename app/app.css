@@ -231,6 +231,22 @@ body {
   animation: toast-out 0.25s ease-in forwards;
 }
 
+/* Toast countdown ring (SVG circle pathLength=100): full → empty. */
+@keyframes toast-ring {
+  from {
+    stroke-dashoffset: 0;
+  }
+  to {
+    stroke-dashoffset: 100;
+  }
+}
+.animate-toast-ring {
+  stroke-dasharray: 100;
+  animation-name: toast-ring;
+  animation-timing-function: linear;
+  animation-fill-mode: forwards;
+}
+
 /* Dialog pop-in (backdrop fade + scale) */
 @keyframes dialog-in {
   from {
@@ -314,6 +330,36 @@ body {
   border: 1px solid var(--color-border);
 }
 .md-body .md-pre code { background: transparent; padding: 0; font-size: 0.8em; }
+/* Code-block copy bar (injected in HTML string — always in sync, no flicker) */
+.md-body .md-copybar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.md-body .md-copybar-lang {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  opacity: 0.6;
+}
+.md-body .md-copybar-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 32px;
+  min-height: 32px;
+  padding: 0 8px;
+  font-size: 12px;
+  border-radius: 6px;
+  border: 1px solid var(--color-border);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+.md-body .md-copybar-btn:hover {
+  background: var(--color-muted);
+}
 .md-body .md-quote {
   margin: 0.4rem 0;
   padding-left: 0.75rem;

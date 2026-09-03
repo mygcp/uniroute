@@ -31,6 +31,27 @@ describe("openai → openai-chat", () => {
     expect(t.done?.()).toBe(true);
     expect(dec.decode(t.terminate?.() ?? new Uint8Array(0))).toBe("");
   });
+
+  test("forwards reasoning_content deltas separately from content", () => {
+    const t = composeStreamTransformer("openai", "openai-chat");
+    const out = runAll(t, [
+      'data: {"choices":[{"delta":{"reasoning_content":"let me think"},"index":0}]}\n\n',
+      'data: {"choices":[{"delta":{"content":"hi"},"index":0}]}\n\n',
+      'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n',
+      "data: [DONE]\n\n",
+    ]);
+    expect(out).toContain('"reasoning_content":"let me think"');
+    expect(out).toContain('"content":"hi"');
+  });
+
+  test("forwards OpenRouter-style reasoning deltas", () => {
+    const t = composeStreamTransformer("openai", "openai-chat");
+    const out = runAll(t, [
+      'data: {"choices":[{"delta":{"reasoning":"hmm"},"index":0}]}\n\n',
+      "data: [DONE]\n\n",
+    ]);
+    expect(out).toContain('"reasoning_content":"hmm"');
+  });
 });
 
 describe("openai → openai-responses", () => {
@@ -61,6 +82,18 @@ describe("anthropic → anthropic", () => {
     expect(out).toContain('"stop_reason":"end_turn"');
     expect(out).toContain('"type":"message_stop"');
     expect(t.done?.()).toBe(true);
+  });
+
+  test("maps thinking blocks to thinking deltas", () => {
+    const t = composeStreamTransformer("anthropic", "anthropic");
+    const out = runAll(t, [
+      'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}\n\n',
+      'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"hmm"}}\n\n',
+      'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+    ]);
+    expect(out).toContain('"type":"thinking"');
+    expect(out).toContain('"type":"thinking_delta","thinking":"hmm"');
+    expect(out).not.toContain('"type":"text_delta"');
   });
 });
 

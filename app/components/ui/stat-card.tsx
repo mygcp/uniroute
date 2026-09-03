@@ -30,7 +30,7 @@ export function StatCard({
         : "text-danger";
 
   return (
-    <div className="glass-panel p-5 transition hover:-translate-y-0.5 hover:border-primary/30">
+    <div className="glass-panel p-4 transition hover:-translate-y-0.5 hover:border-primary/30 sm:p-5">
       <div className="mb-3 flex items-center justify-between">
         <div className={`h-1 w-10 rounded-full ${accent}`} />
         {icon ? <span className="text-muted-foreground">{icon}</span> : null}

@@ -52,6 +52,22 @@ export type BreakdownEntry = {
   pct: number;
 };
 
+export type LatencyStats = {
+  p50: number;
+  p95: number;
+};
+
+export type ModelInsight = {
+  model: string;
+  providers: string[];
+  requests: number;
+  tokens: number;
+  cost: number;
+  errors: number;
+  errorRate: number;
+  avgTokensPerReq: number;
+};
+
 export type UsageData = {
   summary: UsageSummary;
   performance: Performance;
@@ -59,6 +75,12 @@ export type UsageData = {
   errors: Errors;
   timeSeries: TimeSeriesPoint[];
   breakdown: BreakdownEntry[];
+  /** Success-rate (%) per time bucket — backs the success-trend toggle. */
+  successTrend: TimeSeriesPoint[];
+  /** p50/p95 of duration_ms for the range (0 when no samples). */
+  latency: LatencyStats;
+  /** Per-model aggregates (top 10 by cost) for drilldown tables. */
+  modelInsights: ModelInsight[];
   range: TimeRange;
   metric: Metric;
   dimension: Dimension;
@@ -428,8 +450,92 @@ export function getUsageData(opts: {
     errors: _queryErrors(range),
     timeSeries: _queryTimeSeries(range, metric),
     breakdown: _queryBreakdown(range, metric, dimension),
+    successTrend: _querySuccessTrend(range),
+    latency: _queryLatency(range),
+    modelInsights: _queryModelInsights(range),
     range,
     metric,
     dimension,
   };
+}
+
+function _queryLatency(range: TimeRange): LatencyStats {
+  const [fromTs, toTs] = rangeBounds(range);
+  const rows = query(
+    `SELECT duration_ms AS d
+       FROM request_logs
+      WHERE created_at >= ? AND created_at < ?
+        AND duration_ms IS NOT NULL
+      ORDER BY d`,
+  ).all(fromTs, toTs) as { d: number }[];
+  if (rows.length === 0) return { p50: 0, p95: 0 };
+  const pick = (p: number): number =>
+    Math.round(Number(rows[Math.min(rows.length - 1, Math.ceil(p * rows.length) - 1)].d));
+  return { p50: pick(0.5), p95: pick(0.95) };
+}
+
+function _querySuccessTrend(range: TimeRange): TimeSeriesPoint[] {
+  const [fromTs, toTs] = rangeBounds(range);
+  const dtExpr = dateExpr(range);
+  const rows = query(
+    `SELECT ${dtExpr} AS dt,
+            COUNT(*) AS c,
+            COALESCE(SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END), 0) AS ok
+       FROM request_logs
+      WHERE created_at >= ? AND created_at < ?
+      GROUP BY dt ORDER BY dt`,
+  ).all(fromTs, toTs) as { dt: string; c: number; ok: number }[];
+  return rows.map((r) => {
+    const total = Number(r.c);
+    const ok = Number(r.ok);
+    return {
+      label: shortLabel(r.dt, range),
+      labelFull: r.dt,
+      value: total ? Math.round((ok / total) * 1000) / 10 : 0,
+    };
+  });
+}
+
+function _queryModelInsights(range: TimeRange): ModelInsight[] {
+  const [fromTs, toTs] = rangeBounds(range);
+  const rows = query(
+    `SELECT model, provider_id, prompt_tokens, completion_tokens, status
+       FROM request_logs
+      WHERE created_at >= ? AND created_at < ?`,
+  ).all(fromTs, toTs) as Record<string, unknown>[];
+  const priceOf = priceLookup(rows);
+  const map = new Map<
+    string,
+    { providers: Set<string>; requests: number; tokens: number; cost: number; errors: number }
+  >();
+  for (const r of rows) {
+    const model = String(r.model ?? "unknown");
+    let entry = map.get(model);
+    if (!entry) {
+      entry = { providers: new Set(), requests: 0, tokens: 0, cost: 0, errors: 0 };
+      map.set(model, entry);
+    }
+    entry.providers.add(String(r.provider_id ?? "unknown"));
+    entry.requests += 1;
+    entry.tokens += Number(r.prompt_tokens ?? 0) + Number(r.completion_tokens ?? 0);
+    entry.cost += computeCost(
+      r.prompt_tokens as number | null,
+      r.completion_tokens as number | null,
+      priceOf(r.model, r.provider_id),
+    );
+    if (r.status !== "success") entry.errors += 1;
+  }
+  return Array.from(map.entries())
+    .map(([model, e]) => ({
+      model,
+      providers: Array.from(e.providers).sort(),
+      requests: e.requests,
+      tokens: e.tokens,
+      cost: Math.round(e.cost * 1_000_000) / 1_000_000,
+      errors: e.errors,
+      errorRate: e.requests ? Math.round((e.errors / e.requests) * 100) : 0,
+      avgTokensPerReq: e.requests ? Math.round(e.tokens / e.requests) : 0,
+    }))
+    .sort((a, b) => b.cost - a.cost)
+    .slice(0, 10);
 }

@@ -54,7 +54,7 @@ export function renderMarkdown(
 				const highlighted =
 					opts?.highlight?.(code, codeLang || undefined) ?? code;
 				html.push(
-					`<pre class="md-pre"><code class="hljs">${highlighted}</code></pre>`,
+					`<pre class="md-pre" data-lang="${escapeHtml(codeLang)}"><code class="hljs">${highlighted}</code></pre>`,
 				);
 				codeBuf = [];
 				inCode = false;
@@ -113,7 +113,7 @@ export function renderMarkdown(
 		const code = escapeHtml(codeBuf.join("\n"));
 		const highlighted = opts?.highlight?.(code, codeLang || undefined) ?? code;
 		html.push(
-			`<pre class="md-pre"><code class="hljs">${highlighted}</code></pre>`,
+			`<pre class="md-pre" data-lang="${escapeHtml(codeLang)}"><code class="hljs">${highlighted}</code></pre>`,
 		);
 	}
 	closeList();

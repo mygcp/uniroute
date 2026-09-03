@@ -1,5 +1,5 @@
 import { Form } from "react-router";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Route } from "./+types/api-manager.groups";
 import { Users, Trash2, Plus } from "lucide-react";
 import {
@@ -20,6 +20,7 @@ import { Input, Label, Checkbox } from "../components/ui/field";
 import { EmptyState } from "../components/ui/empty-state";
 import { UsageBar } from "../components/ui/usage-bar";
 import { useConfirm } from "../components/ui/confirm-dialog";
+import { useToast } from "../components/ui/toast";
 
 export function loader() {
 	const keys = listClientKeys().map((k) => ({
@@ -46,8 +47,9 @@ export async function action({ request }: Route.ActionArgs) {
 	};
 
 	if (intent === "create") {
+		const name = String(form.get("name") ?? "").trim();
 		createGroup(
-			String(form.get("name") ?? "").trim(),
+			name,
 			String(form.get("description") ?? "").trim() || null,
 			{
 				monthly_budget: num("budget"),
@@ -58,11 +60,11 @@ export async function action({ request }: Route.ActionArgs) {
 				.map((s) => Number(s))
 				.filter((n) => n > 0),
 		);
-		return null;
+		return { notice: { ok: true, message: `Group "${name}" created` } };
 	}
 	if (intent === "delete") {
 		deleteGroup(Number(form.get("id")));
-		return null;
+		return { notice: { ok: true, message: "Group deleted" } };
 	}
 	if (intent === "update") {
 		updateGroup(Number(form.get("id")), {
@@ -71,7 +73,7 @@ export async function action({ request }: Route.ActionArgs) {
 				tokens_per_month: num("tokens"),
 			},
 		});
-		return null;
+		return { notice: { ok: true, message: "Group updated" } };
 	}
 	if (intent === "members") {
 		const gid = Number(form.get("id"));
@@ -80,14 +82,33 @@ export async function action({ request }: Route.ActionArgs) {
 			.map((s) => Number(s))
 			.filter((n) => n > 0);
 		setGroupMembers(gid, memberIds);
-		return null;
+		return { notice: { ok: true, message: "Group members saved" } };
 	}
 	return null;
 }
 
-export default function Groups({ loaderData }: Route.ComponentProps) {
+export default function Groups({ loaderData, actionData }: Route.ComponentProps) {
 	const { keys, groups } = loaderData;
 	const [creating, setCreating] = useState(false);
+	const notice = (
+		actionData as { notice?: { ok: boolean; message: string } } | undefined
+	)?.notice;
+	const { toast } = useToast();
+	const lastNoticeRef = useRef<{ ok: boolean; message: string } | undefined>(
+		undefined,
+	);
+	useEffect(() => {
+		if (notice === lastNoticeRef.current) return;
+		lastNoticeRef.current = notice;
+		if (notice) {
+			toast({
+				title: notice.ok ? "Done" : "Action failed",
+				description: notice.message,
+				variant: notice.ok ? "success" : "error",
+			});
+		}
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [notice]);
 
 	return (
 		<div className="mx-auto max-w-4xl">

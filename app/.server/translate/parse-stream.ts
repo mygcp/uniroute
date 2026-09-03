@@ -32,6 +32,15 @@ function parseOpenAi(json: Record<string, unknown>): CanonicalStreamEvent | null
   if (typeof delta.content === "string") {
     return { type: "content_delta", text: delta.content };
   }
+  // Reasoning/thinking deltas (DeepSeek-style `reasoning_content`,
+  // OpenRouter-style `reasoning`) — diteruskan sebagai event sendiri agar
+  // bisa ditampilkan terpisah dari jawaban.
+  if (typeof delta.reasoning_content === "string" && delta.reasoning_content !== "") {
+    return { type: "reasoning_delta", text: delta.reasoning_content };
+  }
+  if (typeof delta.reasoning === "string" && delta.reasoning !== "") {
+    return { type: "reasoning_delta", text: delta.reasoning };
+  }
   if (Array.isArray(delta.tool_calls)) {
     const tc = delta.tool_calls[0] as Record<string, unknown> | undefined;
     if (tc) {
@@ -130,6 +139,7 @@ function parseAnthropic(json: Record<string, unknown>): CanonicalStreamEvent | n
         arguments: "",
       };
     }
+    if (block.type === "thinking") return { type: "reasoning_start" };
     return { type: "content_start" };
   }
   if (type === "content_block_delta") {
@@ -137,6 +147,10 @@ function parseAnthropic(json: Record<string, unknown>): CanonicalStreamEvent | n
     if (delta.type === "text_delta" && typeof delta.text === "string") {
       return { type: "content_delta", text: delta.text };
     }
+    if (delta.type === "thinking_delta" && typeof delta.thinking === "string") {
+      return { type: "reasoning_delta", text: delta.thinking };
+    }
+    // signature_delta hanya untuk validasi API Anthropic — tidak ditampilkan.
     if (delta.type === "input_json_delta" && typeof delta.partial_json === "string") {
       return { type: "tool_calls_delta", arguments: delta.partial_json };
     }
@@ -177,6 +191,10 @@ function parseGemini(json: Record<string, unknown>): CanonicalStreamEvent | null
   const parts = Array.isArray(content.parts) ? content.parts : [];
   for (const raw of parts) {
     const part = raw as Record<string, unknown>;
+    // Thought parts (Gemini thinking) — pisahkan dari jawaban.
+    if (part.thought === true && typeof part.text === "string") {
+      return { type: "reasoning_delta", text: part.text };
+    }
     if (typeof part.text === "string") {
       return { type: "content_delta", text: part.text };
     }

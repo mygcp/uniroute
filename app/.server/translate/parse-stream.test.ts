@@ -55,6 +55,24 @@ describe("parseFrame openai", () => {
   test("done marker", () => {
     expect(parseFrame("openai", "[DONE]")).toEqual({ type: "done" });
   });
+
+  test("reasoning_content delta", () => {
+    const ev = parseFrame("openai", '{"choices":[{"delta":{"reasoning_content":"hmm"},"index":0}]}');
+    expect(ev).toEqual({ type: "reasoning_delta", text: "hmm" });
+  });
+
+  test("OpenRouter-style reasoning delta", () => {
+    const ev = parseFrame("openai", '{"choices":[{"delta":{"reasoning":"hmm"},"index":0}]}');
+    expect(ev).toEqual({ type: "reasoning_delta", text: "hmm" });
+  });
+
+  test("content wins over reasoning in the same delta", () => {
+    const ev = parseFrame(
+      "openai",
+      '{"choices":[{"delta":{"content":"hi","reasoning_content":"hmm"},"index":0}]}',
+    );
+    expect(ev).toEqual({ type: "content_delta", text: "hi" });
+  });
 });
 
 describe("parseFrame anthropic", () => {
@@ -96,6 +114,25 @@ describe("parseFrame anthropic", () => {
     });
     expect(parseFrame("anthropic", '{"type":"message_stop"}')).toEqual({ type: "done" });
   });
+
+  test("thinking block start and thinking_delta", () => {
+    const start = parseFrame(
+      "anthropic",
+      '{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}',
+    );
+    expect(start).toEqual({ type: "reasoning_start" });
+    const delta = parseFrame(
+      "anthropic",
+      '{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"hmm"}}',
+    );
+    expect(delta).toEqual({ type: "reasoning_delta", text: "hmm" });
+    expect(
+      parseFrame(
+        "anthropic",
+        '{"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"abc"}}',
+      ),
+    ).toBeNull();
+  });
 });
 
 describe("parseFrame gemini", () => {
@@ -105,6 +142,14 @@ describe("parseFrame gemini", () => {
       '{"candidates":[{"content":{"parts":[{"text":"hey"}]}}]}',
     );
     expect(ev).toEqual({ type: "content_delta", text: "hey" });
+  });
+
+  test("thought part", () => {
+    const ev = parseFrame(
+      "gemini",
+      '{"candidates":[{"content":{"parts":[{"text":"hmm","thought":true}]}}]}',
+    );
+    expect(ev).toEqual({ type: "reasoning_delta", text: "hmm" });
   });
 
   test("functionCall part", () => {

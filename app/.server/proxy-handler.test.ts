@@ -93,11 +93,41 @@ describe("proxy-handler validation", () => {
     setRequireApiKey(false);
   });
 
-  test("returns 404 for model not in provider pool", async () => {
+  test("returns 404 for unknown model", async () => {
     setRequireApiKey(false);
-    const res = await post({ model: "gpt-4o", messages: [{ role: "user", content: "hi" }] });
+    const res = await post({ model: "zzz-no-such-model", messages: [{ role: "user", content: "hi" }] });
     expect(res.status).toBe(404);
     const body = await res.json();
     expect(body.error.message).toBe("model not found");
+    expect(body.error.type).toBe("model_not_found");
+  });
+
+  test("returns 404 provider_disabled for model on disabled provider", async () => {
+    setRequireApiKey(false);
+    // seed menaruh gpt-4o di provider yang semuanya nonaktif
+    const res = await post({ model: "gpt-4o", messages: [{ role: "user", content: "hi" }] });
+    expect(res.status).toBe(404);
+    const body = await res.json();
+    expect(body.error.type).toBe("provider_disabled");
+    expect(body.error.message).toContain("is disabled");
+    expect(body.error.message).toContain("gpt-4o");
+  });
+
+  test("returns 404 model_disabled for disabled model on active provider", async () => {
+    const db = await import("./db");
+    const reg = await import("./registry");
+    db.query(
+      "INSERT INTO providers (id, name, base_url, auth_type, is_active, weight, priority) VALUES ('p-off-test', 'OffTest', 'https://x', 'bearer', 1, 1, 0)",
+    ).run();
+    db.query(
+      "INSERT INTO models (model_name, provider_id, context_length, is_active, is_primary) VALUES ('m-off-test', 'p-off-test', 1000, 0, 0)",
+    ).run();
+    reg.reload();
+    setRequireApiKey(false);
+    const res = await post({ model: "m-off-test", messages: [{ role: "user", content: "hi" }] });
+    expect(res.status).toBe(404);
+    const body = await res.json();
+    expect(body.error.type).toBe("model_disabled");
+    expect(body.error.message).toBe("model 'm-off-test' is disabled");
   });
 });

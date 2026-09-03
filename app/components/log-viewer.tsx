@@ -1,6 +1,9 @@
 import { memo, type ReactNode } from "react";
+import { Inbox } from "lucide-react";
 import type { LogEvent } from "../hooks/use-realtime-logs";
 import { Badge } from "./ui/badge";
+import { Button } from "./ui/button";
+import { EmptyState } from "./ui/empty-state";
 
 type Props = {
   logs: LogEvent[];
@@ -39,6 +42,7 @@ export function LogViewer({
   paused,
   onTogglePause,
   connected,
+  type,
   scrollRef,
   emptyMessage,
   renderRow,
@@ -52,7 +56,7 @@ export function LogViewer({
         </div>
       ) : null}
 
-      <div className="flex h-[calc(100vh-330px)] flex-col rounded-xl border border-border bg-surface shadow-sm sm:h-[calc(100vh-290px)]">
+      <div className="flex h-[55vh] flex-col rounded-xl border border-border bg-surface shadow-sm sm:h-[calc(100vh-290px)]">
         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-3 py-2">
           <div className="flex items-center gap-2 sm:gap-3">
             <span className="text-sm font-medium text-muted-foreground">
@@ -68,22 +72,25 @@ export function LogViewer({
               {paused ? "paused" : "live"}
             </Badge>
           </div>
-          <button
+          <Button
             type="button"
+            variant="secondary"
+            size="sm"
             onClick={onTogglePause}
             aria-label={paused ? "Resume" : "Pause"}
-            className="rounded-lg border border-border px-3 py-1 text-sm font-medium text-foreground hover:bg-muted"
           >
             {paused ? "Resume" : "Pause"}
-          </button>
+          </Button>
         </div>
 
         <div ref={scrollRef} className="flex-1 overflow-y-auto px-2 py-1.5 sm:px-3">
           {headerRows}
           {logs.length === 0 && !headerRows ? (
-            <p className="py-10 text-center text-sm text-muted-foreground">
-              {emptyMessage}
-            </p>
+            <EmptyState
+              icon={<Inbox size={20} />}
+              title={type === "request" ? "No request logs" : "No proxy logs"}
+              description={emptyMessage}
+            />
           ) : (
             logs.map((log) => (
               <RowSlot key={keyOf(log)} render={renderRow} log={log} />

@@ -1,11 +1,15 @@
-import { Spinner } from "./ui/feedback";
+import { useEffect, useMemo, useRef } from "react";
+import { Brain, Spinner } from "./ui/feedback";
 import { Markdown } from "./markdown";
+import { estimateTps, formatClock, formatSecs } from "../lib/format";
 
 type Props = {
   content: string;
   streaming: boolean;
   done: boolean;
   error: string;
+  /** Progressive thinking/reasoning output (model yang berpikir). */
+  thinking?: string;
   /** Waktu berjalan (ms) — dipakai untuk tok/s live. */
   latencyMs?: number | null;
   /** Usage resmi dari chunk akhir (bila provider mengirim). */
@@ -15,25 +19,43 @@ type Props = {
 };
 
 /**
- * Bubble asisten: markdown + caret streaming + meter tok/s.
- * Saat streaming → estimasi (chars/4 ÷ detik); setelah selesai & ada usage
- * resmi → token output sebenarnya.
+ * Bubble asisten: thought block (collapsible) + markdown + caret streaming
+ * + meter tok/s yang SELALU tampil (estimasi bila tanpa usage resmi) +
+ * durasi & jam selesai (24h).
  */
 export function StreamingResponse({
   content,
   streaming,
   done,
   error,
+  thinking = "",
   latencyMs,
   usage,
 }: Props) {
-  const elapsedSec = latencyMs != null ? latencyMs / 1000 : null;
-  let tps: number | null = null;
-  if (streaming && content.length > 0 && elapsedSec && elapsedSec > 0.2) {
-    tps = Math.round(content.length / 4 / elapsedSec);
-  } else if (!streaming && done && usage?.completion_tokens && elapsedSec) {
-    tps = Math.round(usage.completion_tokens / elapsedSec);
-  }
+  const endRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (streaming) endRef.current = null;
+    else if (done && endRef.current == null) endRef.current = Date.now();
+  }, [streaming, done]);
+
+  // useMemo: meter O(1) ini tidak boleh menambah biaya render per chunk.
+  const meter = useMemo(() => {
+    const secs = formatSecs(latencyMs);
+    let tps: number | null = null;
+    let tpsEstimated = false;
+    if (usage?.completion_tokens && latencyMs && latencyMs > 200) {
+      tps = Math.round(usage.completion_tokens / (latencyMs / 1000));
+    } else {
+      tps = estimateTps(content.length, latencyMs);
+      tpsEstimated = tps != null;
+    }
+    return { secs, tps, tpsEstimated };
+  }, [content.length, latencyMs, usage?.completion_tokens]);
+  const { secs, tps, tpsEstimated } = meter;
+
+  const clock = !streaming && done ? formatClock(endRef.current) : null;
+  const thinkingOpen = streaming && content === "" && thinking !== "";
+  const showMeter = !error && (streaming || done);
 
   return (
     <div className="min-w-0 flex-1">
@@ -43,28 +65,45 @@ export function StreamingResponse({
         </div>
       ) : (
         <>
+          {thinking !== "" ? (
+            <details
+              open={thinkingOpen || undefined}
+              className="mb-2 rounded-lg border border-info/25 bg-info/5 px-2.5 py-1.5"
+            >
+              <summary className="flex cursor-pointer items-center gap-1.5 text-xs font-medium text-info">
+                <Brain size={12} />
+                {streaming && content === "" ? "Thinking…" : "Thought process"}
+              </summary>
+              <div className="mt-1.5 max-h-48 overflow-y-auto text-xs leading-relaxed whitespace-pre-wrap break-words text-muted-foreground">
+                {thinking}
+              </div>
+            </details>
+          ) : null}
           <Markdown text={content} />
           {streaming ? (
             <span className="ml-0.5 inline-block h-4 w-[2px] animate-pulse bg-primary align-text-bottom" />
           ) : null}
         </>
       )}
-      {(tps != null || (streaming && content === "")) && (
-        <p
-          className={`mt-1 flex items-center gap-2 text-[11px] tabular-nums ${
-            streaming ? "text-muted-foreground" : "text-success"
-          }`}
-        >
-          {streaming && content === "" ? (
-            <>
+      {showMeter && (
+        <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs tabular-nums text-muted-foreground">
+          {streaming && content === "" && thinking === "" ? (
+            <span className="flex items-center gap-1.5">
               <Spinner size={12} /> thinking…
-            </>
-          ) : null}
-          {tps != null ? (
-            <span title={streaming ? "estimated" : "actual"}>
-              ≈ {tps} tok/s{!streaming ? ` · ${usage?.completion_tokens ?? "—"} out` : ""}
             </span>
           ) : null}
+          {secs != null ? <span title="elapsed">{secs}</span> : null}
+          {tps != null ? (
+            <span title={tpsEstimated ? "estimated" : "actual"}>
+              ≈ {tps} tok/s{tpsEstimated ? " (est.)" : ""}
+              {!streaming && usage?.completion_tokens
+                ? ` · ${usage.completion_tokens} out`
+                : ""}
+            </span>
+          ) : (
+            <span>measuring…</span>
+          )}
+          {clock ? <span title="finished at">· {clock}</span> : null}
         </p>
       )}
     </div>

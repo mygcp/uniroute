@@ -14,6 +14,7 @@ export type ChatTurn = { role: "user" | "assistant"; content: string };
  */
 export function useStreaming() {
 	const [response, setResponse] = useState("");
+	const [thinking, setThinking] = useState("");
 	const [usage, setUsage] = useState<Usage | null>(null);
 	const [streaming, setStreaming] = useState(false);
 	const [done, setDone] = useState(false);
@@ -22,6 +23,7 @@ export function useStreaming() {
 
 	// Buffer delta + jadwal flush per frame (fallback timer saat tab hidden).
 	const bufRef = useRef("");
+	const thinkBufRef = useRef("");
 	const rafRef = useRef<number | null>(null);
 	const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 	const clearSchedule = () => {
@@ -32,10 +34,16 @@ export function useStreaming() {
 	};
 	const flush = useCallback(() => {
 		clearSchedule();
-		if (bufRef.current === "") return;
-		const chunk = bufRef.current;
-		bufRef.current = "";
-		setResponse((prev) => prev + chunk);
+		if (bufRef.current !== "") {
+			const chunk = bufRef.current;
+			bufRef.current = "";
+			setResponse((prev) => prev + chunk);
+		}
+		if (thinkBufRef.current !== "") {
+			const chunk = thinkBufRef.current;
+			thinkBufRef.current = "";
+			setThinking((prev) => prev + chunk);
+		}
 	}, []);
 
 	const schedule = useCallback(() => {
@@ -61,10 +69,12 @@ export function useStreaming() {
 		abortRef.current = new AbortController();
 		setStreaming(true);
 		setResponse("");
+		setThinking("");
 		setUsage(null);
 		setError("");
 		setDone(false);
 		bufRef.current = "";
+		thinkBufRef.current = "";
 
 		const messages = [
 			...(opts?.systemPrompt
@@ -95,11 +105,21 @@ export function useStreaming() {
 
 			if (!useStream || !res.body) {
 				const json = (await res.json()) as {
-					choices?: { message?: { content?: string } }[];
+					choices?: {
+						message?: {
+							content?: string;
+							reasoning_content?: string;
+							reasoning?: string;
+						};
+					}[];
 					usage?: Usage;
 				};
 				bufRef.current =
 					json.choices?.[0]?.message?.content ?? JSON.stringify(json);
+				thinkBufRef.current =
+					json.choices?.[0]?.message?.reasoning_content ??
+					json.choices?.[0]?.message?.reasoning ??
+					"";
 				flush();
 				setUsage(json.usage ?? null);
 				setDone(true);
@@ -126,12 +146,26 @@ export function useStreaming() {
 					}
 					try {
 						const parsed = JSON.parse(data) as {
-							choices?: { delta?: { content?: string } }[];
+							choices?: {
+								delta?: {
+									content?: string;
+									reasoning_content?: string;
+									reasoning?: string;
+								};
+							}[];
 							usage?: Usage;
 						};
 						const delta = parsed.choices?.[0]?.delta?.content ?? "";
 						if (delta) {
 							bufRef.current += delta;
+							schedule();
+						}
+						const think =
+							parsed.choices?.[0]?.delta?.reasoning_content ??
+							parsed.choices?.[0]?.delta?.reasoning ??
+							"";
+						if (think) {
+							thinkBufRef.current += think;
 							schedule();
 						}
 						if (parsed.usage) setUsage(parsed.usage);
@@ -159,5 +193,5 @@ export function useStreaming() {
 		abortRef.current?.abort();
 	};
 
-	return { response, usage, streaming, done, error, send, stop };
+	return { response, thinking, usage, streaming, done, error, send, stop };
 }

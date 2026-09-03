@@ -449,6 +449,18 @@ CREATE INDEX IF NOT EXISTS idx_audit_key ON key_audit_logs (key_id, created_at);
 	ensureColumn("proxy_logs", "proxy_id", "proxy_id INTEGER");
 	ensureColumn("proxy_logs", "latency_ms", "latency_ms INTEGER");
 	ensureColumn("proxy_logs", "endpoint", "endpoint TEXT");
+	ensureColumn("providers", "prefix", "prefix TEXT");
+	ensureColumn("models", "display_name", "display_name TEXT");
+	// Migrasi prefix legacy ("openai/" -> "openai"): prefix kini nama saja,
+	// "/" otomatis sebagai separator. Bersihkan sekaligus NULL-kan yang kosong.
+	try {
+		db.exec(
+			"UPDATE providers SET prefix = TRIM(TRIM(prefix), '/') WHERE prefix IS NOT NULL;",
+		);
+		db.exec("UPDATE providers SET prefix = NULL WHERE prefix = '';");
+	} catch {
+		/* tabel providers mungkin belum ada saat fresh init */
+	}
 
 	db.exec(`CREATE TABLE IF NOT EXISTS chat_sessions (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -469,6 +481,8 @@ CREATE TABLE IF NOT EXISTS chat_messages (
 );
 CREATE INDEX IF NOT EXISTS idx_chat_messages_session ON chat_messages (session_id, id);
 CREATE INDEX IF NOT EXISTS idx_chat_sessions_provider ON chat_sessions (provider_id, updated_at);`);
+
+  ensureColumn("chat_messages", "thinking", "thinking TEXT");
 
 
 	ensureColumn("outbound_proxies", "success_count", "success_count INTEGER NOT NULL DEFAULT 0");

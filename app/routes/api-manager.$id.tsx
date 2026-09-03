@@ -1,5 +1,5 @@
 import { Form, Link, redirect } from "react-router";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Route } from "./+types/api-manager.$id";
 import {
 	ArrowLeft,
@@ -41,6 +41,7 @@ import { EmptyState } from "../components/ui/empty-state";
 import { Table, THead, THeadCell, TRow, TCell } from "../components/ui/table";
 import { UsageBar } from "../components/ui/usage-bar";
 import { useConfirm } from "../components/ui/confirm-dialog";
+import { useToast } from "../components/ui/toast";
 import { getStructuredSuggestions } from "../.server/suggest";
 import type { TagSuggestion } from "../.server/suggest";
 import { TagInput } from "../components/ui/tag-input";
@@ -104,8 +105,14 @@ export async function action({ request, params }: Route.ActionArgs) {
 	if (intent === "rotate") {
 		return { newlyRotated: rotateKey(id) };
 	}
-	if (intent === "suspend") suspendKey(id);
-	if (intent === "reactivate") reactivateKey(id);
+	if (intent === "suspend") {
+		suspendKey(id);
+		return { notice: { ok: true, message: `Key #${id} suspended` } };
+	}
+	if (intent === "reactivate") {
+		reactivateKey(id);
+		return { notice: { ok: true, message: `Key #${id} reactivated` } };
+	}
 	if (intent === "delete") {
 		deleteKey(id);
 		return redirect("/api-manager");
@@ -160,7 +167,7 @@ export async function action({ request, params }: Route.ActionArgs) {
 			gracePeriodDays: parseNum(form, "grace_period_days"),
 			webhookUrl: String(form.get("webhook_url") ?? "").trim() || null,
 		});
-		return { updated: true };
+		return { notice: { ok: true, message: "API key updated." } };
 	}
 	return null;
 }
@@ -223,7 +230,25 @@ export default function KeyDetail({
 	const [editing, setEditing] = useState(false);
 	const rotated = (actionData as { newlyRotated?: { key: string } } | undefined)
 		?.newlyRotated;
-	const updated = (actionData as { updated?: boolean } | undefined)?.updated;
+	const notice = (
+		actionData as { notice?: { ok: boolean; message: string } } | undefined
+	)?.notice;
+	const { toast } = useToast();
+	const lastNoticeRef = useRef<{ ok: boolean; message: string } | undefined>(
+		undefined,
+	);
+	useEffect(() => {
+		if (notice === lastNoticeRef.current) return;
+		lastNoticeRef.current = notice;
+		if (notice) {
+			toast({
+				title: notice.ok ? "Done" : "Action failed",
+				description: notice.message,
+				variant: notice.ok ? "success" : "error",
+			});
+		}
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [notice]);
 	const usagePct = budget && budget > 0 ? pct(month.cost, budget) : null;
 	const success = audit.filter((a) => a.action === "REQUEST").length;
 	const errors = health.checks.errors_last_hour;
@@ -329,12 +354,6 @@ export default function KeyDetail({
 					</Button>
 				</Form>
 			</div>
-
-			{updated ? (
-				<div className="mb-4 rounded-lg border border-success/30 bg-success/10 p-3 text-sm text-foreground">
-					API key updated.
-				</div>
-			) : null}
 
 			{editing ? (
 				<EditKeyForm data={key} options={structuredSuggestions} />

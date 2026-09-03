@@ -3,6 +3,7 @@ import { beginConnection, endConnection, selectProvider } from "./balancer";
 import { modelAllowed, type ClientKey } from "./client-key";
 import { listApiKeys, type ApiKeyRow } from "./credential";
 import {
+	comboProxyPoolId,
 	extractUpstreamText,
 	recordComboMetric,
 	type Combo,
@@ -283,6 +284,7 @@ async function executeOneModel(
 	};
 
 	if (stepCanonical.stream) {
+		const comboPoolId = comboProxyPoolId(ctx.combo) ?? undefined;
 		const response = await executeStreaming({
 			url: transformed.url,
 			headers: transformed.headers,
@@ -296,6 +298,7 @@ async function executeOneModel(
 			apiKeyPoolId: ctx.rule
 				? (getPoolForApiKey(ctx.rule.id)?.id ?? undefined)
 				: undefined,
+			comboPoolId,
 			providerPoolId: getPoolForProvider(provider.id)?.id ?? undefined,
 			providerId: provider.id,
 		});
@@ -318,6 +321,7 @@ async function executeOneModel(
 		apiKeyPoolId: ctx.rule
 			? (getPoolForApiKey(ctx.rule.id)?.id ?? undefined)
 			: undefined,
+		comboPoolId: comboProxyPoolId(ctx.combo) ?? undefined,
 		providerPoolId: getPoolForProvider(provider.id)?.id ?? undefined,
 		providerId: provider.id,
 	});

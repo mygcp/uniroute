@@ -46,6 +46,10 @@ export type CanonicalStreamEvent =
     }
   | { type: "content_start" }
   | { type: "content_delta"; text: string }
+  /** Progressive reasoning/thinking output (never mixed into answer text). */
+  | { type: "reasoning_delta"; text: string }
+  /** A thinking block opened (anthropic `thinking` content_block_start). */
+  | { type: "reasoning_start" }
   | {
       type: "tool_calls_delta";
       id?: string;

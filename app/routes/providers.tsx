@@ -1,5 +1,5 @@
-import { Form, Link, Outlet, redirect, useFetcher, useParams } from "react-router";
-import { useEffect, useState } from "react";
+import { Form, Link, Outlet, redirect, useFetcher, useNavigation, useParams } from "react-router";
+import { useEffect, useRef, useState } from "react";
 import type { Route } from "./+types/providers";
 import { ProviderForm } from "../components/provider-form";
 import {
@@ -18,6 +18,7 @@ import { Badge, type BadgeTone } from "../components/ui/badge";
 import { Toggle } from "../components/ui/toggle";
 import { Button } from "../components/ui/button";
 import { Spinner } from "../components/ui/feedback";
+import { useToast } from "../components/ui/toast";
 
 export type ProviderRow = {
   id: string;
@@ -29,6 +30,7 @@ export type ProviderRow = {
   priority: number;
   current_connections: number;
   last_used_at: number;
+  prefix: string | null;
 };
 
 type KeyCountRow = {
@@ -59,7 +61,7 @@ function runAllTests(rows: ProviderRow[], keyCounts: Record<string, number>) {
 
 export function loader() {
   const providers = query(
-    "SELECT id, name, base_url, auth_type, is_active, weight, priority, current_connections, last_used_at FROM providers ORDER BY is_active DESC, id",
+    "SELECT id, name, base_url, auth_type, is_active, weight, priority, current_connections, last_used_at, prefix FROM providers ORDER BY is_active DESC, id",
   ).all() as unknown as ProviderRow[];
   const keyRows = query(
     "SELECT provider_id, COUNT(*) as c FROM provider_credentials WHERE is_active = 1 GROUP BY provider_id",
@@ -81,7 +83,7 @@ export async function action({ request }: Route.ActionArgs) {
 
   if (intent === "test-all") {
     const rows = query(
-      "SELECT id, name, base_url, auth_type, is_active, weight, priority, current_connections, last_used_at FROM providers ORDER BY is_active DESC, id",
+      "SELECT id, name, base_url, auth_type, is_active, weight, priority, current_connections, last_used_at, prefix FROM providers ORDER BY is_active DESC, id",
     ).all() as unknown as ProviderRow[];
     const keyRows = query(
       "SELECT provider_id, COUNT(*) as c FROM provider_credentials WHERE is_active = 1 GROUP BY provider_id",
@@ -107,18 +109,30 @@ export async function action({ request }: Route.ActionArgs) {
   const weight = Number(form.get("weight") ?? 1);
   const priority = Number(form.get("priority") ?? 0);
   const isActive = form.get("is_active") === "1" ? 1 : 0;
+  let prefix: string | null = null;
+  try {
+    const { normalizePrefix } = await import("../.server/provider-prefix");
+    prefix = normalizePrefix(String(form.get("prefix") ?? ""));
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : "invalid prefix" };
+  }
+  // cek duplikat prefix (kecuali null)
+  if (prefix) {
+    const dup = query("SELECT id FROM providers WHERE prefix = ? AND id != ?").get(prefix, id) as { id: string } | undefined;
+    if (dup) return { error: `prefix "${prefix}" sudah dipakai provider ${dup.id}` };
+  }
 
   if (intent === "update") {
     query(
       `UPDATE providers
-       SET name = ?, base_url = ?, auth_type = ?, weight = ?, priority = ?, is_active = ?
+       SET name = ?, base_url = ?, auth_type = ?, weight = ?, priority = ?, is_active = ?, prefix = ?
        WHERE id = ?`,
-    ).run(name, baseUrl, authType, weight, priority, isActive, id);
+    ).run(name, baseUrl, authType, weight, priority, isActive, prefix, id);
   } else {
     query(
-      `INSERT INTO providers (id, name, base_url, auth_type, is_active, weight, priority)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    ).run(id, name, baseUrl, authType, isActive, weight, priority);
+      `INSERT INTO providers (id, name, base_url, auth_type, is_active, weight, priority, prefix)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(id, name, baseUrl, authType, isActive, weight, priority, prefix);
     const templateId = String(form.get("template_id") ?? "");
     const entry = templateId ? getRegistryEntry(templateId) : undefined;
     if (entry && entry.models.length > 0) {
@@ -144,11 +158,67 @@ function AuthBadge({ auth }: { auth: string }) {
   return <Badge tone={AUTH_TONE[auth] ?? "neutral"}>{auth}</Badge>;
 }
 
-export default function Providers({ loaderData }: Route.ComponentProps) {
+export default function Providers({ loaderData, actionData }: Route.ComponentProps) {
   const { providers, keyCounts } = loaderData;
   const [picked, setPicked] = useState<ProviderTemplate | null>(null);
   const { id } = useParams();
   const allFetcher = useFetcher<{ testAll?: Record<string, { connected: number; total: number }> }>();
+  const { toast } = useToast();
+  const navigation = useNavigation();
+
+  // Create/update failures (bad prefix, duplicate prefix) return
+  // { error } which was never rendered — surface it as an error toast.
+  const lastProviderActionRef = useRef<typeof actionData>(undefined);
+  useEffect(() => {
+    if (lastProviderActionRef.current === actionData) return;
+    lastProviderActionRef.current = actionData;
+    const err = (actionData as { error?: unknown } | undefined)?.error;
+    if (typeof err === "string" && err) {
+      toast({
+        title: "Save provider failed",
+        description: err,
+        variant: "error",
+        ...(err.length > 120 ? { durationMs: 8000 } : {}),
+      });
+    }
+  }, [actionData, toast]);
+
+  // Toggle/create/update succeed with a redirect, so there is no payload to
+  // observe. Capture the intent while navigating, then toast once idle. An
+  // error return stays on the page with actionData.error (owned by the effect
+  // above), so the success toast is skipped in that case.
+  type PendingProviderMutation = { intent: string; id: string; name: string };
+  const pendingProviderMutationRef = useRef<PendingProviderMutation | null>(null);
+  if (navigation.state !== "idle" && navigation.formData) {
+    const fd = navigation.formData;
+    const intent = String(fd.get("intent") ?? "");
+    if (intent === "toggle" || intent === "create" || intent === "update") {
+      const pid = String(fd.get("id") ?? "");
+      const known = providers.find((pr) => pr.id === pid);
+      pendingProviderMutationRef.current = {
+        intent,
+        id: pid,
+        name: known?.name || String(fd.get("name") ?? "").trim() || pid,
+      };
+    }
+  }
+  useEffect(() => {
+    if (navigation.state !== "idle") return;
+    const pending = pendingProviderMutationRef.current;
+    if (!pending) return;
+    pendingProviderMutationRef.current = null;
+    if ((actionData as { error?: unknown } | undefined)?.error) return;
+    const fresh = providers.find((pr) => pr.id === pending.id);
+    const display = fresh?.name || pending.name || pending.id;
+    if (pending.intent === "toggle") {
+      const active = Boolean(fresh?.is_active);
+      toast({ title: `Provider "${display}" ${active ? "enabled" : "disabled"}`, variant: "success" });
+    } else if (pending.intent === "create") {
+      toast({ title: `Provider "${display}" created`, variant: "success" });
+    } else if (pending.intent === "update") {
+      toast({ title: `Provider "${display}" updated`, variant: "success" });
+    }
+  }, [navigation.state, toast, providers, actionData]);
 
   // Run the (non-blocking) connection tests after the page renders so the
   // route loads instantly; statuses fill in as each test completes.
@@ -209,7 +279,7 @@ export default function Providers({ loaderData }: Route.ComponentProps) {
             <div className="flex items-start justify-between gap-3">
               <Link to={`/providers/${p.id}`} prefetch="intent" className="block min-w-0">
                 <p className="font-semibold text-foreground">{p.name}</p>
-                <p className="text-xs text-muted-foreground">{p.id}</p>
+                <p className="text-xs text-muted-foreground">{p.id}{p.prefix ? <span className="ml-1 font-mono text-primary"> · {(p.prefix ?? "").replace(/^\/+|\/+$/g, "")}/</span> : null}</p>
               </Link>
               <div className="flex shrink-0 items-center gap-2">
                 <span className="text-xs text-muted-foreground">{p.is_active ? "ON" : "OFF"}</span>

@@ -1,10 +1,11 @@
 import { Form, redirect, Link } from "react-router";
 import type { Route } from "./+types/proxies.create";
 import { createProxy } from "../.server/outbound-proxy";
-import { Button } from "../components/ui/button";
+import { Button, buttonClass } from "../components/ui/button";
 import { Card } from "../components/ui/card";
 import { Checkbox, Input, Label, Select } from "../components/ui/field";
 import { PageHeader } from "../components/ui/page-header";
+import { Plug } from "lucide-react";
 
 export function meta() {
 	return [{ title: "New Proxy — UniRoute" }];
@@ -29,12 +30,12 @@ export default function CreateProxy() {
 		<div className="mx-auto max-w-xl">
 			<PageHeader
 				title="New Proxy"
-				icon={<p className="text-2xl">✦</p>}
+				icon={<Plug size={20} />}
 				actions={
 					<Link
 						to="/proxies"
 						prefetch="render"
-						className="inline-flex h-8 items-center justify-center rounded-lg px-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+						className={buttonClass("ghost", "sm")}
 					>
 						Back
 					</Link>
@@ -59,7 +60,7 @@ export default function CreateProxy() {
 							<option value="socks5">SOCKS5</option>
 						</Select>
 					</div>
-					<div className="grid grid-cols-3 gap-3">
+					<div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
 						<div className="col-span-2">
 							<Label htmlFor="host">Host</Label>
 							<Input
@@ -83,7 +84,7 @@ export default function CreateProxy() {
 							/>
 						</div>
 					</div>
-					<div className="grid grid-cols-2 gap-3">
+					<div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
 						<div>
 							<Label htmlFor="username">Username (optional)</Label>
 							<Input id="username" name="username" autoComplete="off" />
@@ -107,7 +108,7 @@ export default function CreateProxy() {
 						<Link
 							to="/proxies"
 							prefetch="render"
-							className="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-border px-4 text-sm font-medium text-foreground transition-colors hover:bg-muted"
+							className={buttonClass("outline", "md")}
 						>
 							Cancel
 						</Link>

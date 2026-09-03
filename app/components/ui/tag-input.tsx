@@ -196,7 +196,7 @@ export function TagInput({
 									{opt.value}
 								</span>
 								{opt.type === "combo" ? (
-									<span className="rounded bg-primary/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-primary">
+									<span className="rounded bg-primary/15 px-1.5 py-0.5 text-xs font-semibold uppercase text-primary">
 										combo
 									</span>
 								) : (
@@ -206,7 +206,7 @@ export function TagInput({
 												{opt.provider}
 											</span>
 										) : null}
-										<span className="rounded bg-glass-strong px-1.5 py-0.5 text-[10px] font-semibold uppercase text-muted-foreground">
+										<span className="rounded bg-glass-strong px-1.5 py-0.5 text-xs font-semibold uppercase text-muted-foreground">
 											model
 										</span>
 									</>

@@ -21,6 +21,7 @@ export type ChatMessage = {
   content: string;
   model?: string | null;
   latency_ms?: number | null;
+  thinking?: string | null;
   created_at?: number;
 };
 
@@ -40,10 +41,18 @@ function getSession(id: number): ChatSession | null {
 }
 
 export function getMessages(sessionId: number): ChatMessage[] {
-  return query(
-    `SELECT id, session_id, role, content, model, latency_ms, created_at
+  try {
+    return query(
+      `SELECT id, session_id, role, content, model, latency_ms, thinking, created_at
        FROM chat_messages WHERE session_id = ? ORDER BY id ASC`,
-  ).all(sessionId) as unknown as ChatMessage[];
+    ).all(sessionId) as unknown as ChatMessage[];
+  } catch {
+    // DB lama belum punya kolom thinking
+    return query(
+      `SELECT id, session_id, role, content, model, latency_ms, created_at
+       FROM chat_messages WHERE session_id = ? ORDER BY id ASC`,
+    ).all(sessionId) as unknown as ChatMessage[];
+  }
 }
 
 function touch(id: number): void {
@@ -70,6 +79,7 @@ export type AppendInput = {
   content: string;
   model?: string | null;
   latency_ms?: number | null;
+  thinking?: string | null;
 };
 
 function appendMessages(
@@ -77,12 +87,24 @@ function appendMessages(
   msgs: AppendInput[],
 ): void {
   if (msgs.length === 0) return;
-  const stmt = query(
-    `INSERT INTO chat_messages (session_id, role, content, model, latency_ms)
-     VALUES (?, ?, ?, ?, ?)`,
-  );
-  for (const m of msgs) {
-    stmt.run(sessionId, m.role, m.content, m.model ?? null, m.latency_ms ?? null);
+  // Kolom thinking ditambahkan via ensureColumn saat open — fallback di bawah
+  // hanya untuk koneksi DB yang dibuka sebelum migrasi sempat jalan.
+  try {
+    const stmt = query(
+      `INSERT INTO chat_messages (session_id, role, content, model, latency_ms, thinking)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    );
+    for (const m of msgs) {
+      stmt.run(sessionId, m.role, m.content, m.model ?? null, m.latency_ms ?? null, m.thinking ?? null);
+    }
+  } catch {
+    const stmt = query(
+      `INSERT INTO chat_messages (session_id, role, content, model, latency_ms)
+       VALUES (?, ?, ?, ?, ?)`,
+    );
+    for (const m of msgs) {
+      stmt.run(sessionId, m.role, m.content, m.model ?? null, m.latency_ms ?? null);
+    }
   }
   touch(sessionId);
 }

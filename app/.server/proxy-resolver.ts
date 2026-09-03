@@ -18,12 +18,14 @@ import {
  * Outbound Proxy Engine — single egress point for all upstream HTTP/S traffic.
  *
  * Selection hierarchy (spec 4.1):
- *   1. API keypool          (client_api_keys assigned pool)
- *   2. Provider API keypool (provider_credentials.proxy_pool_id)
- *  3. Provider pool         (providers assigned pool)
- *  4. Combo pool            (combo config proxy_pool_id)
- *  5. Global pool           (getGlobalProxyPool)
- *  6. Direct connection     (no pool → plain fetch)
+ *   1. API key pool         (client_api_keys assigned pool)
+ *   2. Provider API key pool (provider_credentials.proxy_pool_id)
+ *   3. Combo pool            (combo config proxy_pool_id)
+ *   4. Provider pool         (providers assigned pool)
+ *   5. Global pool           (getGlobalProxyPool)
+ *   6. Direct connection     (no pool → plain fetch)
+ *
+ * Precedence: client key → account → combo → provider → global → direct.
  *
  * Within a pool, proxies are picked round-robin by `last_used_at`
  * (same pattern as balancer.ts). Connection errors and retryable HTTP
@@ -42,10 +44,10 @@ export interface FetchUpstreamInit extends RequestInit {
 	apiKeyPoolId?: number;
 	/** Pool assigned to the provider credential (second priority). */
 	accountPoolId?: number;
-	/** Pool assigned to the provider (third priority). */
-	providerPoolId?: number;
-	/** Pool assigned to the combo (fourth priority). */
+	/** Pool assigned to the combo (third priority). */
 	comboPoolId?: number;
+	/** Pool assigned to the provider (fourth priority). */
+	providerPoolId?: number;
 	/** Explicit pool override (skips resolution priority). */
 	proxyPoolId?: number;
 	/** Provider id, used only for diagnostics. */
@@ -82,8 +84,8 @@ export function resolveProxyPool(params: {
 	let pool: ProxyPool | null = null;
 	if (params.apiKeyPoolId) pool = getPool(params.apiKeyPoolId);
 	if (!pool && params.accountPoolId) pool = getPool(params.accountPoolId);
-	if (!pool && params.providerPoolId) pool = getPool(params.providerPoolId);
 	if (!pool && params.comboPoolId) pool = getPool(params.comboPoolId);
+	if (!pool && params.providerPoolId) pool = getPool(params.providerPoolId);
 	if (!pool && params.globalPoolId) pool = getPool(params.globalPoolId);
 	if (!pool || !pool.is_active || pool.proxy_ids.length === 0) return null;
 

@@ -23,8 +23,10 @@ export function createEventFormatter(
 ): (ev: CanonicalStreamEvent) => string | null {
   const responseId = randomId("resp_");
   const itemId = randomId("msg_");
+  const reasonId = randomId("rs_");
   const toolItemId = randomId("fc_");
   let blockIndex = 0;
+  let thinkingBlockIndex: number | null = null;
   let finished = false;
   let finalUsage: { prompt_tokens: number; completion_tokens: number } | undefined;
 
@@ -137,6 +139,73 @@ export function createEventFormatter(
             type: "content_block_delta",
             index: Math.max(0, blockIndex - 1),
             delta: { type: "text_delta", text: ev.text },
+          }),
+          "content_block_delta",
+        );
+      }
+      return null;
+    }
+    if (ev.type === "reasoning_start") {
+      // Blok thinking Anthropic — tanpa signature (display only).
+      if (clientFormat === "anthropic" && thinkingBlockIndex === null) {
+        thinkingBlockIndex = blockIndex++;
+        return frame(
+          JSON.stringify({
+            type: "content_block_start",
+            index: thinkingBlockIndex,
+            content_block: { type: "thinking", thinking: "" },
+          }),
+          "content_block_start",
+        );
+      }
+      return null;
+    }
+    if (ev.type === "reasoning_delta") {
+      if (clientFormat === "openai-chat") {
+        // Konvensi DeepSeek/OpenRouter — dibaca Open WebUI & klien sejenis.
+        return frame(
+          JSON.stringify({
+            choices: [{ delta: { reasoning_content: ev.text }, index: 0 }],
+          }),
+        );
+      }
+      if (clientFormat === "openai-responses") {
+        return frame(
+          JSON.stringify({
+            type: "response.reasoning_summary_text.delta",
+            item_id: reasonId,
+            output_index: 0,
+            content_index: 0,
+            delta: ev.text,
+          }),
+        );
+      }
+      if (clientFormat === "anthropic") {
+        if (thinkingBlockIndex === null) {
+          thinkingBlockIndex = blockIndex++;
+          const start = frame(
+            JSON.stringify({
+              type: "content_block_start",
+              index: thinkingBlockIndex,
+              content_block: { type: "thinking", thinking: "" },
+            }),
+            "content_block_start",
+          );
+          const delta = frame(
+            JSON.stringify({
+              type: "content_block_delta",
+              index: thinkingBlockIndex,
+              delta: { type: "thinking_delta", thinking: ev.text },
+            }),
+            "content_block_delta",
+          );
+          return start + delta;
+        }
+        return frame(
+          JSON.stringify({
+            type: "content_block_delta",
+            index: thinkingBlockIndex,
+            delta: { type: "thinking_delta", thinking: ev.text },
           }),
           "content_block_delta",
         );
@@ -316,6 +385,7 @@ export function composeStreamTransformer(
       // Delta teks kosong membawa nol informasi — jangan diformat/dikirim.
       // Upstream tertentu mengirim puluhan frame ini per stream.
       if (ev.type === "content_delta" && ev.text === "") continue;
+      if (ev.type === "reasoning_delta" && ev.text === "") continue;
       if (ev.type === "done") streamDone = true;
       // Kumpulkan usage dari seluruh aliran:
       if (ev.type === "message_start" && ev.usage) {

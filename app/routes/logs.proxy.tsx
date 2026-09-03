@@ -1,5 +1,6 @@
 import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { useFetcher } from "react-router";
+import { Clock, Globe, KeyRound } from "lucide-react";
 import type { Route } from "./+types/logs.proxy";
 import { query } from "../.server/db";
 import { Combobox } from "../components/combobox";
@@ -10,6 +11,7 @@ import {
 import { useToast } from "../components/ui/toast";
 import { useConfirm } from "../components/ui/confirm-dialog";
 import { Badge } from "../components/ui/badge";
+import { Button } from "../components/ui/button";
 import { LogViewer } from "../components/log-viewer";
 import {
   fmtNum,
@@ -59,15 +61,6 @@ const OPTIONS = {
   sources: (logs: LogEvent[]) =>
     [...new Set(logs.map((l) => String(l.source ?? "")).filter(Boolean))].sort(),
 };
-
-/** Strip meta ringkas untuk baris kedua: ip · key · provider · proxy · endpoint · latency. */
-/** Teks proxy untuk baris kedua (host:port). Null bila tidak lewat proxy. */
-function proxyLine(event: LogEvent): string | null {
-  if (event.proxy_id == null && !event.proxy_host) return null;
-  const host = String(event.proxy_host ?? "?");
-  const port = event.proxy_port != null ? String(event.proxy_port) : "";
-  return port ? `${host}:${port}` : host;
-}
 
 function Detail({ event }: { event: LogEvent }) {
   const metadata = parseMetadata(event.metadata);
@@ -175,28 +168,57 @@ const Row = memo(function Row({
 }) {
   const key = `${event.id ?? event.created_at}`;
   const message = String(event.message ?? "");
+  const latency =
+    event.latency_ms == null ? null : Number(event.latency_ms);
+  const keyLabel =
+    event.api_key_id == null
+      ? ""
+      : String(
+          event.api_key_name ?? event.api_key_prefix ?? `#${event.api_key_id}`,
+        );
+  const proxyShort =
+    event.proxy_id != null || event.proxy_host
+      ? String(
+          event.proxy_name ?? event.proxy_host ?? `#${event.proxy_id ?? ""}`,
+        ).trim() || "proxy"
+      : null;
+  const proxyTitle =
+    event.proxy_id != null || event.proxy_host
+      ? `proxy: ${String(event.proxy_name ?? "proxy")} (${String(
+          event.proxy_host ?? "?",
+        )}:${String(event.proxy_port ?? "?")})${
+          event.proxy_id != null ? ` #${event.proxy_id}` : ""
+        }`
+      : null;
+  const hasMeta =
+    latency != null ||
+    event.provider_id ||
+    event.endpoint ||
+    event.client_ip ||
+    proxyShort ||
+    keyLabel;
 
   return (
     <div
       onClick={() => onSelect(key)}
-      className={`cursor-pointer border-b border-border px-2 py-1.5 text-sm transition-colors hover:bg-muted ${
+      className={`min-w-0 cursor-pointer overflow-hidden border-b border-border px-2 py-1.5 text-sm transition-colors hover:bg-muted ${
         selected ? "bg-primary/10" : ""
       }`}
     >
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-        <span className="w-full text-xs text-muted-foreground sm:w-24 sm:shrink-0">
+      <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+        <span className="w-full shrink-0 text-xs text-muted-foreground sm:w-24">
           {fmtTs(event.created_at)}
         </span>
         <Badge tone={LEVEL_TONE[String(event.level)] ?? "neutral"}>
           {String(event.level)}
         </Badge>
-        <span
-          className="rounded bg-muted px-2 py-0.5 text-xs text-muted-foreground"
-          title={`source: ${String(event.source)}`}
-        >
+        <Badge tone="neutral" title={`source: ${String(event.source)}`}>
           {String(event.source)}
-        </span>
-        <span className="min-w-0 flex-1 truncate text-foreground" title={message}>
+        </Badge>
+        <span
+          className="min-w-0 max-w-full flex-1 basis-full truncate text-foreground sm:basis-auto"
+          title={message}
+        >
           {message}
         </span>
         <button
@@ -223,12 +245,56 @@ const Row = memo(function Row({
           ✕
         </button>
       </div>
-      {proxyLine(event) ? (
-        <div className="mt-0.5 flex items-center gap-1 pl-6 text-[11px] leading-none font-mono text-muted-foreground sm:pl-[7.5rem]">
-          <span aria-hidden>↳</span>
-          <span className="truncate" title={`proxy: ${proxyLine(event)}`}>
-            {proxyLine(event)}
-          </span>
+      {hasMeta ? (
+        <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+          {latency != null ? (
+            <Badge tone="neutral" title={`latency: ${fmtNum(latency)} ms`}>
+              <Clock size={12} />
+              <span className="font-mono">{fmtNum(latency)}ms</span>
+            </Badge>
+          ) : null}
+          {event.provider_id ? (
+            <Badge
+              tone="neutral"
+              title={`provider: ${String(event.provider_id)}`}
+            >
+              {String(event.provider_id)}
+            </Badge>
+          ) : null}
+          {event.endpoint ? (
+            <Badge tone="neutral" title={`endpoint: ${String(event.endpoint)}`}>
+              {String(event.endpoint)}
+            </Badge>
+          ) : null}
+          {event.client_ip ? (
+            <Badge
+              tone="neutral"
+              title={`client IP: ${String(event.client_ip)}`}
+              className="max-w-full"
+            >
+              <span className="max-w-[160px] truncate font-mono">
+                {String(event.client_ip)}
+              </span>
+            </Badge>
+          ) : null}
+          {proxyShort ? (
+            <Badge tone="primary" title={proxyTitle ?? undefined} className="max-w-full">
+              <Globe size={12} />
+              <span className="max-w-[160px] truncate">{proxyShort}</span>
+            </Badge>
+          ) : null}
+          {keyLabel ? (
+            <Badge
+              tone="neutral"
+              title={`API key: ${keyLabel}${
+                event.api_key_id != null ? ` (#${event.api_key_id})` : ""
+              }`}
+              className="max-w-full"
+            >
+              <KeyRound size={12} />
+              <span className="max-w-[140px] truncate">{keyLabel}</span>
+            </Badge>
+          ) : null}
         </div>
       ) : null}
       {selected ? <Detail event={event} /> : null}
@@ -352,13 +418,9 @@ export default function LogsProxy({ loaderData }: Route.ComponentProps) {
         <h1 className="text-xl font-bold text-foreground">Proxy Logs</h1>
         <div className="flex items-center gap-2">
           <span className="text-sm text-muted-foreground">{filtered.length} shown</span>
-          <button
-            type="button"
-            onClick={handleClear}
-            className="rounded-lg border border-danger/30 px-2.5 py-1 text-xs font-medium text-danger hover:bg-danger/10"
-          >
+          <Button type="button" variant="danger" size="sm" onClick={handleClear}>
             Clear
-          </button>
+          </Button>
         </div>
       </div>
 
@@ -368,34 +430,35 @@ export default function LogsProxy({ loaderData }: Route.ComponentProps) {
           value={level}
           onChange={setLevel}
           placeholder="Level"
-          className="w-32 rounded-lg border border-border px-3 py-1.5 text-sm text-foreground"
+          className="w-full rounded-lg border border-border px-3 py-1.5 text-sm text-foreground sm:w-32"
         />
         <Combobox
           options={options.source}
           value={source}
           onChange={setSource}
           placeholder="Search source…"
-          className="w-40 rounded-lg border border-border px-3 py-1.5 text-sm text-foreground"
+          className="w-full rounded-lg border border-border px-3 py-1.5 text-sm text-foreground sm:w-40"
         />
         <input
           type="search"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           placeholder="Search message / metadata…"
-          className="w-56 rounded-lg border border-border px-3 py-1.5 text-sm text-foreground placeholder:text-muted-foreground"
+          className="w-full rounded-lg border border-border px-3 py-1.5 text-sm text-foreground placeholder:text-muted-foreground sm:w-56"
         />
         {activeFilters ? (
-          <button
+          <Button
             type="button"
+            variant="secondary"
+            size="sm"
             onClick={() => {
               setLevel("");
               setSource("");
               setSearch("");
             }}
-            className="rounded-lg border border-border px-2.5 py-1.5 text-xs font-medium text-muted-foreground hover:bg-muted"
           >
             Clear filters
-          </button>
+          </Button>
         ) : null}
       </div>
 

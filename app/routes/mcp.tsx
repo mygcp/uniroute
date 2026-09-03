@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useFetcher, useLoaderData } from "react-router";
 import type { Route } from "./+types/mcp";
 import { Cable, ExternalLink, Server } from "lucide-react";
@@ -9,6 +9,7 @@ import { Badge } from "../components/ui/badge";
 import { Input } from "../components/ui/field";
 import { CopyButton } from "../components/ui/copy-button";
 import { Spinner } from "../components/ui/feedback";
+import { useToast } from "../components/ui/toast";
 
 /* --------------------------------- loader --------------------------------- */
 
@@ -136,7 +137,7 @@ export async function action({ request }: Route.ActionArgs) {
   if (intent === "mcp-install") installMcp(harness, defaultMcpCommand());
   else if (intent === "mcp-remove") removeMcp(harness);
   else return Response.json({ ok: false, error: "unknown intent" }, { status: 400 });
-  return { ok: true };
+  return { ok: true, intent, harness };
 }
 
 /* ---------------------------------- UI ------------------------------------ */
@@ -149,11 +150,11 @@ function SnippetRow({
   value: string;
 }) {
   return (
-    <div className="flex items-center gap-2 rounded-lg border border-glass-border bg-glass-strong px-3 py-2">
-      <span className="w-24 shrink-0 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+    <div className="flex flex-col gap-1.5 rounded-lg border border-glass-border bg-glass-strong px-3 py-2 sm:flex-row sm:items-center sm:gap-2">
+      <span className="shrink-0 text-xs font-medium uppercase tracking-wide text-muted-foreground sm:w-24">
         {label}
       </span>
-      <code className="min-w-0 flex-1 truncate font-mono text-xs text-foreground">
+      <code className="min-w-0 flex-1 overflow-x-auto font-mono text-xs whitespace-nowrap text-foreground">
         {value}
       </code>
       <CopyButton text={value} />
@@ -166,6 +167,33 @@ export default function McpPage() {
   const fetcher = useFetcher<typeof action>();
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState<string>("all");
+  const { toast } = useToast();
+  const lastMcpRef = useRef<unknown>(undefined);
+  useEffect(() => {
+    if (fetcher.state !== "idle" || !fetcher.data) return;
+    if (lastMcpRef.current === fetcher.data) return;
+    lastMcpRef.current = fetcher.data;
+    const d = fetcher.data as
+      | { ok: boolean; intent?: string; harness?: string; error?: string }
+      | undefined;
+    if (!d || typeof d.ok !== "boolean") return;
+    if (!d.ok) {
+      toast({
+        title: "MCP update failed",
+        description: d.error ?? "Unknown error",
+        variant: "error",
+      });
+      return;
+    }
+    if (d.intent === "mcp-install" || d.intent === "mcp-remove") {
+      toast({
+        title: d.intent === "mcp-install" ? "MCP registered" : "MCP removed",
+        description: d.harness ? `Harness: ${d.harness}` : undefined,
+        variant: "success",
+      });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fetcher.data, fetcher.state]);
 
   const busyHarness =
     fetcher.state !== "idle"
@@ -194,14 +222,14 @@ export default function McpPage() {
   }, [data.tools, query, category]);
 
   return (
-    <div className="mx-auto w-full max-w-5xl p-4 md:p-6">
+    <div className="mx-auto w-full max-w-5xl">
       <PageHeader
         title="MCP Server"
-        icon={<Cable size={22} />}
+        icon={<Cable size={20} />}
         subtitle="Expose UniRoute to coding agents over the Model Context Protocol."
       />
 
-      <Card className="mb-4 p-4">
+      <Card className="mb-4">
         <div className="mb-3 flex items-center justify-between gap-3">
           <h2 className="flex items-center gap-2 text-sm font-semibold text-foreground">
             <Server size={16} /> Connection

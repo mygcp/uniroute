@@ -1,5 +1,6 @@
 import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { useFetcher } from "react-router";
+import { Globe, Lock, Unlock, Zap } from "lucide-react";
 import type { Route } from "./+types/logs._index";
 import { query } from "../.server/db";
 import { getPrice } from "../.server/pricing";
@@ -12,6 +13,7 @@ import { useToast } from "../components/ui/toast";
 import { Spinner } from "../components/ui/feedback";
 import { useConfirm } from "../components/ui/confirm-dialog";
 import { Badge } from "../components/ui/badge";
+import { Button } from "../components/ui/button";
 import { LogViewer } from "../components/log-viewer";
 import {
   costOf,
@@ -217,74 +219,124 @@ const Row = memo(function Row({
           event.completion_tokens as number,
         )} tokens`;
   const keyLabelText = keyLabelOf(event, keyLabels);
+  const cached =
+    event.cached_tokens == null ? null : Number(event.cached_tokens);
+  const tls =
+    event.upstream_tls === 1
+      ? "https"
+      : event.upstream_tls === 0
+        ? "http"
+        : null;
+  const proxyShort =
+    event.via_proxy === 1
+      ? String(
+          event.proxy_name ?? event.proxy_host ?? `#${event.proxy_id ?? ""}`,
+        ).trim() || "proxy"
+      : null;
+  const proxyTitle =
+    event.via_proxy === 1
+      ? `via proxy: ${String(event.proxy_name ?? "proxy")} (${String(
+          event.proxy_host ?? "?",
+        )}:${String(event.proxy_port ?? "?")})${
+          event.proxy_id != null ? ` #${event.proxy_id}` : ""
+        }`
+      : "direct connection";
 
   return (
     <div
       onClick={() => onSelect(key)}
-      className={`cursor-pointer border-b border-border px-2 py-1.5 text-sm transition-colors hover:bg-muted ${
+      className={`min-w-0 cursor-pointer overflow-hidden border-b border-border px-2 py-1.5 text-sm transition-colors hover:bg-muted ${
         selected ? "bg-primary/10" : ""
       }`}
     >
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-        <span className="w-full text-xs text-muted-foreground sm:w-24 sm:shrink-0">
+      <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+        <span className="w-full shrink-0 text-xs text-muted-foreground sm:w-24">
           {fmtTs(event.created_at)}
         </span>
         <Badge tone={STATUS_TONE[String(event.status)] ?? "neutral"}>
           {String(event.status)}
         </Badge>
         <span
-          className="truncate font-medium text-foreground sm:max-w-[220px]"
+          className="min-w-0 max-w-full truncate font-medium text-foreground sm:max-w-[220px]"
           title={printable(event.model)}
         >
           {String(event.model ?? "-")}
         </span>
         <span
-          className="truncate text-muted-foreground sm:max-w-[140px]"
+          className="min-w-0 max-w-full truncate text-xs text-muted-foreground sm:max-w-[140px]"
           title={printable(event.provider_id)}
         >
           {String(event.provider_id ?? "-")}
         </span>
-        <span
-          className="hidden rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground md:inline"
-          title={`source: ${sourceLabel(event)}${
-            event.rule_applied ? ` · rule: ${String(event.rule_applied)}` : ""
-          }`}
-        >
-          {sourceLabel(event)}
-        </span>
-        {event.via_proxy === 1 ? (
-          <span
-            className="rounded bg-primary/15 px-1.5 py-0.5 text-[11px] font-medium text-primary"
-            title={`via proxy: ${String(event.proxy_name ?? "")} (${String(
-              event.proxy_host ?? "",
-            )}:${String(event.proxy_port ?? "")})`}
+        {event.strategy_used ? (
+          <Badge
+            tone="primary"
+            title={`strategy: ${String(event.strategy_used)}`}
+            className="max-w-full"
           >
-            PROXY
-          </span>
+            <span className="max-w-[160px] truncate">
+              {String(event.strategy_used)}
+            </span>
+          </Badge>
+        ) : null}
+        {event.rule_applied ? (
+          <Badge
+            tone="info"
+            title={`rule applied: ${String(event.rule_applied)}`}
+            className="max-w-full"
+          >
+            <span className="max-w-[160px] truncate">
+              rule: {String(event.rule_applied)}
+            </span>
+          </Badge>
+        ) : null}
+        {event.endpoint ? (
+          <Badge tone="neutral" title={`endpoint: ${String(event.endpoint)}`}>
+            {String(event.endpoint)}
+          </Badge>
+        ) : null}
+        {tls ? (
+          <Badge tone="neutral" title={`upstream connection: ${tls}`}>
+            {tls === "https" ? <Lock size={12} /> : <Unlock size={12} />}
+            {tls}
+          </Badge>
+        ) : null}
+        {event.via_proxy === 1 ? (
+          <Badge tone="primary" title={proxyTitle} className="max-w-full">
+            <Globe size={12} />
+            <span className="max-w-[140px] truncate">{proxyShort}</span>
+          </Badge>
         ) : (
-          <span className="rounded bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">
-            DIRECT
-          </span>
+          <Badge tone="neutral" title={proxyTitle}>
+            direct
+          </Badge>
         )}
         {tokensShort ? (
-          <span
-            className="rounded bg-muted px-1.5 py-0.5 font-mono text-xs text-muted-foreground"
-            title={tokenTitle}
+          <Badge tone="neutral" title={tokenTitle}>
+            <span className="font-mono">{tokensShort} tok</span>
+          </Badge>
+        ) : null}
+        {cached != null && cached > 0 ? (
+          <Badge
+            tone="success"
+            title={`cached tokens: ${fmtNum(cached)} (subset of prompt)`}
           >
-            {tokensShort} tok
-          </span>
+            <Zap size={12} />
+            <span className="font-mono">{fmtNum(cached)} cached</span>
+          </Badge>
         ) : null}
         {keyLabelText ? (
-          <span
-            className="hidden max-w-[140px] truncate rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground lg:inline"
+          <Badge
+            tone="neutral"
             title={`API key: ${keyLabelText}${
               event.api_key_id != null ? ` (#${event.api_key_id})` : ""
             }`}
+            className="max-w-full"
           >
-            {keyLabelText}
-          </span>
+            <span className="max-w-[140px] truncate">{keyLabelText}</span>
+          </Badge>
         ) : null}
-        <span className="ml-auto text-xs text-muted-foreground">
+        <span className="ml-auto shrink-0 text-xs text-muted-foreground">
           {event.duration_ms != null
             ? `${fmtNum(Number(event.duration_ms))}ms · ${fmtUsd(costOf(event, prices))}`
             : ""}
@@ -473,13 +525,9 @@ export default function Logs({ loaderData }: Route.ComponentProps) {
         <h1 className="text-xl font-bold text-foreground">Request Logs</h1>
         <div className="flex items-center gap-2">
           <span className="text-sm text-muted-foreground">{filtered.length} shown</span>
-          <button
-            type="button"
-            onClick={handleClear}
-            className="rounded-lg border border-danger/30 px-2.5 py-1 text-xs font-medium text-danger hover:bg-danger/10"
-          >
+          <Button type="button" variant="danger" size="sm" onClick={handleClear}>
             Clear
-          </button>
+          </Button>
         </div>
       </div>
 
@@ -489,28 +537,28 @@ export default function Logs({ loaderData }: Route.ComponentProps) {
           value={model}
           onChange={setModel}
           placeholder="Search model…"
-          className="w-40 rounded-lg border border-border px-3 py-1.5 text-sm text-foreground"
+          className="w-full rounded-lg border border-border px-3 py-1.5 text-sm text-foreground sm:w-40"
         />
         <Combobox
           options={options.provider}
           value={provider}
           onChange={setProvider}
           placeholder="Search provider…"
-          className="w-40 rounded-lg border border-border px-3 py-1.5 text-sm text-foreground"
+          className="w-full rounded-lg border border-border px-3 py-1.5 text-sm text-foreground sm:w-40"
         />
         <Combobox
           options={OPTIONS.statuses}
           value={status}
           onChange={setStatus}
           placeholder="Status"
-          className="w-32 rounded-lg border border-border px-3 py-1.5 text-sm text-foreground"
+          className="w-full rounded-lg border border-border px-3 py-1.5 text-sm text-foreground sm:w-32"
         />
         <Combobox
           options={options.source}
           value={source}
           onChange={setSource}
           placeholder="Source (direct / combo)…"
-          className="w-44 rounded-lg border border-border px-3 py-1.5 text-sm text-foreground"
+          className="w-full rounded-lg border border-border px-3 py-1.5 text-sm text-foreground sm:w-44"
         />
         <select
           value={transport}
@@ -529,11 +577,13 @@ export default function Logs({ loaderData }: Route.ComponentProps) {
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           placeholder="Search errors / rules…"
-          className="w-48 rounded-lg border border-border px-3 py-1.5 text-sm text-foreground placeholder:text-muted-foreground"
+          className="w-full rounded-lg border border-border px-3 py-1.5 text-sm text-foreground placeholder:text-muted-foreground sm:w-48"
         />
         {activeFilters ? (
-          <button
+          <Button
             type="button"
+            variant="secondary"
+            size="sm"
             onClick={() => {
               setModel("");
               setProvider("");
@@ -542,10 +592,9 @@ export default function Logs({ loaderData }: Route.ComponentProps) {
               setSearch("");
               setTransport("");
             }}
-            className="rounded-lg border border-border px-2.5 py-1.5 text-xs font-medium text-muted-foreground hover:bg-muted"
           >
             Clear filters
-          </button>
+          </Button>
         ) : null}
       </div>
 
@@ -566,35 +615,35 @@ export default function Logs({ loaderData }: Route.ComponentProps) {
               {inflight.map((r) => (
                 <div
                   key={r.reqId}
-                  className="border-b border-border px-2 py-1.5 text-sm"
+                  className="min-w-0 overflow-hidden border-b border-border px-2 py-1.5 text-sm"
                 >
-                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-                    <span className="w-full text-xs text-muted-foreground sm:w-24 sm:shrink-0">
+                  <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+                    <span className="w-full shrink-0 text-xs text-muted-foreground sm:w-24">
                       {fmtTs(r.started_at)}
                     </span>
                     <Badge tone="warning">
-                      <Spinner size={11} />
+                      <Spinner size={12} />
                       running
                     </Badge>
                     <span
-                      className="truncate font-medium text-foreground sm:max-w-[220px]"
+                      className="min-w-0 max-w-full truncate font-medium text-foreground sm:max-w-[220px]"
                       title={r.model}
                     >
                       {r.model || "-"}
                     </span>
-                    <span className="truncate text-muted-foreground sm:max-w-[140px]">
+                    <span className="min-w-0 max-w-full truncate text-xs text-muted-foreground sm:max-w-[140px]">
                       {r.provider_id}
                     </span>
-                    <span className="hidden rounded bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground md:inline">
+                    <Badge tone="neutral">
                       {r.endpoint ?? "chat"}
-                    </span>
+                    </Badge>
                     {r.client_ip ? (
-                      <span className="hidden font-mono text-[11px] text-muted-foreground lg:inline">
+                      <span className="min-w-0 max-w-full truncate font-mono text-xs text-muted-foreground">
                         {r.client_ip}
                       </span>
                     ) : null}
                     {r.api_key_id != null ? (
-                      <span className="hidden font-mono text-[11px] text-muted-foreground lg:inline">
+                      <span className="shrink-0 font-mono text-xs text-muted-foreground">
                         key #{r.api_key_id}
                       </span>
                     ) : null}

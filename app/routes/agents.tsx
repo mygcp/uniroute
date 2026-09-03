@@ -1,4 +1,4 @@
-import { memo, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import { useFetcher } from "react-router";
 import type { Route } from "./+types/agents";
 import { Bot, ExternalLink, FileClock, RotateCcw, Trash2 } from "lucide-react";
@@ -34,6 +34,7 @@ import { Combobox } from "../components/combobox";
 import { useConfirm } from "../components/ui/confirm-dialog";
 import { Toggle } from "../components/ui/toggle";
 import { Spinner } from "../components/ui/feedback";
+import { useToast } from "../components/ui/toast";
 import { fmtTs } from "../lib/log-format";
 
 /* --------------------------------- loader --------------------------------- */
@@ -320,6 +321,71 @@ const HarnessCard = memo(function HarnessCard({
 
   const data = mainFetcher.data ?? null;
   const backupData = backupFetcher.data ?? null;
+  const { toast } = useToast();
+  const lastMainRef = useRef<MainResult | null>(null);
+  const lastBackupRef = useRef<MainResult | null>(null);
+  const lastMainIntentRef = useRef<string | null>(null);
+
+  // Remember which intent (preview vs apply) was submitted so failures can
+  // be labeled — formData is only populated while the fetcher is busy.
+  useEffect(() => {
+    const intent = mainFetcher.formData?.get("intent");
+    if (typeof intent === "string" && intent) lastMainIntentRef.current = intent;
+  }, [mainFetcher.formData]);
+
+  useEffect(() => {
+    if (mainFetcher.state !== "idle" || !data) return;
+    if (lastMainRef.current === data) return;
+    lastMainRef.current = data;
+    // Success outcomes already render prominent inline boxes (applied
+    // confirmation, preview <pre>) — only failures (dull inline line) toast.
+    if (data.applied || data.previewed) return;
+    if (data.error) {
+      toast({
+        title:
+          lastMainIntentRef.current === "apply"
+            ? "Apply failed"
+            : lastMainIntentRef.current === "preview"
+              ? "Preview failed"
+              : "Config action failed",
+        description: String(data.error),
+        variant: "error",
+      });
+    }
+  }, [mainFetcher.state, data, toast]);
+
+  useEffect(() => {
+    if (backupFetcher.state !== "idle" || !backupData) return;
+    if (lastBackupRef.current === backupData) return;
+    lastBackupRef.current = backupData;
+    // read_backup renders its content inline in <details> — skip it.
+    if (backupData.backupContent) return;
+    if (backupData.restored) {
+      toast({
+        title: "Backup restored",
+        description: `Restored ${String(backupData.file)}`,
+        variant: "success",
+      });
+    } else if (backupData.removed) {
+      toast({
+        title: "UniRoute config removed",
+        description: String(backupData.path),
+        variant: "success",
+      });
+    } else if (backupData.deletedBackup) {
+      toast({
+        title: "Backup deleted",
+        description: `Deleted ${String(backupData.deletedBackup)}`,
+        variant: "success",
+      });
+    } else if (backupData.error) {
+      toast({
+        title: "Backup action failed",
+        description: String(backupData.error),
+        variant: "error",
+      });
+    }
+  }, [backupFetcher.state, backupData, toast]);
 
   const usableKeys = keys.filter((k) => k.revealable);
 
@@ -357,7 +423,7 @@ const HarnessCard = memo(function HarnessCard({
         </a>
       </div>
       <p className="mb-2 text-xs text-muted-foreground">{status.description}</p>
-      <p className="mb-4 font-mono text-xs text-muted-foreground">
+      <p className="mb-4 font-mono text-xs break-all text-muted-foreground">
         {status.absPath}
         {status.exists && status.size != null ? ` · ${fmtBytes(status.size)}` : ""}
         {status.updatedAt ? ` · updated ${fmtTs(status.updatedAt)}` : ""}
@@ -532,7 +598,7 @@ const HarnessCard = memo(function HarnessCard({
               });
             }}
           >
-            <Trash2 size={13} /> Remove UniRoute config
+            <Trash2 size={14} /> Remove UniRoute config
           </Button>
         </div>
       </mainFetcher.Form>
@@ -595,7 +661,7 @@ const HarnessCard = memo(function HarnessCard({
 
       <div className="mt-4 border-t border-border pt-3">
         <p className="mb-1 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-          <FileClock size={13} /> Backups ({status.backups.length})
+          <FileClock size={14} /> Backups ({status.backups.length})
         </p>
         <p className="mb-2 text-xs text-muted-foreground">
           Every Apply that overwrites an existing config first saves a timestamped copy to{" "}
@@ -653,7 +719,7 @@ const HarnessCard = memo(function HarnessCard({
                     }}
                     className="inline-flex items-center gap-1 rounded border border-border px-1.5 py-0.5 text-foreground hover:bg-muted"
                   >
-                    <RotateCcw size={11} /> Restore
+                    <RotateCcw size={12} /> Restore
                   </button>
                   <button
                     type="button"
@@ -672,7 +738,7 @@ const HarnessCard = memo(function HarnessCard({
                     }}
                     className="rounded border border-border px-1.5 py-0.5 text-danger hover:bg-danger/10"
                   >
-                    <Trash2 size={11} />
+                    <Trash2 size={12} />
                   </button>
                 </span>
               </li>
@@ -722,9 +788,36 @@ function McpRow({
   label: string;
   installed: boolean;
 }) {
-  const fetcher = useFetcher<{ ok?: boolean; error?: string }>();
+  const fetcher = useFetcher<{
+    ok?: boolean;
+    error?: string;
+    mcpHarness?: string;
+    installed?: boolean;
+  }>();
   const busy = fetcher.state !== "idle";
   const isOn = installed;
+  const { toast } = useToast();
+  const lastMcpRef = useRef<typeof fetcher.data>(undefined);
+  useEffect(() => {
+    if (fetcher.state !== "idle" || !fetcher.data) return;
+    if (lastMcpRef.current === fetcher.data) return;
+    lastMcpRef.current = fetcher.data;
+    if (fetcher.data.ok) {
+      toast({
+        title: fetcher.data.installed
+          ? "MCP server registered"
+          : "MCP server removed",
+        description: label,
+        variant: "success",
+      });
+    } else if (fetcher.data.error) {
+      toast({
+        title: "MCP update failed",
+        description: String(fetcher.data.error),
+        variant: "error",
+      });
+    }
+  }, [fetcher.state, fetcher.data, toast, label]);
   return (
     <fetcher.Form method="post" className="flex items-center justify-between gap-2 rounded-lg border border-border px-3 py-2">
       <input type="hidden" name="harness" value={harness} />
@@ -735,7 +828,7 @@ function McpRow({
       />
       <span className="text-xs font-medium text-foreground">{label}</span>
       {busy ? (
-        <Spinner size={13} />
+        <Spinner size={14} />
       ) : (
         <Button type="submit" size="sm" variant={isOn ? "outline" : "secondary"}>
           {isOn ? "Remove" : "Register"}
@@ -756,22 +849,22 @@ export default function Agents({
     <div>
       <PageHeader
         title="AI Agents"
-        icon={<Bot size={24} />}
+        icon={<Bot size={20} />}
         subtitle="Point local coding CLIs — Codex, Claude Code, OpenCode — at your UniRoute gateway."
       />
 
-      <Card className="mb-6">
-        <h2 className="mb-1 text-sm font-semibold text-foreground">
+      <details className="mb-6 rounded-xl border border-border bg-surface/50 px-3 py-2">
+        <summary className="cursor-pointer text-sm font-medium text-foreground">
           How it works & safety
-        </h2>
-        <ul className="list-inside list-disc space-y-1 text-xs text-muted-foreground">
+        </summary>
+        <ul className="mt-1.5 list-inside list-disc space-y-1 text-xs text-muted-foreground">
           <li>
             UniRoute writes the harness config file directly on the server host so the CLI
             routes requests through your gateway (models, keys, quotas and logs included).
           </li>
           <li>
             Before any overwrite the current file is copied to{" "}
-            <span className="font-mono">~/.uniroute/backups/&lt;agent&gt;/</span> — restore
+            <span className="font-mono break-all">~/.uniroute/backups/&lt;agent&gt;/</span> — restore
             anytime from the backups list below each card.
           </li>
           <li>
@@ -780,12 +873,12 @@ export default function Agents({
           </li>
           <li>Writes are atomic (temp file + rename) with 0600 permissions.</li>
         </ul>
-      </Card>
+      </details>
 
       <Card className="mb-6">
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-          <h2 className="text-sm font-semibold text-foreground">MCP Server</h2>
-          <code className="rounded bg-muted px-2 py-0.5 font-mono text-[11px] text-muted-foreground">
+          <h2 className="shrink-0 text-sm font-semibold text-foreground">MCP Server</h2>
+          <code className="max-w-full truncate rounded bg-muted px-2 py-0.5 font-mono text-xs text-muted-foreground">
             {loaderData.mcp.command.join(" ")}
           </code>
         </div>

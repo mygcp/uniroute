@@ -13,6 +13,7 @@ import {
 import { fetchUpstream } from "./proxy-resolver";
 import { getProviders, type Provider } from "./registry";
 import { getRegistryEntry } from "~/registry";
+import { resolveDisplayToBare, unavailableReason } from "./provider-prefix";
 import { recordRequestLog } from "./logger";
 import { broadcast } from "./log-stream";
 import { clientIpFromRequest } from "./key-enforce";
@@ -154,10 +155,43 @@ export async function handleMediaRequest(
     }
   }
 
-  const { model, body, contentType } = await extractModel(request);
-  const pool = model ? getProviders(model) : [];
+  const { model: rawModel, body, contentType } = await extractModel(request);
+  const _prefixInfoMedia = rawModel ? resolveDisplayToBare(rawModel) : null;
+  const model = _prefixInfoMedia ? _prefixInfoMedia.bare : rawModel;
+  let pool = model ? getProviders(model) : [];
+  if (_prefixInfoMedia?.providerId) {
+    const hinted = pool.filter((p) => p.id === _prefixInfoMedia.providerId);
+    if (hinted.length > 0) pool = hinted;
+  }
 
   if (pool.length === 0) {
+    const reason = rawModel ? unavailableReason(rawModel) : null;
+    if (reason?.kind === "provider_disabled") {
+      return json(
+        {
+          error: {
+            message: `model '${rawModel}' is unavailable: provider '${reason.providerName}' is disabled`,
+            type: "provider_disabled",
+            model: rawModel,
+            provider: reason.providerId,
+          },
+        },
+        404,
+      );
+    }
+    if (reason?.kind === "model_disabled") {
+      return json(
+        {
+          error: {
+            message: `model '${rawModel}' is disabled`,
+            type: "model_disabled",
+            model: rawModel,
+            provider: reason.providerId,
+          },
+        },
+        404,
+      );
+    }
     return json(
       {
         error: {

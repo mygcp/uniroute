@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { resetTestDb } from "./test-db";
 import { query } from "./db";
 import {
+  comboProxyPoolId,
   createCombo,
   deleteCombo,
   extractUpstreamText,
@@ -178,6 +179,32 @@ describe("combo_metrics", () => {
     expect(metrics[1].cost).toBeCloseTo(0.00042);
     expect(metrics[0].success).toBe(0);
     expect(metrics[0].error).toContain("model not found");
+  });
+});
+
+describe("comboProxyPoolId", () => {
+  test("reads proxy_pool_id from config", () => {
+    expect(comboProxyPoolId({ config: { proxy_pool_id: 7 } })).toBe(7);
+    expect(comboProxyPoolId({ config: { proxy_pool_id: "12" } })).toBe(12);
+    expect(comboProxyPoolId({ config: {} })).toBeNull();
+    expect(comboProxyPoolId({ config: { proxy_pool_id: null } })).toBeNull();
+    expect(comboProxyPoolId({ config: { proxy_pool_id: 0 } })).toBeNull();
+    expect(comboProxyPoolId(null)).toBeNull();
+  });
+  test("create stores pool id; update merges without wiping other keys", () => {
+    const combo = createCombo(
+      validInput({ name: "pool-cfg-test", config: { proxy_pool_id: 7, other: "keep" } }),
+    );
+    expect(comboProxyPoolId(getComboById(combo.id))).toBe(7);
+    const updated = updateCombo(combo.id, {
+      name: combo.name,
+      strategy: "priority",
+      steps: [{ modelIds: ["a"] }],
+      config: { proxy_pool_id: 9 },
+    });
+    expect(comboProxyPoolId(updated!)).toBe(9);
+    expect(updated!.config["other"]).toBe("keep");
+    deleteCombo(combo.id);
   });
 });
 

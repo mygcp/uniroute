@@ -4,6 +4,8 @@ export function Spinner({ size = 16, className = "" }: { size?: number; classNam
   return <Loader2 size={size} className={`animate-spin ${className}`} />;
 }
 
+export { Brain } from "lucide-react";
+
 export function Skeleton({ className = "" }: { className?: string }) {
   return (
     <div className={`animate-shimmer rounded-md bg-muted ${className}`} aria-hidden="true" />

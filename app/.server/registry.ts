@@ -10,6 +10,7 @@ export type Provider = {
   priority: number;
   current_connections: number;
   last_used_at: number;
+  prefix?: string | null;
 };
 
 const cache = new Map<string, Provider[]>();

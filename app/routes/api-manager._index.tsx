@@ -1,5 +1,5 @@
 import { Form, Link } from "react-router";
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { Route } from "./+types/api-manager._index";
 import {
 	Download,
@@ -38,6 +38,7 @@ import { StatCard } from "../components/ui/stat-card";
 import { UsageBar } from "../components/ui/usage-bar";
 import { Tooltip } from "../components/ui/tooltip";
 import { useConfirm } from "../components/ui/confirm-dialog";
+import { useToast } from "../components/ui/toast";
 
 export function loader() {
 	const keys = listClientKeys().map((k) => {
@@ -74,6 +75,7 @@ type Row = Awaited<ReturnType<typeof loader>>["keys"][number];
 type Result = {
 	newlyRotated?: { key: string; id: number }[];
 	revealed?: { id: number; key: string } | null;
+	notice?: { ok: boolean; message: string };
 } | null;
 
 export async function action({ request }: Route.ActionArgs) {
@@ -81,18 +83,19 @@ export async function action({ request }: Route.ActionArgs) {
 	const intent = String(form.get("intent"));
 
 	if (intent === "require") {
-		setRequireApiKey(form.get("enabled") === "1");
-		return null;
+		const enabled = form.get("enabled") === "1";
+		setRequireApiKey(enabled);
+		return { notice: { ok: true, message: `API key requirement ${enabled ? "enabled" : "disabled"}` } } satisfies Result;
 	}
 	const id = Number(form.get("id") ?? 0);
 
 	if (intent === "suspend") {
 		suspendKey(id);
-		return null;
+		return { notice: { ok: true, message: `Key #${id} suspended` } } satisfies Result;
 	}
 	if (intent === "reactivate") {
 		reactivateKey(id);
-		return null;
+		return { notice: { ok: true, message: `Key #${id} reactivated` } } satisfies Result;
 	}
 	if (intent === "rotate") {
 		const rotated = rotateKey(id);
@@ -100,7 +103,7 @@ export async function action({ request }: Route.ActionArgs) {
 	}
 	if (intent === "delete") {
 		deleteKey(id);
-		return null;
+		return { notice: { ok: true, message: `Key #${id} deleted` } } satisfies Result;
 	}
 	if (intent === "reveal") {
 		const key = listClientKeys().find((k) => k.id === id);
@@ -139,7 +142,16 @@ export async function action({ request }: Route.ActionArgs) {
 		if (action === "rotate") {
 			return { newlyRotated: res.rotated ?? [] } satisfies Result;
 		}
-		return null;
+		const affected = res.done;
+		const failed = res.failed;
+		return {
+			notice: {
+				ok: failed === 0,
+				message:
+					`Bulk ${action}: ${affected} key${affected === 1 ? "" : "s"} updated` +
+					(failed > 0 ? `, ${failed} failed` : ""),
+			},
+		} satisfies Result;
 	}
 
 	return null;
@@ -178,6 +190,34 @@ export default function ApiManager({
 }: Route.ComponentProps) {
 	const { keys, requireApiKey, revealAllowed, counts } = loaderData;
 	const result = actionData as Result | undefined;
+	const { toast } = useToast();
+	const lastResultRef = useRef<Result | undefined>(undefined);
+	useEffect(() => {
+		if (result === lastResultRef.current) return;
+		lastResultRef.current = result;
+		if (result && result.revealed === null) {
+			toast({
+				title: "Could not reveal key",
+				description: "Reveal is disabled or this key has no stored secret.",
+				variant: "error",
+			});
+		}
+		if (result?.notice) {
+			toast({
+				title: result.notice.ok ? "Done" : "Action failed",
+				description: result.notice.message,
+				variant: result.notice.ok ? "success" : "error",
+			});
+		}
+		if (result?.newlyRotated && result.newlyRotated.length === 0) {
+			toast({
+				title: "No keys matched",
+				description: "Bulk rotate found no matching keys.",
+				variant: "info",
+			});
+		}
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [result]);
 	const [query, setQuery] = useState("");
 	const [statusFilter, setStatusFilter] = useState("any");
 	const [selected, setSelected] = useState<Set<number>>(new Set());
@@ -408,7 +448,7 @@ export default function ApiManager({
 														max={100}
 														tone={usageTone(usagePct)}
 													/>
-													<span className="text-[10px] text-muted-foreground">
+													<span className="text-xs text-muted-foreground">
 														{usagePct}%
 													</span>
 												</div>

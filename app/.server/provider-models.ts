@@ -25,15 +25,28 @@ function upsertProviderModelCore(
 	modelName: string,
 	contextLength: number | null,
 	makePrimary = false,
+	displayNameOverride?: string | null,
 ): { id: number; created: boolean } {
 	const existing = query(
 		"SELECT id, is_primary FROM models WHERE model_name = ? AND provider_id = ?",
 	).get(modelName, providerId) as { id: number; is_primary: number } | undefined;
 
+	const cleanDisplay = (displayNameOverride ?? "").trim() || null;
+
 	if (existing) {
 		query(
 			"UPDATE models SET context_length = COALESCE(?, context_length), is_active = 1 WHERE id = ?",
 		).run(contextLength, existing.id);
+		if (cleanDisplay !== null) {
+			try {
+				query("UPDATE models SET display_name = ? WHERE id = ?").run(
+					cleanDisplay,
+					existing.id,
+				);
+			} catch {
+				/* kolom belum ada di DB lama */
+			}
+		}
 		if (makePrimary) {
 			query("UPDATE models SET is_primary = 0 WHERE provider_id = ?").run(providerId);
 			query("UPDATE models SET is_primary = 1 WHERE id = ?").run(existing.id);
@@ -50,14 +63,37 @@ function upsertProviderModelCore(
 	).get() as { ok: number } | undefined;
 
 	const isPrimary = makePrimary || !hasPrimary ? 1 : 0;
-	const result = query(
-		`INSERT INTO models (model_name, provider_id, context_length, is_active, is_primary)
+	let newId: number;
+	try {
+		const result = query(
+			`INSERT INTO models (model_name, provider_id, context_length, is_active, is_primary, display_name)
+     VALUES (?, ?, ?, 1, ?, ?)`,
+		).run(modelName, providerId, contextLength, isPrimary, cleanDisplay) as {
+			lastInsertRowid: number | bigint;
+		};
+		newId = Number(result.lastInsertRowid);
+	} catch {
+		// fallback DB lama tanpa kolom display_name
+		const result = query(
+			`INSERT INTO models (model_name, provider_id, context_length, is_active, is_primary)
      VALUES (?, ?, ?, 1, ?)`,
-	).run(modelName, providerId, contextLength, isPrimary) as {
-		lastInsertRowid: number | bigint;
-	};
+		).run(modelName, providerId, contextLength, isPrimary) as {
+			lastInsertRowid: number | bigint;
+		};
+		newId = Number(result.lastInsertRowid);
+		if (cleanDisplay) {
+			try {
+				query("UPDATE models SET display_name = ? WHERE id = ?").run(
+					cleanDisplay,
+					newId,
+				);
+			} catch {
+				/* ignore */
+			}
+		}
+	}
 
-	return { id: Number(result.lastInsertRowid), created: true };
+	return { id: newId, created: true };
 }
 
 /** Upsert satu model + invalidasi registry routing. */
@@ -66,12 +102,14 @@ export function upsertProviderModel(
 	modelName: string,
 	contextLength: number | null,
 	makePrimary = false,
+	displayNameOverride?: string | null,
 ): { id: number; created: boolean } {
 	const r = upsertProviderModelCore(
 		providerId,
 		modelName,
 		contextLength,
 		makePrimary,
+		displayNameOverride,
 	);
 	reload();
 	return r;

@@ -1,4 +1,5 @@
 import { Form } from "react-router";
+import { useEffect, useRef } from "react";
 import type { Route } from "./+types/api-manager.templates";
 import { LayoutTemplate, Trash2 } from "lucide-react";
 import {
@@ -13,6 +14,7 @@ import { Input, Label } from "../components/ui/field";
 import { EmptyState } from "../components/ui/empty-state";
 import { Table, THead, THeadCell, TRow, TCell } from "../components/ui/table";
 import { useConfirm } from "../components/ui/confirm-dialog";
+import { useToast } from "../components/ui/toast";
 
 export function loader() {
 	return { templates: listTemplates() };
@@ -23,7 +25,7 @@ export async function action({ request }: Route.ActionArgs) {
 	const intent = String(form.get("intent"));
 	if (intent === "delete") {
 		deleteTemplate(Number(form.get("id")));
-		return null;
+		return { notice: { ok: true, message: "Template deleted" } };
 	}
 	if (intent === "create") {
 		const parseList = (name: string): string[] | undefined => {
@@ -55,13 +57,37 @@ export async function action({ request }: Route.ActionArgs) {
 				scopes: [],
 			},
 		);
-		return null;
+		return {
+			notice: {
+				ok: true,
+				message: `Template "${String(form.get("name") ?? "").trim()}" created`,
+			},
+		};
 	}
 	return null;
 }
 
-export default function Templates({ loaderData }: Route.ComponentProps) {
+export default function Templates({ loaderData, actionData }: Route.ComponentProps) {
 	const { templates } = loaderData;
+	const notice = (
+		actionData as { notice?: { ok: boolean; message: string } } | undefined
+	)?.notice;
+	const { toast } = useToast();
+	const lastNoticeRef = useRef<{ ok: boolean; message: string } | undefined>(
+		undefined,
+	);
+	useEffect(() => {
+		if (notice === lastNoticeRef.current) return;
+		lastNoticeRef.current = notice;
+		if (notice) {
+			toast({
+				title: notice.ok ? "Done" : "Action failed",
+				description: notice.message,
+				variant: notice.ok ? "success" : "error",
+			});
+		}
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [notice]);
 	return (
 		<div className="mx-auto max-w-3xl">
 			<PageHeader

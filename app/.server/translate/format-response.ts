@@ -2,6 +2,7 @@ import type { ClientFormat, ProviderFormat } from "./canonical";
 
 type Extracted = {
   text: string;
+  reasoning: string;
   toolCalls: {
     id: string;
     type: "function";
@@ -44,6 +45,12 @@ function extractOpenAi(json: Record<string, unknown>): Extracted {
   }
   return {
     text,
+    reasoning:
+      typeof message.reasoning_content === "string"
+        ? message.reasoning_content
+        : typeof message.reasoning === "string"
+          ? message.reasoning
+          : "",
     toolCalls,
     finishReason: typeof choice.finish_reason === "string" ? choice.finish_reason : "stop",
     usage:
@@ -62,11 +69,15 @@ function extractAnthropic(json: Record<string, unknown>): Extracted {
   const usage = asRecord(json.usage);
   const toolCalls: Extracted["toolCalls"] = [];
   const textParts: string[] = [];
+  const thinkingParts: string[] = [];
   if (Array.isArray(json.content)) {
     for (const raw of json.content) {
       const block = asRecord(raw);
       if (block.type === "text" && typeof block.text === "string") {
         textParts.push(block.text);
+      }
+      if (block.type === "thinking" && typeof block.thinking === "string") {
+        thinkingParts.push(block.thinking);
       }
       if (block.type === "tool_use") {
         toolCalls.push({
@@ -82,6 +93,7 @@ function extractAnthropic(json: Record<string, unknown>): Extracted {
   }
   return {
     text: textParts.join(""),
+    reasoning: thinkingParts.join(""),
     toolCalls,
     finishReason: typeof json.stop_reason === "string" ? json.stop_reason : "end_turn",
     usage:
@@ -101,11 +113,15 @@ function extractGemini(json: Record<string, unknown>): Extracted {
   const content = asRecord(candidate.content);
   const meta = asRecord(json.usageMetadata);
   const textParts: string[] = [];
+  const thinkingParts: string[] = [];
   const toolCalls: Extracted["toolCalls"] = [];
   if (Array.isArray(content.parts)) {
     for (const raw of content.parts) {
       const part = asRecord(raw);
-      if (typeof part.text === "string") textParts.push(part.text);
+      if (typeof part.text === "string") {
+        if (part.thought === true) thinkingParts.push(part.text);
+        else textParts.push(part.text);
+      }
       const fc = asRecord(part.functionCall);
       if (Object.keys(fc).length > 0) {
         toolCalls.push({
@@ -121,6 +137,7 @@ function extractGemini(json: Record<string, unknown>): Extracted {
   }
   return {
     text: textParts.join(""),
+    reasoning: thinkingParts.join(""),
     toolCalls,
     finishReason: typeof candidate.finishReason === "string" ? candidate.finishReason : "STOP",
     usage:
@@ -147,6 +164,7 @@ function buildChat(ext: Extracted): Record<string, unknown> {
     role: "assistant",
     content: ext.text,
   };
+  if (ext.reasoning !== "") message.reasoning_content = ext.reasoning;
   if (ext.toolCalls.length > 0) message.tool_calls = ext.toolCalls;
   return {
     id: ext.id,
@@ -172,6 +190,8 @@ function buildChat(ext: Extracted): Record<string, unknown> {
 
 function buildAnthropic(ext: Extracted): Record<string, unknown> {
   const content: Record<string, unknown>[] = [];
+  // Tanpa signature (display only) — klien baca, bukan untuk di-relay balik.
+  if (ext.reasoning !== "") content.push({ type: "thinking", thinking: ext.reasoning });
   if (ext.text !== "") content.push({ type: "text", text: ext.text });
   for (const tc of ext.toolCalls) {
     let input: unknown = {};
@@ -202,6 +222,14 @@ function buildAnthropic(ext: Extracted): Record<string, unknown> {
 
 function buildResponses(ext: Extracted): Record<string, unknown> {
   const output: Record<string, unknown>[] = [];
+  if (ext.reasoning !== "") {
+    output.push({
+      id: `rs_${ext.id || Date.now().toString(16)}`,
+      type: "reasoning",
+      status: "completed",
+      summary: [{ type: "summary_text", text: ext.reasoning }],
+    });
+  }
   if (ext.text !== "" || ext.toolCalls.length === 0) {
     output.push({
       id: `msg_${ext.id || Date.now().toString(16)}`,

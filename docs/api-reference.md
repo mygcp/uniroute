@@ -22,6 +22,11 @@ Error shape is consistent:
 { "error": { "message": "…", "type": "model_not_found" } }
 ```
 
+`type` distinguishes the cause: `model_not_found` (unknown model),
+`model_disabled` (`model 'X' is disabled`), or `provider_disabled`
+(`model 'X' is unavailable: provider 'Y' is disabled`). Status is 404 in
+all three cases so clients can handle them uniformly.
+
 Common codes: 400 invalid body · 401/403 auth/guard · 404 model/provider not
 found · 429 rate limit/concurrency · 502 upstream failure. Upstream 5xx is
 retried once; **the 120s timeout is not retried**.

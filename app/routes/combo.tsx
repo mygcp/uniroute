@@ -15,6 +15,7 @@ import {
 	createCombo,
 	updateCombo,
 	deleteCombo,
+	getComboById,
 	validateComboInput,
 	type ComboStep,
 } from "../.server/combo";
@@ -23,14 +24,16 @@ import { PageHeader } from "../components/ui/page-header";
 import { Card } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
-import { Input, Label, Select } from "../components/ui/field";
+import { Input, Label, Select, Textarea } from "../components/ui/field";
 import { EmptyState } from "../components/ui/empty-state";
 import { useConfirm } from "../components/ui/confirm-dialog";
+import { useToast } from "../components/ui/toast";
 import { query } from "../.server/db";
 
 type ProviderOption = { id: string; name: string };
 type ModelOption = { model_name: string; provider_id: string };
 type AccountOption = { id: number; provider_id: string; label: string | null };
+type PoolOption = { id: number; name: string };
 
 export function loader() {
 	const combos = listCombos();
@@ -46,10 +49,14 @@ export function loader() {
 		(query(
 			"SELECT id, provider_id, label FROM provider_credentials WHERE is_active = 1 ORDER BY provider_id, id",
 		).all() as unknown as AccountOption[]) ?? [];
-	return { combos, providers, modelRows, accounts };
+	const pools =
+		(query(
+			"SELECT id, name FROM proxy_pools WHERE is_active = 1 ORDER BY name",
+		).all() as unknown as PoolOption[]) ?? [];
+	return { combos, providers, modelRows, accounts, pools };
 }
 
-type ActionMsg = { error?: string; saved?: string };
+type ActionMsg = { error?: string; saved?: string; deleted?: string };
 
 /** Resolve comma-separated account input ("key 1, key 2") into credential ids. */
 function resolveAccountIds(providerId: string, raw: string | null): number[] {
@@ -78,8 +85,12 @@ export async function action({ request }: Route.ActionArgs) {
 	const section = String(form.get("section"));
 
 	if (section === "delete") {
-		deleteCombo(Number(form.get("id")));
-		return null;
+		const id = Number(form.get("id"));
+		const prev = getComboById(id);
+		deleteCombo(id);
+		return {
+			deleted: `Combo "${prev?.name ?? `#${id}`}" deleted`,
+		} satisfies ActionMsg;
 	}
 
 	if (section === "create" || section === "update") {
@@ -112,6 +123,13 @@ export async function action({ request }: Route.ActionArgs) {
 				| "priority"
 				| "pipeline",
 			steps,
+			config: {
+				proxy_pool_id: (() => {
+					const raw = String(form.get("proxy_pool_id") ?? "").trim();
+					const n = raw === "" ? NaN : Number(raw);
+					return Number.isFinite(n) && n > 0 ? Math.trunc(n) : null;
+				})(),
+			},
 		};
 		const error = validateComboInput(input);
 		if (error) return { error } satisfies ActionMsg;
@@ -120,7 +138,11 @@ export async function action({ request }: Route.ActionArgs) {
 				const combo = createCombo(input);
 				return { saved: `Combo "${combo.name}" created` } satisfies ActionMsg;
 			}
-			updateCombo(id!, input);
+			const prev = id != null ? getComboById(id) : undefined;
+			updateCombo(id!, {
+				...input,
+				config: { ...(prev?.config ?? {}), ...input.config },
+			});
 			return { saved: `Combo "${input.name}" updated` } satisfies ActionMsg;
 		} catch (err) {
 			return {
@@ -220,7 +242,7 @@ function StepEditor({
 
 	return (
 		<div className="space-y-3">
-			<div className="flex items-center justify-between">
+			<div className="flex flex-wrap items-center justify-between gap-2">
 				<h3 className="text-sm font-medium text-muted-foreground">
 					Models in combo ({steps.length})
 				</h3>
@@ -240,20 +262,24 @@ function StepEditor({
 				);
 				const accountOpts = accountsForProvider(accounts, providerId);
 				return (
-					<Card key={i} padded={false} className="p-3">
-						<div className="flex items-center justify-between">
-							<span className="flex items-center gap-2">
-								<span className="flex h-5 w-5 items-center justify-center rounded-full bg-surface-2 text-xs font-semibold text-muted-foreground">
+					<Card key={i} padded={false} className="overflow-hidden">
+						<div className="flex flex-wrap items-center justify-between gap-2 border-b border-border bg-muted/30 px-3 py-2">
+							<span className="flex min-w-0 flex-wrap items-center gap-2">
+								<span className="flex h-5 w-5 items-center justify-center rounded-full bg-primary/15 text-xs font-semibold text-primary">
 									{i + 1}
 								</span>
-								<span className="text-xs font-medium text-muted-foreground">
+								<span className="text-sm font-semibold text-foreground">
 									Step {i + 1}
 								</span>
 								{providerOpt ? (
 									<Badge tone="info" style="subtle">
 										{providerOpt.name || providerOpt.id}
 									</Badge>
-								) : null}
+								) : (
+									<Badge tone="warning" style="subtle">
+										no provider
+									</Badge>
+								)}
 							</span>
 							<div className="flex items-center gap-1">
 								<Badge tone="neutral" style="subtle">
@@ -261,8 +287,8 @@ function StepEditor({
 								</Badge>
 								<Button
 									size="sm"
-									variant="outline"
-									className="h-6 gap-1 px-2 text-xs text-danger"
+									variant="danger"
+									className="gap-1 px-2 text-xs"
 									onClick={() => removeStep(i)}
 									title="Delete this step"
 									aria-label="Delete this step"
@@ -272,7 +298,8 @@ function StepEditor({
 							</div>
 						</div>
 
-						<div className="mt-3">
+						<div className="space-y-3 p-3 sm:p-4">
+						<div>
 							<Label htmlFor={`${prefix}_provider_${i}`}>
 								Provider (search)
 							</Label>
@@ -288,7 +315,7 @@ function StepEditor({
 								className={comboInputClass}
 							/>
 						</div>
-						<div className="mt-3 grid gap-3 md:grid-cols-2">
+						<div className="grid gap-3 md:grid-cols-2">
 							<div>
 								<Label htmlFor={`${prefix}_models_${i}`}>
 									Models (search, multi-select)
@@ -312,7 +339,7 @@ function StepEditor({
 
 							<div>
 								<Label htmlFor={`${prefix}_account_${i}`}>
-									<UserRound size={11} className="mr-1 inline" /> Account
+									<UserRound size={12} className="mr-1 inline" /> Account
 									(multi)
 								</Label>
 								<KeyAdder
@@ -331,19 +358,19 @@ function StepEditor({
 							</div>
 						</div>
 
-						<div className="mt-3">
+						<div>
 							<Label htmlFor={`${prefix}_prompt_${i}`}>
 								Step instructions (optional)
 							</Label>
-							<textarea
+							<Textarea
 								id={`${prefix}_prompt_${i}`}
 								name={`${prefix}_prompt_${i}`}
 								rows={2}
 								value={s.prompt}
 								onChange={(e) => updateStep(i, { prompt: e.target.value })}
-								className="w-full rounded-lg border border-border bg-surface-2 px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground transition-colors focus:border-primary focus:outline-none focus:ring-2 focus:ring-ring/40"
 								placeholder="Custom instructions for this step…"
 							/>
+						</div>
 						</div>
 					</Card>
 				);
@@ -446,16 +473,16 @@ function ModelAdder({
 				{selected.map((m) => (
 					<span
 						key={m}
-						className="inline-flex items-center gap-1 rounded-md border border-glass-border bg-glass px-2 py-0.5 text-xs font-medium text-foreground"
+						className="inline-flex shrink-0 items-center gap-1 rounded-md border border-primary/25 bg-primary/10 px-2 py-0.5 text-xs font-medium text-foreground"
 					>
 						<span className="max-w-40 truncate font-mono">{m}</span>
 						<button
 							type="button"
 							onClick={() => onRemove(m)}
-							className="text-muted-foreground hover:text-foreground"
+							className="inline-flex items-center rounded p-px text-muted-foreground hover:text-foreground"
 							aria-label={`Remove ${m}`}
 						>
-							<X size={11} />
+							<X size={12} />
 						</button>
 					</span>
 				))}
@@ -539,7 +566,7 @@ function ModelAdder({
 								}`}
 							>
 								<span className="flex-1 truncate font-mono text-xs">{opt}</span>
-								<span className="rounded bg-primary/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-primary">
+								<span className="rounded bg-primary/15 px-1.5 py-0.5 text-xs font-semibold uppercase text-primary">
 									model
 								</span>
 							</button>
@@ -637,16 +664,16 @@ function KeyAdder({
 				{parts.map((p) => (
 					<span
 						key={p}
-						className="inline-flex items-center gap-1 rounded-md border border-glass-border bg-glass px-2 py-0.5 text-xs font-medium text-foreground"
+						className="inline-flex shrink-0 items-center gap-1 rounded-md border border-glass-border bg-glass px-2 py-0.5 text-xs font-medium text-foreground"
 					>
 						<span className="max-w-40 truncate">{p}</span>
 						<button
 							type="button"
 							onClick={() => onChange(parts.filter((x) => x !== p).join(", "))}
-							className="text-muted-foreground hover:text-foreground"
+							className="inline-flex items-center rounded p-px text-muted-foreground hover:text-foreground"
 							aria-label={`Remove ${p}`}
 						>
-							<X size={11} />
+							<X size={12} />
 						</button>
 					</span>
 				))}
@@ -730,6 +757,9 @@ function KeyAdder({
 								}`}
 							>
 								<span className="flex-1 truncate text-xs">{opt}</span>
+								<span className="rounded bg-primary/15 px-1.5 py-0.5 text-xs font-semibold uppercase text-primary">
+									account
+								</span>
 							</button>
 						</li>
 					))}
@@ -740,11 +770,36 @@ function KeyAdder({
 	);
 }
 export default function Combo({ loaderData }: Route.ComponentProps) {
-	const { combos, providers, modelRows, accounts } = loaderData;
+	const { combos, providers, modelRows, accounts, pools } = loaderData;
 	const msg = useActionData<ActionMsg>();
+	const { toast } = useToast();
+	const lastMsgRef = useRef<ActionMsg | null>(null);
+	useEffect(() => {
+		if (!msg || lastMsgRef.current === msg) return;
+		lastMsgRef.current = msg;
+		// create/update outcomes already render prominent inline saved/error
+		// boxes above — only the (previously silent) delete needs a toast.
+		if (msg.deleted) {
+			toast({ title: msg.deleted, variant: "success" });
+		}
+	}, [msg, toast]);
 	const [editingId, setEditingId] = useState<number | null>(null);
 	const [showAdd, setShowAdd] = useState(false);
 	const { dialog, confirm } = useConfirm();
+	const poolName = (id: number | null | undefined): string | null => {
+		if (id == null) return null;
+		return pools.find((p) => p.id === id)?.name ?? `#${id}`;
+	};
+	const comboPoolIdOf = (c: (typeof combos)[number]): number | null => {
+		const raw = (c.config as Record<string, unknown> | null | undefined)?.[
+			"proxy_pool_id"
+		];
+		const n =
+			typeof raw === "string" && raw.trim() !== ""
+				? Number(raw.trim())
+				: Number(raw);
+		return Number.isFinite(n) && n > 0 ? Math.trunc(n) : null;
+	};
 
 	const renderEditForm = (c: (typeof combos)[number]) => {
 		return (
@@ -778,6 +833,29 @@ export default function Combo({ loaderData }: Route.ComponentProps) {
 						</div>
 					</div>
 
+					<div>
+						<Label htmlFor={`edit-pool-${c.id}`}>Proxy pool (optional)</Label>
+						<Select
+							id={`edit-pool-${c.id}`}
+							name="proxy_pool_id"
+							defaultValue={
+								comboPoolIdOf(c) != null ? String(comboPoolIdOf(c)) : ""
+							}
+						>
+							<option value="">No combo pool (use provider / global)</option>
+							{pools.map((p) => (
+								<option key={p.id} value={String(p.id)}>
+									{p.name}
+								</option>
+							))}
+						</Select>
+						<p className="mt-1 text-xs text-muted-foreground">
+							Precedence: client key → account → combo → provider →
+							global → direct. The combo pool applies only when no
+							client-key or account pool is set.
+						</p>
+					</div>
+
 					<StepEditor
 						prefix="step"
 						initialSteps={c.steps}
@@ -807,7 +885,7 @@ export default function Combo({ loaderData }: Route.ComponentProps) {
 		<div>
 			<PageHeader
 				title="Combo"
-				icon={<GitBranch size={24} />}
+				icon={<GitBranch size={20} />}
 				subtitle="Combine multiple models into a single synthetic model."
 			/>
 
@@ -822,17 +900,21 @@ export default function Combo({ loaderData }: Route.ComponentProps) {
 				</p>
 			) : null}
 
-			<p className="mb-6 max-w-2xl text-sm text-muted-foreground">
-				Combos combine several models into one synthetic model reached via{" "}
-				<code className="font-mono">combo:&lt;name&gt;</code>. Each step: pick a
-				provider → pick 1+ of that provider's models → set accounts ("dynamic" =
-				all accounts, or enter "key 1, key 2" for specific accounts). A model
-				cannot be reused across steps. <strong>Priority</strong> = automatic
-				fallback; <strong>Pipeline</strong> = each step's output is forwarded to
-				the next step.
-			</p>
+			<details className="mb-6 max-w-2xl rounded-lg border border-border bg-surface/50 px-3 py-2">
+				<summary className="cursor-pointer text-sm font-medium text-foreground">
+					What are combos?
+				</summary>
+				<p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">
+					Combos combine several models into one synthetic model reached via{" "}
+					<code className="font-mono">combo:&lt;name&gt;</code>. Each step: pick a
+					provider → pick 1+ of that provider's models → set accounts.{" "}
+					<strong>Priority</strong> = automatic fallback;{" "}
+					<strong>Pipeline</strong> = each step's output is forwarded to
+					the next step.
+				</p>
+			</details>
 
-			<div className="mb-6 flex items-center justify-between">
+			<div className="mb-6 flex flex-wrap items-center justify-between gap-2">
 				<h2 className="text-lg font-semibold text-foreground">
 					All Combos ({combos.length})
 				</h2>
@@ -840,7 +922,8 @@ export default function Combo({ loaderData }: Route.ComponentProps) {
 					onClick={() => setShowAdd((s) => !s)}
 					className="items-center gap-1"
 				>
-					<Plus size={16} /> {showAdd ? "Close Form" : "Add Combo"}
+					{showAdd ? <X size={16} /> : <Plus size={16} />}{" "}
+					{showAdd ? "Close Form" : "Add Combo"}
 				</Button>
 			</div>
 
@@ -884,6 +967,23 @@ export default function Combo({ loaderData }: Route.ComponentProps) {
 							</div>
 						</div>
 
+						<div>
+							<Label htmlFor="add-pool">Proxy pool (optional)</Label>
+							<Select id="add-pool" name="proxy_pool_id" defaultValue="">
+								<option value="">No combo pool (use provider / global)</option>
+								{pools.map((p) => (
+									<option key={p.id} value={String(p.id)}>
+										{p.name}
+									</option>
+								))}
+							</Select>
+							<p className="mt-1 text-xs text-muted-foreground">
+								Precedence: client key → account → combo → provider →
+								global → direct. The combo pool applies only when no
+								client-key or account pool is set.
+							</p>
+						</div>
+
 						<StepEditor
 							prefix="step"
 							providers={providers}
@@ -893,7 +993,7 @@ export default function Combo({ loaderData }: Route.ComponentProps) {
 
 						<div className="flex items-center justify-end gap-2">
 							<Button type="submit" className="items-center gap-1">
-								<Plus size={15} /> Save Combo
+								<Plus size={14} /> Save Combo
 							</Button>
 						</div>
 					</Form>
@@ -903,7 +1003,7 @@ export default function Combo({ loaderData }: Route.ComponentProps) {
 			{combos.length === 0 ? (
 				<Card padded={false}>
 					<EmptyState
-						icon={<Link2 size={32} />}
+						icon={<Link2 size={24} />}
 						title="No combos yet"
 						description='Create one with "Add Combo".'
 					/>
@@ -929,6 +1029,11 @@ export default function Combo({ loaderData }: Route.ComponentProps) {
 											? "model"
 											: "models"}
 									</Badge>
+									{comboPoolIdOf(c) != null ? (
+										<Badge tone="neutral" style="subtle">
+											proxy: {poolName(comboPoolIdOf(c))}
+										</Badge>
+									) : null}
 								</div>
 								<div className="flex gap-2">
 									<Button
@@ -939,7 +1044,15 @@ export default function Combo({ loaderData }: Route.ComponentProps) {
 											setEditingId(editingId === c.id ? null : c.id)
 										}
 									>
-										<Pencil size={12} /> Edit
+										{editingId === c.id ? (
+											<>
+												<X size={12} /> Close
+											</>
+										) : (
+											<>
+												<Pencil size={12} /> Edit
+											</>
+										)}
 									</Button>
 									<Form
 										method="post"
@@ -986,9 +1099,9 @@ export default function Combo({ loaderData }: Route.ComponentProps) {
 											<Badge tone="info" style="subtle">
 												{s.providerId || "any"}
 											</Badge>
-											<code className="font-mono">{s.modelIds.join(", ")}</code>
+											<code className="font-mono break-all">{s.modelIds.join(", ")}</code>
 											<span className="flex items-center gap-1">
-												<UserRound size={11} />
+												<UserRound size={12} />
 												{s.accountIds.length === 0
 													? "dynamic"
 													: s.accountIds
@@ -1001,7 +1114,7 @@ export default function Combo({ loaderData }: Route.ComponentProps) {
 											</span>
 											{s.prompt ? (
 												<span
-													className="max-w-xs truncate italic"
+													className="max-w-full truncate italic"
 													title={s.prompt}
 												>
 													&ldquo;{s.prompt}&rdquo;

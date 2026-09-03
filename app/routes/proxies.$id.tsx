@@ -1,13 +1,15 @@
-import { Form, Link, redirect } from "react-router";
+import { Form, Link, redirect, useNavigation } from "react-router";
+import { useEffect, useRef } from "react";
 import type { Route } from "./+types/proxies.$id";
 import { getProxy, updateProxy, deleteProxy } from "../.server/outbound-proxy";
 import { testProxyConnection } from "../.server/proxy-resolver";
-import { Button } from "../components/ui/button";
+import { Button, buttonClass } from "../components/ui/button";
 import { Card } from "../components/ui/card";
 import { Checkbox, Input, Label, Select } from "../components/ui/field";
 import { PageHeader } from "../components/ui/page-header";
 import { EmptyState } from "../components/ui/empty-state";
 import { useConfirm } from "../components/ui/confirm-dialog";
+import { useToast } from "../components/ui/toast";
 
 export function meta() {
 	return [{ title: "Proxy — UniRoute" }];
@@ -51,10 +53,33 @@ export default function ProxyDetail({
 	const p = loaderData.proxy;
 	const test = actionData?.test;
 	const { dialog, confirm } = useConfirm();
+	const { toast } = useToast();
+	const navigation = useNavigation();
+
+	// The save button posts with no intent and the action answers with a
+	// redirect, so there is no actionData to observe. Capture the intent
+	// during the navigation and toast once it settles. "test" already renders
+	// an inline result box and "delete" navigates away, so only "save" toasts.
+	const pendingIntentRef = useRef<string | null>(null);
+	if (navigation.state !== "idle" && navigation.formData) {
+		const raw = navigation.formData.get("intent");
+		pendingIntentRef.current =
+			raw == null || raw === "" ? "save" : String(raw);
+	}
+	const proxyName = p?.name ?? "Proxy";
+	useEffect(() => {
+		if (navigation.state !== "idle") return;
+		const pending = pendingIntentRef.current;
+		if (!pending) return;
+		pendingIntentRef.current = null;
+		if (pending === "save") {
+			toast({ title: `Proxy "${proxyName}" saved`, variant: "success" });
+		}
+	}, [navigation.state, toast, proxyName]);
 
 	if (!p) {
 		return (
-			<Card className="mx-auto max-w-xl py-10">
+			<Card className="mx-auto max-w-xl py-6">
 				<EmptyState
 					title="Proxy not found"
 					description="This proxy may have been deleted."
@@ -62,7 +87,7 @@ export default function ProxyDetail({
 						<Link
 							to="/proxies"
 							prefetch="render"
-							className="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-border px-4 text-sm font-medium text-foreground transition-colors hover:bg-muted"
+							className={buttonClass("outline", "md")}
 						>
 							Back to proxies
 						</Link>
@@ -80,7 +105,7 @@ export default function ProxyDetail({
 					<Link
 						to="/proxies"
 						prefetch="render"
-						className="inline-flex h-8 items-center justify-center rounded-lg px-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+						className={buttonClass("ghost", "sm")}
 					>
 						Back
 					</Link>
@@ -117,7 +142,7 @@ export default function ProxyDetail({
 							<option value="socks5">SOCKS5</option>
 						</Select>
 					</div>
-					<div className="grid grid-cols-3 gap-3">
+					<div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
 						<div className="col-span-2">
 							<Label htmlFor="host">Host</Label>
 							<Input
@@ -141,7 +166,7 @@ export default function ProxyDetail({
 							/>
 						</div>
 					</div>
-					<div className="grid grid-cols-2 gap-3">
+					<div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
 						<div>
 							<Label htmlFor="username">Username</Label>
 							<Input
@@ -160,7 +185,7 @@ export default function ProxyDetail({
 								autoComplete="new-password"
 								placeholder="••••••••"
 							/>
-							<p className="mt-1 text-[11px] text-muted-foreground">
+							<p className="mt-1 text-xs text-muted-foreground">
 								Leave empty to keep the stored password; type a new one to replace
 								it.
 							</p>

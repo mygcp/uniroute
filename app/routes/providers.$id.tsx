@@ -1,4 +1,4 @@
-import { Form, Link, useFetcher } from "react-router";
+import { Form, Link, redirect, useFetcher } from "react-router";
 import { useEffect, useRef, useState } from "react";
 import type { Route } from "./+types/providers.$id";
 import { getRegistryEntry } from "~/registry";
@@ -33,6 +33,9 @@ import {
 import { reload } from "../.server/registry";
 import { useStreaming } from "../hooks/use-streaming";
 import { MessageInput } from "../components/message-input";
+import { Brain } from "../components/ui/feedback";
+import { estimateTps, formatClock, formatSecs } from "../lib/format";
+import { CopyButton } from "../components/ui/copy-button";
 import { StreamingResponse } from "../components/streaming-response";
 import { Markdown } from "../components/markdown";
 import { useConfirm } from "../components/ui/confirm-dialog";
@@ -66,11 +69,13 @@ type ProviderRow = {
   base_url: string;
   auth_type: string;
   is_active: number;
+  prefix: string | null;
 };
 
 type ModelRow = {
   id: number;
   model_name: string;
+  display_name: string | null;
   context_length: number | null;
   is_active: number;
   is_primary: number;
@@ -100,15 +105,23 @@ function parseContextLength(value: FormDataEntryValue | null): number | null {
 
 export async function loader({ params }: Route.LoaderArgs) {
   const provider = query(
-    "SELECT id, name, base_url, auth_type, is_active FROM providers WHERE id = ?",
+    "SELECT id, name, base_url, auth_type, is_active, prefix FROM providers WHERE id = ?",
   ).get(params.id) as ProviderRow | undefined;
 
   const keys = provider ? listApiKeys(provider.id) : [];
-  const models = provider
-    ? (query(
+  let models: ModelRow[] = [];
+  if (provider) {
+    try {
+      models = query(
+        "SELECT id, model_name, display_name, context_length, is_active, is_primary FROM models WHERE provider_id = ? ORDER BY is_primary DESC, id",
+      ).all(provider.id) as unknown as ModelRow[];
+    } catch {
+      // DB lama belum punya kolom display_name
+      models = query(
         "SELECT id, model_name, context_length, is_active, is_primary FROM models WHERE provider_id = ? ORDER BY is_primary DESC, id",
-      ).all(provider.id) as unknown as ModelRow[])
-    : [];
+      ).all(provider.id) as unknown as ModelRow[];
+    }
+  }
 
   const pools = listPools();
   const activeProxies = listProxies(true).length;
@@ -220,7 +233,10 @@ export async function action({ request, params }: Route.ActionArgs) {
     const raw = String(form.get("pool_id") || "");
     if (!raw) {
       unassignPool("provider", id);
-      return { savedPool: true };
+      return {
+        savedPool: true,
+        notice: { ok: true, message: "Provider proxy removed (direct)" },
+      };
     }
     let poolId: number;
     if (raw.startsWith("proxy:")) {
@@ -238,7 +254,10 @@ export async function action({ request, params }: Route.ActionArgs) {
       targetType: "provider",
       targetId: id,
     });
-    return { savedPool: true };
+    return {
+      savedPool: true,
+      notice: { ok: true, message: "Provider proxy saved" },
+    };
   }
 
   // Satu akun (provider_credentials) memakai pool sendiri.
@@ -246,7 +265,10 @@ export async function action({ request, params }: Route.ActionArgs) {
     const keyId = Number(form.get("key_id"));
     const raw = String(form.get("pool_id") || "");
     setApiKeyProxyPool(keyId, raw ? Number(raw) : null);
-    return { savedPool: true };
+    return {
+      savedPool: true,
+      notice: { ok: true, message: "Account proxy saved" },
+    };
   }
 
   // Pilih SATU proxy spesifik untuk satu akun — disimpan sebagai pool
@@ -261,7 +283,10 @@ export async function action({ request, params }: Route.ActionArgs) {
     const proxyIdRaw = String(form.get("proxy_id") || "");
     if (!proxyIdRaw) {
       setApiKeyProxyPool(keyId, null);
-      return { savedPool: true };
+      return {
+        savedPool: true,
+        notice: { ok: true, message: "Account proxy removed" },
+      };
     }
     const proxyId = Number(proxyIdRaw);
     const name = `auto · ${id} · key-${keyId}`;
@@ -269,7 +294,10 @@ export async function action({ request, params }: Route.ActionArgs) {
     if (pool) updatePool(pool.id, { proxy_ids: [proxyId] });
     else pool = createPool({ name, proxy_ids: [proxyId] });
     setApiKeyProxyPool(keyId, pool.id);
-    return { savedPool: true };
+    return {
+      savedPool: true,
+      notice: { ok: true, message: "Account proxy saved" },
+    };
   }
 
   // Distribusi otomatis: bagi proxy aktif (dari satu pool ATAU seluruh daftar
@@ -357,6 +385,7 @@ export async function action({ request, params }: Route.ActionArgs) {
         content: m.content,
         model: m.model ?? null,
         latency_ms: m.latency_ms ?? null,
+        thinking: typeof m.thinking === "string" && m.thinking !== "" ? m.thinking : null,
       }));
     if (clean.length === 0) {
       return { chat: { ok: false, sessionId: null, message: "Nothing to save" } };
@@ -388,6 +417,8 @@ export async function action({ request, params }: Route.ActionArgs) {
           content: m.content,
           model: m.model ?? null,
           ms: m.latency_ms ?? null,
+          thinking: m.thinking ?? null,
+          created_at: m.created_at ?? null,
         })),
       },
     };
@@ -395,7 +426,10 @@ export async function action({ request, params }: Route.ActionArgs) {
 
   if (intent === "chat-delete") {
     deleteChatSession(Number(form.get("session_id")));
-    return { chatDeleted: Number(form.get("session_id")) };
+    return {
+      chatDeleted: Number(form.get("session_id")),
+      notice: { ok: true, message: "Chat deleted" },
+    };
   }
 
   if (intent === "add-key") {
@@ -406,23 +440,25 @@ export async function action({ request, params }: Route.ActionArgs) {
         String(form.get("label") ?? "").trim() || null,
         true,
       );
+      return { notice: { ok: true, message: "API key added" } };
     }
     return null;
   }
 
   if (intent === "delete-key") {
     deleteApiKeyById(Number(form.get("key_id")));
-    return null;
+    return { notice: { ok: true, message: "API key deleted" } };
   }
 
   if (intent === "route-key") {
     setRoutingKey(Number(form.get("key_id")));
-    return null;
+    return { notice: { ok: true, message: "Routing key updated" } };
   }
 
   if (intent === "active-key") {
-    setApiKeyActive(Number(form.get("key_id")), form.get("is_active") === "1");
-    return null;
+    const active = form.get("is_active") === "1";
+    setApiKeyActive(Number(form.get("key_id")), active);
+    return { notice: { ok: true, message: `API key ${active ? "activated" : "deactivated"}` } };
   }
 
   if (intent === "sync-models") {
@@ -430,8 +466,9 @@ export async function action({ request, params }: Route.ActionArgs) {
     if (entry) {
       dbSyncModels(id, entry);
       reload();
+      return { notice: { ok: true, message: "Models synced from registry" } };
     }
-    return null;
+    return { notice: { ok: false, message: "No registry entry for this provider" } };
   }
 
   if (intent === "add-model") {
@@ -439,15 +476,34 @@ export async function action({ request, params }: Route.ActionArgs) {
     if (!modelName) {
       return { modelsAction: { ok: false, message: "Model name is required" } };
     }
+    const customDisplay = String(form.get("display_name") ?? "").trim() || null;
     const contextLength = parseContextLength(form.get("context_length"));
     const makePrimary =
       form.get("is_primary") === "1" || form.get("is_primary") === "on";
     // Dynamic import: modul .server tidak boleh masuk graf client bundle.
     const { upsertProviderModel } = await import("../.server/provider-models");
-    upsertProviderModel(id, modelName, contextLength, makePrimary);
+    upsertProviderModel(id, modelName, contextLength, makePrimary, customDisplay);
     reload();
     return {
       modelsAction: { ok: true, message: `Added ${modelName}` },
+    };
+  }
+
+  if (intent === "set-model-display") {
+    const modelId = Number(form.get("model_id"));
+    const customDisplay = String(form.get("display_name") ?? "").trim() || null;
+    try {
+      query("UPDATE models SET display_name = ? WHERE id = ? AND provider_id = ?").run(
+        customDisplay,
+        modelId,
+        id,
+      );
+    } catch {
+      return { modelsAction: { ok: false, message: "DB belum mendukung display_name" } };
+    }
+    reload();
+    return {
+      modelsAction: { ok: true, message: customDisplay ? `Display name → ${customDisplay}` : "Display name dikosongkan (kembali ke prefix/nama)" },
     };
   }
 
@@ -529,12 +585,12 @@ export async function action({ request, params }: Route.ActionArgs) {
 
   if (intent === "toggle-model") {
     const modelId = Number(form.get("model_id"));
-    const isActive = form.get("is_active") === "1";
+    const active = form.get("is_active") === "1";
     query(
       "UPDATE models SET is_active = ? WHERE id = ? AND provider_id = ?",
-    ).run(isActive ? 1 : 0, modelId, id);
+    ).run(active ? 1 : 0, modelId, id);
     reload();
-    return null;
+    return { notice: { ok: true, message: `Model ${active ? "activated" : "deactivated"}` } };
   }
 
   if (intent === "set-primary-model") {
@@ -544,14 +600,14 @@ export async function action({ request, params }: Route.ActionArgs) {
       "UPDATE models SET is_primary = 1, is_active = 1 WHERE id = ? AND provider_id = ?",
     ).run(modelId, id);
     reload();
-    return null;
+    return { notice: { ok: true, message: "Primary model updated" } };
   }
 
   if (intent === "delete-model") {
     const modelId = Number(form.get("model_id"));
     query("DELETE FROM models WHERE id = ? AND provider_id = ?").run(modelId, id);
     reload();
-    return null;
+    return { notice: { ok: true, message: "Model deleted" } };
   }
 
   if (intent === "delete-provider") {
@@ -559,7 +615,28 @@ export async function action({ request, params }: Route.ActionArgs) {
     query("DELETE FROM models WHERE provider_id = ?").run(id);
     query("DELETE FROM providers WHERE id = ?").run(id);
     reload();
-    return { deleted: true };
+    return redirect("/providers");
+  }
+
+  if (intent === "update-provider") {
+    const name = String(form.get("name") ?? "").trim();
+    const baseUrl = String(form.get("base_url") ?? "").trim();
+    const authType = String(form.get("auth_type") ?? "bearer");
+    let prefix: string | null = null;
+    try {
+      const { normalizePrefix } = await import("../.server/provider-prefix");
+      prefix = normalizePrefix(String(form.get("prefix") ?? ""));
+    } catch (e) {
+      return { providerUpdate: { ok: false, message: e instanceof Error ? e.message : "invalid prefix" } };
+    }
+    if (prefix) {
+      const dup = query("SELECT id FROM providers WHERE prefix = ? AND id != ?").get(prefix, id) as { id: string } | undefined;
+      if (dup) return { providerUpdate: { ok: false, message: `prefix "${prefix}" sudah dipakai ${dup.id}` } };
+    }
+    if (!name || !baseUrl) return { providerUpdate: { ok: false, message: "name & base_url required" } };
+    query("UPDATE providers SET name = ?, base_url = ?, auth_type = ?, prefix = ? WHERE id = ?").run(name, baseUrl, authType, prefix, id);
+    reload();
+    return { providerUpdate: { ok: true, message: "Provider updated" } };
   }
 
   return null;
@@ -654,6 +731,9 @@ export default function ProviderDetail({
   const [selectedRemote, setSelectedRemote] = useState<Record<string, boolean>>(
     {},
   );
+  const [importQuery, setImportQuery] = useState("");
+  const [newModelDisplay, setNewModelDisplay] = useState("");
+  const [editingDisplayId, setEditingDisplayId] = useState<number | null>(null);
   const fetcher = useFetcher<{
     test?: { ok: boolean; okId: number; message: string };
     modelsAction?: { ok: boolean; message: string };
@@ -668,9 +748,12 @@ export default function ProviderDetail({
     };
   }>();
   const lastFetcherDataRef = useRef<typeof fetcher.data>(undefined);
-  const [chatModel, setChatModel] = useState(
-    models.find((m) => m.is_primary)?.model_name ?? models[0]?.model_name ?? "",
-  );
+  const [chatModel, setChatModel] = useState(() => {
+    const first = models.find((m) => m.is_primary) ?? models[0];
+    if (!first) return "";
+    const pfx = (loaderData.provider?.prefix ?? "").replace(/^\/+|\/+$/g, "").trim();
+    return (first.display_name ?? "").trim() || (pfx ? `${pfx}/${first.model_name}` : first.model_name);
+  });
   const [prompt, setPrompt] = useState("");
   const stream = useStreaming();
 
@@ -680,6 +763,8 @@ export default function ProviderDetail({
     content: string;
     model?: string | null;
     ms?: number | null;
+    thinking?: string | null;
+    created_at?: number | null;
   };
   const [history, setHistory] = useState<ChatMsg[]>([]);
   const historyRef = useRef<ChatMsg[]>([]);
@@ -723,7 +808,16 @@ export default function ProviderDetail({
   useEffect(() => {
     const d = chatLoadFetcher.data?.chatLoad;
     if (!d) return;
-    setTurns(d.messages);
+    setTurns(
+      d.messages.map((m) => ({
+        role: m.role,
+        content: m.content,
+        model: m.model ?? null,
+        ms: m.ms ?? null,
+        thinking: m.thinking ?? null,
+        created_at: m.created_at ?? null,
+      })),
+    );
     setChatSessionId(d.sessionId);
     requestAnimationFrame(() => {
       const el = chatScrollRef.current;
@@ -758,7 +852,9 @@ export default function ProviderDetail({
     );
     fd.set(
       "messages",
-      JSON.stringify(msgs.map((m) => ({ role: m.role, content: m.content }))),
+      JSON.stringify(
+        msgs.map((m) => ({ role: m.role, content: m.content, thinking: m.thinking ?? null })),
+      ),
     );
     chatSaveFetcher.submit(fd, { method: "post" });
   };
@@ -819,6 +915,7 @@ export default function ProviderDetail({
       content: stream.error ? `Error: ${stream.error}` : stream.response,
       model: chatModel,
       ms,
+      thinking: stream.thinking || null,
     };
     const next: ChatMsg[] = [...historyRef.current, assistantTurn];
     setTurns(next);
@@ -836,7 +933,9 @@ export default function ProviderDetail({
       );
       fd.set(
         "messages",
-        JSON.stringify(next.map((m) => ({ role: m.role, content: m.content }))),
+        JSON.stringify(
+          next.map((m) => ({ role: m.role, content: m.content, thinking: m.thinking ?? null })),
+        ),
       );
       chatSaveFetcher.submit(fd, { method: "post" });
     }
@@ -844,6 +943,26 @@ export default function ProviderDetail({
 
   const { dialog, confirm } = useConfirm();
   const { toast } = useToast();
+  const lastNoticeRef = useRef<{ ok: boolean; message: string } | undefined>(
+    undefined,
+  );
+
+  // Toast untuk aksi Form biasa (actionData.notice): key/model/pool/chat.
+  useEffect(() => {
+    const notice = (
+      actionData as { notice?: { ok: boolean; message: string } } | undefined
+    )?.notice;
+    if (notice === lastNoticeRef.current) return;
+    lastNoticeRef.current = notice;
+    if (notice) {
+      toast({
+        title: notice.ok ? "Done" : "Action failed",
+        description: notice.message,
+        variant: notice.ok ? "success" : "error",
+      });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [actionData]);
 
   useEffect(() => {
     if (fetcher.state !== "idle" || !fetcher.data) return;
@@ -931,6 +1050,16 @@ export default function ProviderDetail({
 
   const testResult = fetcher.data?.test;
 
+  // Prefix = nama saja, "/" otomatis. Samakan dengan server displayName().
+  const cleanPfx = (provider?.prefix ?? "").replace(/^\/+|\/+$/g, "").trim();
+  const modelDisplay = (m: { model_name: string; display_name: string | null }) =>
+    (m.display_name ?? "").trim() || (cleanPfx ? `${cleanPfx}/${m.model_name}` : m.model_name);
+  const remoteModels = fetcher.data?.remoteModels?.models ?? [];
+  const iq = importQuery.trim().toLowerCase();
+  const filteredRemote = iq
+    ? remoteModels.filter((m) => m.id.toLowerCase().includes(iq))
+    : remoteModels;
+
   return (
     <div>
       <a
@@ -943,7 +1072,7 @@ export default function ProviderDetail({
 
       <PageHeader
         title={provider.name}
-        subtitle={`${provider.id} · ${provider.base_url}`}
+        subtitle={`${provider.id} · ${provider.base_url}${cleanPfx ? ` · prefix ${cleanPfx}/` : ""}`}
         actions={
           provider.is_active ? (
             <Badge tone="success">Active</Badge>
@@ -952,6 +1081,44 @@ export default function ProviderDetail({
           )
         }
       />
+
+      {/* Provider settings */}
+      <Card className="mb-6">
+        <details>
+          <summary className="cursor-pointer text-sm font-medium text-foreground">Provider settings</summary>
+          <Form method="post" className="mt-4 grid gap-3 sm:grid-cols-2">
+            <input type="hidden" name="intent" value="update-provider" />
+            <div>
+              <Label htmlFor="edit-name">Display Name</Label>
+              <Input id="edit-name" name="name" defaultValue={provider.name} required />
+            </div>
+            <div>
+              <Label htmlFor="edit-base">Base URL</Label>
+              <Input id="edit-base" name="base_url" defaultValue={provider.base_url} required />
+            </div>
+            <div>
+              <Label htmlFor="edit-auth">Auth Type</Label>
+              <Select id="edit-auth" name="auth_type" defaultValue={provider.auth_type}>
+                <option value="none">none</option>
+                <option value="bearer">bearer</option>
+                <option value="apikey">apikey</option>
+              </Select>
+            </div>
+            <div>
+              <Label htmlFor="edit-prefix">Prefix (optional)</Label>
+              <Input id="edit-prefix" name="prefix" defaultValue={(provider.prefix ?? "").replace(/\/+$/g, "")} placeholder="e.g. openai" pattern="[a-zA-Z0-9._\-]{1,32}" title="Name only, without slash" />
+            </div>
+            <div className="sm:col-span-2">
+              <Button type="submit" size="sm">Save provider</Button>
+            </div>
+          </Form>
+          {actionData && "providerUpdate" in actionData && (actionData as { providerUpdate: { ok: boolean; message: string } }).providerUpdate ? (
+            <p className={`mt-2 text-xs ${(actionData as { providerUpdate: { ok: boolean } }).providerUpdate.ok ? "text-success" : "text-danger"}`}>
+              {(actionData as { providerUpdate: { message: string } }).providerUpdate.message}
+            </p>
+          ) : null}
+        </details>
+      </Card>
 
       <Tabs
         tabs={TAB_ITEMS.map((t) => t.label)}
@@ -1205,7 +1372,7 @@ export default function ProviderDetail({
                           PROXY_TONE_CLASS[proxyInfoFor(key).tone]
                         }`}
                       >
-                        <Globe size={15} />
+                        <Globe size={14} />
                         <span className="sm:hidden">
                           {proxyInfoFor(key).tone === "ok"
                             ? "Proxy"
@@ -1290,12 +1457,13 @@ export default function ProviderDetail({
                 setNewModelName("");
                 setNewModelContext("");
                 setNewModelPrimary(false);
+                setNewModelDisplay("");
               }}
             >
               <input type="hidden" name="intent" value="add-model" />
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <div className="sm:col-span-1">
-                  <Label htmlFor="custom-model-name">Model name</Label>
+                  <Label htmlFor="custom-model-name">Model name (upstream)</Label>
                   <Input
                     id="custom-model-name"
                     name="model_name"
@@ -1303,6 +1471,16 @@ export default function ProviderDetail({
                     onChange={(e) => setNewModelName(e.target.value)}
                     placeholder="e.g. gpt-4o-mini"
                     required
+                  />
+                </div>
+                <div>
+                  <Label htmlFor="custom-model-display">Custom display name (opsional)</Label>
+                  <Input
+                    id="custom-model-display"
+                    name="display_name"
+                    value={newModelDisplay}
+                    onChange={(e) => setNewModelDisplay(e.target.value)}
+                    placeholder={cleanPfx && newModelName.trim() ? `${cleanPfx}/${newModelName.trim()}` : "kosong = prefix/nama_model"}
                   />
                 </div>
                 <div>
@@ -1331,6 +1509,17 @@ export default function ProviderDetail({
                   </label>
                 </div>
               </div>
+              {newModelName.trim() ? (
+                <p className="mt-2 text-xs text-muted-foreground">
+                  Tampil sebagai:{" "}
+                  <span className="font-mono text-foreground">
+                    {newModelDisplay.trim() || (cleanPfx ? `${cleanPfx}/${newModelName.trim()}` : newModelName.trim())}
+                  </span>
+                  {newModelDisplay.trim() ? (
+                    <span> (custom, bare upstream tetap <span className="font-mono">{newModelName.trim()}</span>)</span>
+                  ) : null}
+                </p>
+              ) : null}
               <div className="mt-3 flex gap-2">
                 <Button type="submit" disabled={!newModelName.trim()}>
                   Save model
@@ -1353,6 +1542,7 @@ export default function ProviderDetail({
               onSubmit={() => {
                 setImportOpen(false);
                 setSelectedRemote({});
+                setImportQuery("");
               }}
             >
               <input type="hidden" name="intent" value="import-models" />
@@ -1373,10 +1563,10 @@ export default function ProviderDetail({
                     variant="outline"
                     onClick={() => {
                       const next: Record<string, boolean> = {};
-                      for (const m of fetcher.data?.remoteModels?.models ?? []) {
+                      for (const m of filteredRemote) {
                         if (!m.alreadyAdded) next[m.id] = true;
                       }
-                      setSelectedRemote(next);
+                      setSelectedRemote((prev) => ({ ...prev, ...next }));
                     }}
                   >
                     Select new
@@ -1399,13 +1589,31 @@ export default function ProviderDetail({
                   </Button>
                 </div>
               </div>
+              <div className="mb-2">
+                <Input
+                  type="search"
+                  value={importQuery}
+                  onChange={(e) => setImportQuery(e.target.value)}
+                  placeholder="Type to search models…"
+                  className="h-8 text-xs"
+                />
+                {iq ? (
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {filteredRemote.length} of {remoteModels.length} match
+                  </p>
+                ) : null}
+              </div>
               <div className="mb-3 max-h-64 space-y-2 overflow-y-auto rounded-md border border-border p-2">
-                {(fetcher.data.remoteModels.models ?? []).length === 0 ? (
+                {remoteModels.length === 0 ? (
                   <p className="py-4 text-center text-sm text-muted-foreground">
                     No models returned by provider.
                   </p>
+                ) : filteredRemote.length === 0 ? (
+                  <p className="py-4 text-center text-sm text-muted-foreground">
+                    No models match “{importQuery.trim()}”.
+                  </p>
                 ) : (
-                  fetcher.data.remoteModels.models.map((m) => (
+                  filteredRemote.map((m) => (
                     <label
                       key={m.id}
                       className="flex cursor-pointer items-center justify-between gap-3 rounded-md px-2 py-1.5 hover:bg-background"
@@ -1462,7 +1670,11 @@ export default function ProviderDetail({
             </p>
           ) : (
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-              {models.map((m) => (
+              {models.map((m) => {
+                const disp = modelDisplay(m);
+                const isCustom = Boolean((m.display_name ?? "").trim());
+                const showBare = disp !== m.model_name;
+                return (
                 <div
                   key={m.id}
                   className="rounded-lg border border-border p-3"
@@ -1470,8 +1682,16 @@ export default function ProviderDetail({
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0">
                       <p className="break-all font-mono text-sm font-medium text-foreground">
-                        {m.model_name}
+                        {disp}
+                        {isCustom ? (
+                          <Badge tone="info" className="ml-1">custom</Badge>
+                        ) : null}
                       </p>
+                      {showBare ? (
+                        <p className="mt-0.5 break-all font-mono text-xs text-muted-foreground">
+                          upstream: {m.model_name}
+                        </p>
+                      ) : null}
                       <p className="mt-1 text-xs text-muted-foreground">
                         {m.context_length
                           ? `${Math.round(m.context_length / 1000)}k context`
@@ -1488,7 +1708,41 @@ export default function ProviderDetail({
                       ) : null}
                     </div>
                   </div>
+                  {editingDisplayId === m.id ? (
+                    <Form method="post" className="mt-2 flex flex-wrap gap-1.5" onSubmit={() => setEditingDisplayId(null)}>
+                      <input type="hidden" name="intent" value="set-model-display" />
+                      <input type="hidden" name="model_id" value={m.id} />
+                      <Input
+                        name="display_name"
+                        defaultValue={m.display_name ?? ""}
+                        placeholder={cleanPfx ? `${cleanPfx}/${m.model_name}` : m.model_name}
+                        className="h-8 font-mono text-xs"
+                      />
+                      <Button type="submit" size="sm">Save</Button>
+                      <Button type="button" size="sm" variant="outline" onClick={() => setEditingDisplayId(null)}>
+                        Cancel
+                      </Button>
+                    </Form>
+                  ) : null}
                   <div className="mt-3 flex flex-wrap gap-1.5">
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={() => setEditingDisplayId(editingDisplayId === m.id ? null : m.id)}
+                    >
+                      {isCustom ? "Edit display" : "Custom display"}
+                    </Button>
+                    {isCustom ? (
+                      <Form method="post">
+                        <input type="hidden" name="intent" value="set-model-display" />
+                        <input type="hidden" name="model_id" value={m.id} />
+                        <input type="hidden" name="display_name" value="" />
+                        <Button type="submit" size="sm" variant="outline" title="Kembalikan ke prefix/nama_model">
+                          Reset
+                        </Button>
+                      </Form>
+                    ) : null}
                     {!m.is_primary ? (
                       <Form method="post">
                         <input
@@ -1528,7 +1782,8 @@ export default function ProviderDetail({
                     </Form>
                   </div>
                 </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </Card>
@@ -1545,8 +1800,8 @@ export default function ProviderDetail({
             className="h-8 w-auto max-w-[240px] text-xs"
           >
             {models.map((m) => (
-              <option key={m.id} value={m.model_name}>
-                {m.model_name}
+              <option key={m.id} value={modelDisplay(m)}>
+                {modelDisplay(m)}
               </option>
             ))}
           </Select>
@@ -1584,8 +1839,8 @@ export default function ProviderDetail({
         </div>
 
         <div className="grid gap-4 lg:grid-cols-[230px_minmax(0,1fr)]">
-          <div className="rounded-xl border border-border bg-surface/50 p-2 lg:max-h-[560px] lg:overflow-y-auto">
-            <p className="px-1 pb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+          <div className="max-h-44 overflow-y-auto rounded-xl border border-border bg-surface/50 p-2 lg:max-h-[560px]">
+            <p className="px-1 pb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
               Saved chats ({loaderData.chatSessions.length})
             </p>
             {chatLoadFetcher.state !== "idle" ? (
@@ -1619,7 +1874,7 @@ export default function ProviderDetail({
                       >
                         {sess.title}
                       </span>
-                      <span className="block truncate text-[10px] text-muted-foreground">
+                      <span className="block truncate text-xs text-muted-foreground">
                         {new Date(sess.updated_at * 1000).toLocaleString()}
                       </span>
                     </button>
@@ -1628,9 +1883,9 @@ export default function ProviderDetail({
                       aria-label={`Delete chat ${sess.title}`}
                       title="Delete chat"
                       onClick={() => void deleteChat(sess.id)}
-                      className="shrink-0 rounded p-1 text-muted-foreground transition-colors hover:bg-danger/10 hover:text-danger"
+                      className="shrink-0 rounded p-2 text-muted-foreground transition-colors hover:bg-danger/10 hover:text-danger"
                     >
-                      <Trash2 size={13} />
+                      <Trash2 size={14} />
                     </button>
                   </div>
                 );
@@ -1638,7 +1893,7 @@ export default function ProviderDetail({
             )}
           </div>
 
-          <div className="flex h-[560px] min-w-0 flex-col rounded-xl border border-border bg-surface/50">
+          <div className="flex h-[60vh] max-h-[560px] min-h-[420px] min-w-0 flex-col rounded-xl border border-border bg-surface/50">
             <div
               ref={chatScrollRef}
               className="flex-1 space-y-3 overflow-y-auto p-3 sm:p-4"
@@ -1656,29 +1911,58 @@ export default function ProviderDetail({
               ) : null}
 
               {history.map((m, idx) => {
+                const isUser = m.role === "user";
                 return (
                   <div
                     key={idx}
-                    className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}
+                    className={`flex ${isUser ? "justify-end" : "justify-start"}`}
                   >
                     <div
-                      className={`max-w-[85%] rounded-xl border px-3 py-2 sm:max-w-[80%] ${
-                        m.role === "user"
-                          ? "border-primary/30 bg-primary/15"
-                          : "border-border bg-background/60"
-                      }`}
+                      className={
+                        isUser
+                          ? "max-w-[85%] rounded-xl border border-primary/30 bg-primary/15 px-3 py-2 sm:max-w-[80%]"
+                          : "min-w-0 max-w-full flex-1"
+                      }
                     >
                       <>
+                        {m.role === "assistant" && m.thinking ? (
+                          <details className="mb-1.5 rounded-lg border border-info/25 bg-info/5 px-2.5 py-1.5">
+                            <summary className="flex cursor-pointer items-center gap-1.5 text-xs font-medium text-info">
+                              <Brain size={12} />
+                              Thought process
+                            </summary>
+                            <div className="mt-1.5 max-h-48 overflow-y-auto text-xs leading-relaxed whitespace-pre-wrap break-words text-muted-foreground">
+                              {m.thinking}
+                            </div>
+                          </details>
+                        ) : null}
                         <Markdown text={m.content} />
-                        {m.role === "assistant" && (m.ms != null || m.model) ? (
-                          <p className="mt-1 text-[10px] tabular-nums text-muted-foreground">
-                            {[
-                              m.model,
-                              m.ms != null ? `${(m.ms / 1000).toFixed(1)}s` : null,
-                            ]
-                              .filter(Boolean)
-                              .join(" · ")}
-                          </p>
+                        {m.role === "assistant" ? (
+                          <div className="mt-1 flex min-h-8 flex-wrap items-center gap-x-2 gap-y-0.5">
+                            {(() => {
+                              const secs = formatSecs(m.ms);
+                              const tps = estimateTps(m.content.length, m.ms);
+                              const clock = formatClock(
+                                m.created_at != null ? m.created_at * 1000 : null,
+                              );
+                              const parts = [
+                                m.model,
+                                secs,
+                                tps != null ? `≈ ${tps} tok/s` : null,
+                                clock,
+                              ].filter(Boolean);
+                              return parts.length > 0 ? (
+                                <p className="text-xs tabular-nums text-muted-foreground">
+                                  {parts.join(" · ")}
+                                </p>
+                              ) : null;
+                            })()}
+                            <CopyButton
+                              text={m.content}
+                              label="Copy response"
+                              className="h-8 w-8 shrink-0"
+                            />
+                          </div>
                         ) : null}
                       </>
                     </div>
@@ -1689,12 +1973,13 @@ export default function ProviderDetail({
               {/* Bubble streaming live — selalu tampil saat generating */}
               {stream.streaming ? (
                 <div className="flex justify-start">
-                  <div className="max-w-[85%] rounded-xl border border-border bg-background/60 px-3 py-2 sm:max-w-[80%]">
+                  <div className="min-w-0 max-w-full flex-1">
                     <StreamingResponse
                       content={stream.response}
                       streaming={stream.streaming}
                       done={stream.done}
                       error={stream.error}
+                      thinking={stream.thinking}
                       usage={stream.usage}
                       latencyMs={
                         streamStartRef.current
@@ -1719,7 +2004,7 @@ export default function ProviderDetail({
                       stream.streaming ? "Generating…" : `Message ${chatModel}…`
                     }
                   />
-                  <p className="mt-1 hidden text-[10px] text-muted-foreground sm:block">
+                  <p className="mt-1 hidden text-xs text-muted-foreground sm:block">
                     Enter to send · Shift+Enter for new line
                   </p>
                 </div>
@@ -1783,7 +2068,7 @@ export default function ProviderDetail({
                 className="h-8 text-xs"
               />
               {pickerQuery.trim() ? (
-                <p className="mt-1 text-[11px] text-muted-foreground">
+                <p className="mt-1 text-xs text-muted-foreground">
                   {filteredProxies.length} of {proxies.length} proxies match
                 </p>
               ) : null}
@@ -1821,7 +2106,7 @@ export default function ProviderDetail({
                         <span className="block truncate font-mono text-xs text-foreground">
                           {p.host}:{p.port}
                         </span>
-                        <span className="block truncate text-[11px] text-muted-foreground">
+                        <span className="block truncate text-xs text-muted-foreground">
                           {p.type}
                           {p.last_latency_ms != null
                             ? ` · ${p.last_latency_ms}ms`

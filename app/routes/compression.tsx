@@ -1,4 +1,5 @@
 import { Form } from "react-router";
+import { useEffect, useRef } from "react";
 import type { Route } from "./+types/compression";
 import { FileArchive } from "lucide-react";
 import { getSettings, testCompression } from "../.server/compressor";
@@ -7,6 +8,7 @@ import { PageHeader } from "../components/ui/page-header";
 import { Card } from "../components/ui/card";
 import { Button } from "../components/ui/button";
 import { Checkbox, Input, Label, Textarea } from "../components/ui/field";
+import { useToast } from "../components/ui/toast";
 
 export function loader() {
   return { settings: getSettings() };
@@ -53,11 +55,22 @@ export async function action({ request }: Route.ActionArgs) {
 export default function Compression({ loaderData, actionData }: Route.ComponentProps) {
   const { settings } = loaderData;
   const test = actionData && "pending" in actionData ? actionData : null;
+  const { toast } = useToast();
+  const lastActionRef = useRef<unknown>(null);
+  useEffect(() => {
+    if (!actionData || lastActionRef.current === actionData) return;
+    lastActionRef.current = actionData;
+    // Test outcomes always render the result display inline — skip them.
+    // Save only shows a dull inline line, so it gets a toast.
+    if ("saved" in actionData) {
+      toast({ title: "Settings saved", variant: "success" });
+    }
+  }, [actionData, toast]);
   return (
     <div>
       <PageHeader
         title="Compression"
-        icon={<FileArchive size={24} />}
+        icon={<FileArchive size={20} />}
         subtitle="Configure and test prompt compression."
       />
 

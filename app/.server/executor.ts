@@ -8,14 +8,14 @@ export type ExecutorOptions = {
 	headers: Headers;
 	body: string;
 	signal?: AbortSignal;
-	/** Client API key's proxy pool (highest priority). */
+	/** Client API key's proxy pool (highest priority: client key). */
 	apiKeyPoolId?: number;
-	/** Provider credential's proxy pool (second priority). */
+	/** Provider credential's proxy pool (second priority: account). */
 	accountPoolId?: number;
-	/** Provider's proxy pool (third priority). */
-	providerPoolId?: number;
-	/** Combo's proxy pool (fourth priority). */
+	/** Combo's proxy pool (third priority: combo). */
 	comboPoolId?: number;
+	/** Provider's proxy pool (fourth priority: provider; then global, then direct). */
+	providerPoolId?: number;
 	/** Provider id, used only for diagnostics. */
 	providerId?: string;
 	/** Dipanggil saat proxy spesifik terpilih (untuk metadata request log). */

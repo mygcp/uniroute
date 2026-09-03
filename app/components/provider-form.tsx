@@ -13,6 +13,7 @@ type Props = {
     is_active: number | boolean;
     weight: number;
     priority: number;
+    prefix?: string | null;
   };
   template?: ProviderTemplate | null;
   providers: string[];
@@ -94,6 +95,28 @@ export function ProviderForm({ provider, template }: Props) {
               defaultValue={provider?.priority ?? 0}
               min={0}
             />
+          </div>
+          <div>
+            <Label htmlFor="pprefix">Prefix (opsional)</Label>
+            <Input
+              id="pprefix"
+              name="prefix"
+              defaultValue={provider?.prefix?.replace(/\/+$/g, "") ?? ""}
+              placeholder="openai — kosong = tanpa prefix"
+              pattern="[a-zA-Z0-9._\-]{1,32}"
+              title='Prefix cukup nama saja tanpa "/" (contoh: openai)'
+            />
+            <p className="mt-1 text-xs text-muted-foreground">
+              Prefix virtual, hanya di UniRoute. Cukup nama saja —{" "}
+              <span className="font-mono">/</span> otomatis sebagai pemisah, model
+              tampil sebagai <span className="font-mono">prefix/nama_model</span>{" "}
+              (mis. <span className="font-mono">openai/gpt-4o</span>). Bila nama
+              model bawaan sudah mengandung <span className="font-mono">/</span>{" "}
+              (mis. <span className="font-mono">oc/muse1.3</span>) tidak masalah —
+              tinggal ditempel jadi{" "}
+              <span className="font-mono">oc/oc/muse1.3</span>. Kosongkan untuk
+              tanpa prefix.
+            </p>
           </div>
         </div>
         <div className="mt-4 flex items-center gap-2">

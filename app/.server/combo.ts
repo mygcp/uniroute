@@ -89,6 +89,18 @@ function parseConfig(raw: string): Record<string, unknown> {
   }
 }
 
+/**
+ * Read the proxy pool assigned to a combo (`combos.config.proxy_pool_id`).
+ * Returns the pool id when it is a finite number > 0, else null.
+ */
+export function comboProxyPoolId(
+  combo: { config?: Record<string, unknown> | null } | null | undefined,
+): number | null {
+  const raw = combo?.config?.["proxy_pool_id"];
+  const n = typeof raw === "string" && raw.trim() !== "" ? Number(raw.trim()) : Number(raw);
+  return Number.isFinite(n) && n > 0 ? Math.trunc(n) : null;
+}
+
 function parseModelIds(row: StepRow): string[] {
   if (row.model_ids) {
     try {
@@ -269,10 +281,11 @@ export function updateCombo(id: number, input: ComboInput): Combo | undefined {
     throw new Error(`combo "${input.name.trim()}" already exists`);
   }
   const now = Math.floor(Date.now() / 1000);
+  const merged = { ...(existing.config ?? {}), ...(input.config ?? {}) };
   query("UPDATE combos SET name = ?, strategy = ?, config = ?, updated_at = ? WHERE id = ?").run(
     input.name.trim(),
     input.strategy === "pipeline" ? "pipeline" : "priority",
-    JSON.stringify(input.config && typeof input.config === "object" ? input.config : {}),
+    JSON.stringify(merged),
     now,
     id,
   );

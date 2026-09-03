@@ -1,4 +1,4 @@
-import { Form, Link, redirect, useFetcher } from "react-router";
+import { Form, Link, redirect, useFetcher, useNavigation } from "react-router";
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 import type { Route } from "./+types/proxies";
 import { query } from "../.server/db";
@@ -23,8 +23,8 @@ import {
 	type ProxyConfig,
 } from "../.server/outbound-proxy";
 import { testProxyConnection } from "../.server/proxy-resolver";
-import { Plus, Trash2, Plug, Download, Globe, RefreshCw } from "lucide-react";
-import { Button } from "../components/ui/button";
+import { Plus, Trash2, Plug, Download, Globe, RefreshCw, Layers, Link2, FlaskConical, List, Database } from "lucide-react";
+import { Button, buttonClass } from "../components/ui/button";
 import { Card } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
 import { Checkbox, Input, Label, Select, Textarea } from "../components/ui/field";
@@ -35,6 +35,7 @@ import { EmptyState } from "../components/ui/empty-state";
 import { Spinner } from "../components/ui/feedback";
 import { Table, THead, THeadCell, TRow, TCell } from "../components/ui/table";
 import { useConfirm } from "../components/ui/confirm-dialog";
+import { useToast } from "../components/ui/toast";
 
 export function meta() {
 	return [{ title: "Proxies — UniRoute" }];
@@ -658,7 +659,7 @@ const ProxyListRow = memo(function ProxyListRow({
 							)
 						}
 					>
-						{testing ? <Spinner size={15} /> : <Plug size={15} />}
+						{testing ? <Spinner size={14} /> : <Plug size={14} />}
 					</Button>
 					<Toggle
 						checked={Boolean(proxy.is_active)}
@@ -703,7 +704,7 @@ const ProxyListRow = memo(function ProxyListRow({
 							aria-label="Delete proxy"
 							className="text-danger"
 						>
-							<Trash2 size={15} />
+							<Trash2 size={14} />
 						</Button>
 					</Form>
 				</div>
@@ -767,7 +768,7 @@ const StagingProxyRow = memo(function StagingProxyRow({
 						className="text-xs text-primary"
 						onClick={() => onTest(row)}
 					>
-						test
+						Test
 					</Button>
 				)}
 			</TCell>
@@ -830,7 +831,7 @@ const SavedProxyRow = memo(function SavedProxyRow({
 						)
 					}
 				>
-					{testing ? <Spinner size={15} /> : <Plug size={15} />}
+					{testing ? <Spinner size={14} /> : <Plug size={14} />}
 				</Button>
 				{result && result.id === proxy.id && (
 					<div
@@ -902,7 +903,7 @@ function BulkDeleteForm({
 				type="submit"
 				className="gap-1.5 text-danger"
 			>
-				<Trash2 size={13} /> Delete
+				<Trash2 size={14} /> Delete
 			</Button>
 		</Form>
 	);
@@ -1065,6 +1066,105 @@ export default function Proxies({ loaderData }: Route.ComponentProps) {
 	);
 
 	const { dialog, confirm } = useConfirm();
+	const { toast } = useToast();
+	const navigation = useNavigation();
+
+	// Plain <Form> mutations below all end in redirect("/proxies"), so there
+	// is no actionData/fetcher payload to observe. Capture the submitted
+	// intent + key details while the navigation is in flight, then toast once
+	// it settles (a throw renders the error boundary instead, so reaching
+	// idle here with a pending intent means success).
+	type PendingProxyMutation = {
+		intent: string;
+		id: string;
+		ids: string[];
+		name: string | null;
+		count: number;
+		extra: string;
+	};
+	const pendingMutationRef = useRef<PendingProxyMutation | null>(null);
+	if (navigation.state !== "idle" && navigation.formData) {
+		const fd = navigation.formData;
+		const intent = String(fd.get("intent") ?? "");
+		const id = String(fd.get("id") ?? "");
+		const pre = id
+			? loaderData.proxies.find((x) => String(x.id) === id)
+			: undefined;
+		const prePool =
+			!pre && id
+				? loaderData.pools.find((x) => String(x.id) === id)
+				: undefined;
+		const idList = fd.getAll("ids").map(String);
+		pendingMutationRef.current = {
+			intent,
+			id,
+			ids: idList,
+			name:
+				pre?.name ??
+				prePool?.name ??
+				(String(fd.get("name") ?? "").trim() || null),
+			count: intent === "delete-errors" ? errorCount : idList.length,
+			extra: String(fd.get("active") ?? fd.get("pool_id") ?? ""),
+		};
+	}
+
+	useEffect(() => {
+		if (navigation.state !== "idle") return;
+		const pending = pendingMutationRef.current;
+		if (!pending) return;
+		pendingMutationRef.current = null;
+		const poolName = (pid: string) =>
+			loaderData.pools.find((x) => String(x.id) === pid)?.name ?? pid;
+		let title: string | null = null;
+		let description: string | undefined;
+		switch (pending.intent) {
+			case "toggle": {
+				const cur = loaderData.proxies.find(
+					(x) => String(x.id) === pending.id,
+				);
+				title = cur
+					? `Proxy "${cur.name}" ${cur.is_active ? "activated" : "deactivated"}`
+					: "Proxy updated";
+				break;
+			}
+			case "delete":
+				title = `Proxy "${pending.name ?? `#${pending.id}`}" deleted`;
+				break;
+			case "delete-many":
+				title = `${pending.count} ${pending.count === 1 ? "proxy" : "proxies"} deleted`;
+				break;
+			case "delete-errors":
+				title = `${pending.count} error ${pending.count === 1 ? "proxy" : "proxies"} deleted`;
+				break;
+			case "bulk-active":
+				title = `${pending.count} ${pending.count === 1 ? "proxy" : "proxies"} ${pending.extra === "1" ? "activated" : "deactivated"}`;
+				break;
+			case "create-pool":
+				title = `Pool "${pending.name ?? "Untitled"}" created`;
+				break;
+			case "update-pool":
+				title = `Pool "${poolName(pending.id)}" saved`;
+				break;
+			case "delete-pool":
+				title = `Pool "${pending.name ?? `#${pending.id}`}" deleted`;
+				break;
+			case "set-global":
+				title = "Global proxy updated";
+				description = pending.extra
+					? `Using pool "${poolName(pending.extra)}".`
+					: "Using direct connection.";
+				break;
+			case "assign":
+				title = "Assignment saved";
+				break;
+			case "unassign":
+				title = "Assignment removed";
+				break;
+			default:
+				title = null;
+		}
+		if (title) toast({ title, description, variant: "success" });
+	}, [navigation.state, toast, loaderData.proxies, loaderData.pools]);
 
 	const syncRunning = syncFetcher.state === "submitting";
 	const showLoadButton =
@@ -1078,12 +1178,12 @@ export default function Proxies({ loaderData }: Route.ComponentProps) {
 			<PageHeader
 				title="Proxy Engine"
 				icon={<Globe size={20} />}
-				subtitle="HTTP CONNECT &amp; SOCKS5 outbound routing"
+				subtitle="HTTP CONNECT & SOCKS5 outbound routing"
 				actions={
 					<Link
 						to="/proxies/create"
 						prefetch="render"
-						className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-primary px-4 text-sm font-medium text-primary-foreground shadow-sm transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+						className={buttonClass("primary", "md")}
 					>
 						<Plus size={16} /> New Proxy
 					</Link>
@@ -1103,7 +1203,7 @@ export default function Proxies({ loaderData }: Route.ComponentProps) {
 				<Card padded={false} className="overflow-hidden">
 					{loaderData.proxies.length === 0 ? (
 						<EmptyState
-							icon={<Plug size={28} />}
+							icon={<Plug size={24} />}
 							title="No proxies yet"
 							description="Use the Free Proxy tab to fetch some, or the Import tab to paste them."
 						/>
@@ -1115,7 +1215,7 @@ export default function Proxies({ loaderData }: Route.ComponentProps) {
 									value={listSearch}
 									onChange={(e) => setListSearch(e.target.value)}
 									placeholder="Search name / host…"
-									className="w-48"
+									className="w-full sm:w-48"
 								/>
 								<Select
 									value={listFilter}
@@ -1124,7 +1224,7 @@ export default function Proxies({ loaderData }: Route.ComponentProps) {
 											e.target.value as typeof listFilter,
 										)
 									}
-									className="w-36"
+									className="w-full sm:w-36"
 								>
 									<option value="all">All</option>
 									<option value="active">Active</option>
@@ -1176,7 +1276,7 @@ export default function Proxies({ loaderData }: Route.ComponentProps) {
 												type="submit"
 												className="gap-1.5 text-danger"
 											>
-												<Trash2 size={13} /> Delete error ({errorCount})
+												<Trash2 size={14} /> Delete error ({errorCount})
 											</Button>
 										</Form>
 									</>
@@ -1187,7 +1287,7 @@ export default function Proxies({ loaderData }: Route.ComponentProps) {
 										defaultValue="https://api.openai.com/v1/models"
 										id="bulk-test-url"
 										placeholder="Test URL"
-										className="w-64 font-mono text-xs"
+										className="w-full font-mono text-xs sm:w-64"
 									/>
 									<Button
 										size="sm"
@@ -1207,9 +1307,8 @@ export default function Proxies({ loaderData }: Route.ComponentProps) {
 											);
 										}}
 									>
-										<RefreshCw size={13} />
+										{manyRunning ? <Spinner size={14} /> : <RefreshCw size={14} />}
 										{manyRunning ? "Testing…" : "Test all"}
-										{manyRunning && <Spinner size={13} />}
 									</Button>
 									<Button
 										size="sm"
@@ -1226,7 +1325,7 @@ export default function Proxies({ loaderData }: Route.ComponentProps) {
 											submitManyTest([...listSel], url);
 										}}
 									>
-										<Plug size={13} /> Test selected ({listSel.size})
+										<Plug size={14} /> Test selected ({listSel.size})
 									</Button>
 								</div>
 							</div>
@@ -1272,7 +1371,7 @@ export default function Proxies({ loaderData }: Route.ComponentProps) {
 										{manySummary.total - manySummary.ok} failed
 									</span>{" "}
 									<span className="text-muted-foreground">
-										— health &amp; latency tersimpan ke database.
+										— health & latency saved to the database.
 									</span>
 								</div>
 							)}
@@ -1333,7 +1432,7 @@ export default function Proxies({ loaderData }: Route.ComponentProps) {
 				<div className="space-y-6">
 					<Card>
 						<h2 className="mb-1 flex items-center gap-2 text-sm font-semibold text-foreground">
-							<RefreshCw size={15} /> Fetch Free Proxies
+							<RefreshCw size={14} /> Fetch Free Proxies
 						</h2>
 						<p className="mb-4 text-xs text-muted-foreground">
 							Sync fetches the latest free proxies from public lists. Test
@@ -1365,7 +1464,7 @@ export default function Proxies({ loaderData }: Route.ComponentProps) {
 								className="w-24"
 							/>
 							<Button type="submit" disabled={syncRunning}>
-								<RefreshCw size={15} /> Sync
+								<RefreshCw size={14} /> Sync
 								{syncRunning && <Spinner size={14} />}
 							</Button>
 						</syncFetcher.Form>
@@ -1373,12 +1472,13 @@ export default function Proxies({ loaderData }: Route.ComponentProps) {
 
 					<Card>
 						<div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-							<h2 className="text-sm font-semibold text-foreground">
-								Staged Free Proxies
-								<span className="ml-2 text-xs font-normal text-muted-foreground">
-									{staging.length} fetched · {selected.size} selected
-								</span>
-							</h2>
+							<h2 className="mb-1 flex items-center gap-2 text-sm font-semibold text-foreground">
+							<List size={14} />
+							Staged Free Proxies
+							<span className="text-xs font-normal text-muted-foreground">
+								{staging.length} fetched · {selected.size} selected
+							</span>
+						</h2>
 							{showLoadButton && (
 								<Button
 									size="sm"
@@ -1436,7 +1536,7 @@ export default function Proxies({ loaderData }: Route.ComponentProps) {
 											disabled={selectedRows.length === 0}
 											className="gap-1.5"
 										>
-											<Plus size={13} /> Move Proxy List
+											<Plus size={14} /> Move Proxy List
 										</Button>
 									</batchFetcher.Form>
 									<Button
@@ -1451,7 +1551,7 @@ export default function Proxies({ loaderData }: Route.ComponentProps) {
 											setSelected(new Set());
 										}}
 									>
-										<Trash2 size={13} /> Delete selected
+										<Trash2 size={14} /> Delete selected
 									</Button>
 								</div>
 							)}
@@ -1518,14 +1618,16 @@ export default function Proxies({ loaderData }: Route.ComponentProps) {
 
 					<Card>
 						<div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-							<h2 className="text-sm font-semibold text-foreground">Test Tool</h2>
+							<h2 className="flex items-center gap-2 text-sm font-semibold text-foreground">
+								<FlaskConical size={14} /> Test Tool
+							</h2>
 							<p className="text-xs text-muted-foreground">
 								Test any proxy before adding or saving it.
 							</p>
 						</div>
 						<customTestFetcher.Form
 							method="post"
-							className="grid grid-cols-2 gap-2 sm:grid-cols-6"
+							className="grid grid-cols-1 gap-2 sm:grid-cols-6"
 						>
 							<input type="hidden" name="intent" value="test-custom" />
 							<Select name="type" defaultValue="http-connect" className="px-2">
@@ -1551,7 +1653,7 @@ export default function Proxies({ loaderData }: Route.ComponentProps) {
 								placeholder="user (opt)"
 								autoComplete="off"
 							/>
-							<Button type="submit">Test</Button>
+							<Button type="submit" className="w-full sm:w-auto">Test</Button>
 						</customTestFetcher.Form>
 						{customTestFetcher.data?.customTest && (
 							<div
@@ -1572,9 +1674,10 @@ export default function Proxies({ loaderData }: Route.ComponentProps) {
 
 					<Card>
 						<div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-							<h2 className="text-sm font-semibold text-foreground">
+							<h2 className="flex items-center gap-2 text-sm font-semibold text-foreground">
+								<Database size={14} />
 								Saved Free Proxies (no auth)
-								<span className="ml-2 text-xs font-normal text-muted-foreground">
+								<span className="text-xs font-normal text-muted-foreground">
 									{freeSaved.length} saved
 								</span>
 							</h2>
@@ -1604,7 +1707,7 @@ export default function Proxies({ loaderData }: Route.ComponentProps) {
 										variant="outline"
 										className="gap-1.5 text-danger"
 									>
-										<Trash2 size={13} /> Delete selected ({savedSelected.size})
+										<Trash2 size={14} /> Delete selected ({savedSelected.size})
 									</Button>
 								</Form>
 							)}
@@ -1648,7 +1751,9 @@ export default function Proxies({ loaderData }: Route.ComponentProps) {
 
 			{tab === "import" && (
 				<Card>
-					<h2 className="mb-1 text-sm font-semibold text-foreground">Import</h2>
+					<h2 className="mb-1 flex items-center gap-2 text-sm font-semibold text-foreground">
+						<Download size={14} /> Import
+					</h2>
 					<p className="mb-4 text-xs text-muted-foreground">
 						One per line:{" "}
 						<code className="font-mono">[type://][user:pass@]host:port</code>{" "}
@@ -1661,14 +1766,14 @@ export default function Proxies({ loaderData }: Route.ComponentProps) {
 						<input type="hidden" name="intent" value="import" />
 						<Textarea
 							name="text"
-							rows={10}
+							rows={6}
 							placeholder={
 								"socks5://user:pass@127.0.0.1:1080\nhttp-connect://127.0.0.1:3128\nproxy.example.com:8080"
 							}
 							className="font-mono"
 						/>
 						<Button type="submit">
-							<Download size={15} /> Import
+							<Download size={14} /> Import
 						</Button>
 					</importFetcher.Form>
 					{importFetcher.data?.importResult && (
@@ -1692,14 +1797,14 @@ export default function Proxies({ loaderData }: Route.ComponentProps) {
 				<div className="space-y-6">
 					<Card>
 						<h2 className="mb-1 flex items-center gap-2 text-sm font-semibold text-foreground">
-							<Globe size={15} /> Global Proxy
+							<Globe size={14} /> Global Proxy
 						</h2>
 						<p className="mb-4 text-xs text-muted-foreground">
 							Default fallback pool when neither a client API key nor a
 							provider pool is assigned. Priority: client key → provider →
 							global → direct.
 						</p>
-						<Form method="post" className="flex gap-2">
+						<Form method="post" className="flex flex-wrap gap-2">
 							<input type="hidden" name="intent" value="set-global" />
 							<Select
 								name="pool_id"
@@ -1725,7 +1830,9 @@ export default function Proxies({ loaderData }: Route.ComponentProps) {
 					</Card>
 
 					<Card>
-						<h2 className="mb-4 text-sm font-semibold text-foreground">Pools</h2>
+						<h2 className="mb-4 flex items-center gap-2 text-sm font-semibold text-foreground">
+							<Layers size={14} /> Pools
+						</h2>
 						{loaderData.pools.length === 0 && (
 							<p className="text-xs text-muted-foreground">
 								No pools yet. Create one below.
@@ -1774,7 +1881,7 @@ export default function Proxies({ loaderData }: Route.ComponentProps) {
 												aria-label="Delete pool"
 												className="text-danger"
 											>
-												<Trash2 size={15} />
+												<Trash2 size={14} />
 											</Button>
 										</Form>
 									</div>
@@ -1783,13 +1890,12 @@ export default function Proxies({ loaderData }: Route.ComponentProps) {
 										<input type="hidden" name="id" value={pool.id} />
 										<div className="mb-3 flex items-end gap-2">
 											<div className="flex-1">
-												<Label className="mb-1 text-[11px]">
+												<Label className="mb-1 text-xs">
 													Rotation strategy
 												</Label>
 												<Select
 													name="strategy"
 													defaultValue={pool.strategy}
-													className="h-8 text-xs"
 												>
 													<option value="round_robin">
 														Round-robin (rotate evenly)
@@ -1851,8 +1957,8 @@ export default function Proxies({ loaderData }: Route.ComponentProps) {
 					</Card>
 
 					<Card>
-						<h2 className="mb-1 text-sm font-semibold text-foreground">
-							Assignments
+						<h2 className="mb-1 flex items-center gap-2 text-sm font-semibold text-foreground">
+							<Link2 size={14} /> Assignments
 						</h2>
 						<p className="mb-4 text-xs text-muted-foreground">
 							Priority: client key → provider → global → direct.
@@ -1929,7 +2035,7 @@ export default function Proxies({ loaderData }: Route.ComponentProps) {
 															variant="ghost"
 															className="text-xs text-danger"
 														>
-															remove
+															Remove
 														</Button>
 													</Form>
 												</TCell>

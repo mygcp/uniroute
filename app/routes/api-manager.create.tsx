@@ -19,6 +19,7 @@ import { Button } from "../components/ui/button";
 import { Input, Label, Select, Checkbox } from "../components/ui/field";
 import { CopyButton } from "../components/ui/copy-button";
 import { TagInput } from "../components/ui/tag-input";
+import { useToast } from "../components/ui/toast";
 
 export function loader() {
 	return {
@@ -122,21 +123,31 @@ export async function action({ request }: Route.ActionArgs) {
 						: null,
 	};
 
-	const { key, id } = createClientKey(input);
+	let newKey: string;
+	let newId: number;
+	try {
+		const created = createClientKey(input);
+		newKey = created.key;
+		newId = created.id;
+	} catch (err) {
+		return {
+			error: err instanceof Error ? err.message : "Failed to create key",
+		};
+	}
 	if (input.webhookUrl) {
 		enqueueWebhook({
-			keyId: id,
+			keyId: newId,
 			event: "created",
 			url: input.webhookUrl,
 			payload: {
 				event: "created",
-				key_id: id,
+				key_id: newId,
 				key_prefix: input.prefix ?? "sk-",
 				at: Date.now(),
 			},
 		});
 	}
-	return { newlyCreatedKey: key, id, name: input.name };
+	return { newlyCreatedKey: newKey, id: newId, name: input.name };
 }
 
 function parseListUnchecked(form: FormData, name: string): string[] {
@@ -171,7 +182,7 @@ export default function CreateKey({
 	const [allowedModels, setAllowedModels] = useState("");
 	const [blockedModels, setBlockedModels] = useState("");
 	const created = actionData as
-		| { newlyCreatedKey?: string; name?: string }
+		| { newlyCreatedKey?: string; name?: string; error?: string }
 		| undefined;
 
 	useEffect(() => {
@@ -181,6 +192,21 @@ export default function CreateKey({
 			setBlockedModels("");
 		}
 	}, [created?.newlyCreatedKey]);
+
+	const { toast } = useToast();
+	const lastErrorRef = useRef<string | undefined>(undefined);
+	useEffect(() => {
+		if (created?.error === lastErrorRef.current) return;
+		lastErrorRef.current = created?.error;
+		if (created?.error) {
+			toast({
+				title: "Could not create key",
+				description: created.error,
+				variant: "error",
+			});
+		}
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [created?.error]);
 
 	const applyTemplate = (template: KeyTemplate["config"]) => {
 		const el = formRef.current;

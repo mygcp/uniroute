@@ -28,6 +28,7 @@ import {
 import { getProviders, type Provider } from "./registry";
 import { evaluateRules } from "./rules";
 import { getRegistryEntry } from "~/registry";
+import { resolveDisplayToBare, unavailableReason } from "./provider-prefix";
 import {
 	acquireConcurrency,
 	checkAccessHours,
@@ -208,6 +209,16 @@ export async function handleProxy(
 		return json({ error: { message: "model is required" } }, 400);
 	}
 
+	// Prefix provider (virtual, hanya di aplikasi): mis. prefix "openai" +
+	// model "gpt-4o" -> display "openai/gpt-4o". Custom display_name per-model
+	// juga di-resolve di sini. Bare dikirim ke upstream, prefix/provider
+	// dipakai untuk hint provider.
+	const _displayModel = canonical.model;
+	const _prefixInfo = resolveDisplayToBare(canonical.model);
+	if (_prefixInfo.providerId) {
+		canonical.model = _prefixInfo.bare;
+	}
+
 	let concurrentScope: string | null = null;
 	if (clientKey.rule) {
 		const conc = acquireConcurrency(clientKey.rule);
@@ -220,7 +231,9 @@ export async function handleProxy(
 	try {
 		if (
 			clientKey.rule &&
+			!modelAllowed(clientKey.rule, _displayModel) &&
 			!modelAllowed(clientKey.rule, canonical.model) &&
+			!resolveCombo(_displayModel) &&
 			!resolveCombo(canonical.model)
 		) {
 			recordRequestLog({
@@ -245,22 +258,28 @@ export async function handleProxy(
 			canonical.model = clientKey.rule.model_override;
 		}
 
-		const guard = checkAllowlist(canonical.model);
+		const guardBare = checkAllowlist(canonical.model);
+		const guardDisplay = _displayModel !== canonical.model ? checkAllowlist(_displayModel) : { ok: true as const };
+		const guard = !guardBare.ok ? guardBare : !guardDisplay.ok ? guardDisplay : { ok: true as const };
 		if (!guard.ok) {
 			recordRequestLog({
-				model: canonical.model,
+				model: _displayModel,
 				provider_id: "guard",
 				status: "denied",
 				rule_applied: "allowlist",
-				error_message: guard.reason,
+				error_message: (guard as { reason: string }).reason,
 			});
 			return json(
-				{ error: { message: guard.reason, type: "model_denied" } },
+				{ error: { message: (guard as { reason: string }).reason, type: "model_denied" } },
 				403,
 			);
 		}
 
-		const rule = evaluateRules(canonical.model);
+		let rule = evaluateRules(canonical.model);
+		if (rule.action === "none" && _displayModel !== canonical.model) {
+			const r2 = evaluateRules(_displayModel);
+			if (r2.action !== "none") rule = r2;
+		}
 		if (rule.action === "deny") {
 			recordRequestLog({
 				model: canonical.model,
@@ -334,10 +353,58 @@ export async function handleProxy(
 			});
 		}
 
-		const pool = getProviders(effectiveModel);
+		let pool = getProviders(effectiveModel);
+		// bila request memakai prefix provider, filter ke provider tersebut
+		if (_prefixInfo.providerId) {
+			const hinted = pool.filter((p) => p.id === _prefixInfo.providerId);
+			if (hinted.length > 0) pool = hinted;
+		}
 		if (pool.length === 0) {
+			// Bedakan "tidak dikenal" vs "dikenal tapi nonaktif" agar
+			// client tahu harus ganti model atau aktifkan provider/model.
+			const reason = unavailableReason(_displayModel);
+			if (reason?.kind === "provider_disabled") {
+				const message = `model '${_displayModel}' is unavailable: provider '${reason.providerName}' is disabled`;
+				recordRequestLog({
+					model: _displayModel,
+					provider_id: reason.providerId,
+					status: "error",
+					error_message: message,
+				});
+				return json(
+					{
+						error: {
+							message,
+							type: "provider_disabled",
+							model: _displayModel,
+							provider: reason.providerId,
+						},
+					},
+					404,
+				);
+			}
+			if (reason?.kind === "model_disabled") {
+				const message = `model '${_displayModel}' is disabled`;
+				recordRequestLog({
+					model: _displayModel,
+					provider_id: reason.providerId,
+					status: "error",
+					error_message: message,
+				});
+				return json(
+					{
+						error: {
+							message,
+							type: "model_disabled",
+							model: _displayModel,
+							provider: reason.providerId,
+						},
+					},
+					404,
+				);
+			}
 			recordRequestLog({
-				model: effectiveModel,
+				model: _displayModel,
 				provider_id: "none",
 				status: "error",
 				error_message: "model not found",
@@ -347,7 +414,7 @@ export async function handleProxy(
 					error: {
 						message: "model not found",
 						type: "model_not_found",
-						model: effectiveModel,
+						model: _displayModel,
 					},
 				},
 				404,
