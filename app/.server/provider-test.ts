@@ -1,6 +1,7 @@
 import { query } from "./db";
 import { listApiKeys } from "./credential";
 import { getRegistryEntry } from "~/registry";
+import { joinApiUrl } from "./adapter";
 
 export type ProviderTestResult = {
   ok: boolean;
@@ -30,7 +31,7 @@ export async function testProviderConnection(
 
   const entry = getRegistryEntry(providerId);
   const modelsUrl =
-    entry?.modelsUrl ?? new URL("/v1/models", provider.base_url).toString();
+    entry?.modelsUrl ?? joinApiUrl(provider.base_url, "/v1/models");
 
   let connected = 0;
   const tested = keys.length > 0 ? keys : [null];

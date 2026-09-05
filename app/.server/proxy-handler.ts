@@ -13,7 +13,7 @@ import {
 	resolveClientKey,
 	type ClientKey,
 } from "./client-key";
-import { getRoutingPoolId } from "./credential";
+import { getRoutingPoolId, listApiKeys } from "./credential";
 import { compress, isEnabled } from "./compressor";
 import { executeJson, executeStreaming, type ProxyUsedInfo } from "./executor";
 import { checkAllowlist } from "./guard";
@@ -437,12 +437,10 @@ export async function handleProxy(
 
 		let attempts = 0;
 		let response: Response | null = null;
+		const maxAttempts = Math.max(2, candidates.length * 2);
 
 		for (const provider of candidates) {
-			if (attempts >= 2) break;
-			attempts += 1;
-			beginConnection(provider.id);
-
+			if (attempts >= maxAttempts) break;
 			const entry = getRegistryEntry(provider.id);
 			const providerFormat =
 				entry?.format === "claude" ? "anthropic" : (entry?.format ?? "openai");
@@ -451,7 +449,6 @@ export async function handleProxy(
 			try {
 				providerBody = toProvider(providerFormat, canonical);
 			} catch (err) {
-				endConnection(provider.id);
 				recordRequestLog({
 					model: effectiveModel,
 					provider_id: provider.id,
@@ -464,24 +461,44 @@ export async function handleProxy(
 				break;
 			}
 
-			let transformed;
-			try {
-				transformed = transformRequest(providerBody, provider, {
-					model: effectiveModel,
-				});
-			} catch (err) {
-				endConnection(provider.id);
-				recordRequestLog({
-					model: effectiveModel,
-					provider_id: provider.id,
-					strategy_used: cfg.strategy,
-					rule_applied: ruleApplied,
-					status: "error",
-					error_message: err instanceof Error ? err.message : String(err),
-				});
-				response = json({ error: { message: "provider request failed" } }, 500);
-				break;
-			}
+			// Rotasi multi-account MANUAL: hanya berputar bila user sudah
+			// menambah >1 key aktif di provider ini. Urutan routing-first.
+			// Key berbeda dicoba bila 401/429 (key-specific); error lain
+			// langsung lanjut ke provider berikutnya.
+			const activeKeys =
+				provider.auth_type === "none"
+					? []
+					: listApiKeys(provider.id)
+							.filter((k) => k.is_active === 1)
+							.sort((a, b) => b.is_routing - a.is_routing || a.id - b.id);
+			const keyAttempts =
+				activeKeys.length > 0 ? activeKeys : [null];
+			let providerOk = false;
+
+			for (const cred of keyAttempts) {
+				if (attempts >= maxAttempts) break;
+				attempts += 1;
+				beginConnection(provider.id);
+
+				let transformed;
+				try {
+					transformed = transformRequest(providerBody, provider, {
+						model: effectiveModel,
+						apiKey: cred?.api_key ?? undefined,
+					});
+				} catch (err) {
+					endConnection(provider.id);
+					recordRequestLog({
+						model: effectiveModel,
+						provider_id: provider.id,
+						strategy_used: cfg.strategy,
+						rule_applied: ruleApplied,
+						status: "error",
+						error_message: err instanceof Error ? err.message : String(err),
+					});
+					response = json({ error: { message: "provider request failed" } }, 500);
+					break;
+				}
 
 			const onComplete = (
 				log: Partial<RequestLog> & Pick<RequestLog, "status">,
@@ -532,8 +549,9 @@ export async function handleProxy(
 			};
 
 			const providerPoolId = getPoolForProvider(provider.id)?.id ?? undefined;
-			// Pool milik kredensial (akun) yang dipakai untuk auth provider ini.
-			const accountPoolId = getRoutingPoolId(provider.id);
+			// Pool milik kredensial (akun) yang dipakai untuk auth percobaan ini.
+			const accountPoolId =
+				cred?.proxy_pool_id ?? getRoutingPoolId(provider.id);
 
 			// Metadata egress untuk request log (proxy terakhir yang dipakai).
 			let usedProxy: ProxyUsedInfo | null = null;
@@ -607,7 +625,18 @@ export async function handleProxy(
 				}
 			}
 
-			if (response.status < 400) break;
+			if (response.status < 400) {
+				providerOk = true;
+				break;
+			}
+			// 401/429 = key-specific → coba key berikutnya di provider SAMA
+			// (hanya ada bila user sudah set multi-account manual).
+			// Status lain → langsung ke provider berikutnya.
+			if (response.status === 401 || response.status === 429) continue;
+			break;
+			}
+
+			if (providerOk) break;
 		}
 
 		return (

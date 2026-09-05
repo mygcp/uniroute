@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useDeferredValue, useEffect, useMemo, useRef } from "react";
 import { Brain, Spinner } from "./ui/feedback";
 import { Markdown } from "./markdown";
 import { estimateTps, formatClock, formatSecs } from "../lib/format";
@@ -56,6 +56,11 @@ export function StreamingResponse({
   const clock = !streaming && done ? formatClock(endRef.current) : null;
   const thinkingOpen = streaming && content === "" && thinking !== "";
   const showMeter = !error && (streaming || done);
+  // Markdown full re-parse + highlight tiap frame = O(n²) sepanjang stream
+  // (~2.5ms/frame untuk 1.8k char, linear terhadap panjang). Tunda render
+  // markdown saat streaming agar React me-render paling banyak beberapa
+  // kali per detik dengan nilai terbaru — caret + meter tetap live.
+  const deferredContent = useDeferredValue(content);
 
   return (
     <div className="min-w-0 flex-1">
@@ -79,7 +84,10 @@ export function StreamingResponse({
               </div>
             </details>
           ) : null}
-          <Markdown text={content} />
+          <Markdown
+            text={streaming ? deferredContent : content}
+            highlight={!streaming}
+          />
           {streaming ? (
             <span className="ml-0.5 inline-block h-4 w-[2px] animate-pulse bg-primary align-text-bottom" />
           ) : null}

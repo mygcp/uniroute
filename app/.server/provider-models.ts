@@ -2,6 +2,7 @@ import { query } from "./db";
 import { listApiKeys } from "./credential";
 import { getRegistryEntry } from "~/registry";
 import { reload } from "./registry";
+import { joinApiUrl } from "./adapter";
 
 /**
  * Manajemen model per provider — dipakai UI Provider dan MCP server.
@@ -134,7 +135,7 @@ export async function fetchProviderModelsList(
 
 	const entry = getRegistryEntry(providerId);
 	const modelsUrl =
-		entry?.modelsUrl ?? new URL("/v1/models", provider.base_url).toString();
+		entry?.modelsUrl ?? joinApiUrl(provider.base_url, "/v1/models");
 
 	const headers = new Headers({ "Content-Type": "application/json" });
 	if (key) {

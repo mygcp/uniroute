@@ -8,6 +8,20 @@ export type TransformResult = {
   body: string;
 };
 
+/**
+ * Gabung base_url + path API dengan aman untuk kedua konvensi base_url:
+ *  - root style:  https://api.openai.com          → + "/v1/chat/completions"
+ *  - full style:  https://api.groq.com/openai/v1  → + "/chat/completions"
+ * `new URL(path, base)` TIDAK bisa dipakai di sini: path absolut mengganti
+ * seluruh path base, jadi base ber-suffix (…/openai/v1) kehilangan suffix-nya.
+ */
+export function joinApiUrl(baseUrl: string, apiPath: string): string {
+  const base = baseUrl.replace(/\/+$/, "");
+  const suffix = apiPath.replace(/^\/v1(?=\/|$)/, "");
+  if (/\/v1$/.test(base)) return base + suffix;
+  return base + apiPath;
+}
+
 function resolveUrl(
   provider: Provider,
   entry: ReturnType<typeof getRegistryEntry>,
@@ -19,12 +33,12 @@ function resolveUrl(
   const base = provider.base_url.replace(/\/+$/, "");
   const format = entry?.format ?? "openai";
   if (format === "anthropic") {
-    return `${base}/v1/messages`;
+    return joinApiUrl(base, "/v1/messages");
   }
   if (format === "gemini") {
     return `${base}/v1beta/models/${encodeURIComponent(model ?? "")}:generateContent`;
   }
-  return new URL("/v1/chat/completions", provider.base_url).toString();
+  return joinApiUrl(base, "/v1/chat/completions");
 }
 
 export function transformRequest(

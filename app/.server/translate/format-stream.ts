@@ -365,6 +365,7 @@ export function composeStreamTransformer(
   const format = createEventFormatter(clientFormat);
   let pending = "";
   let streamDone = false;
+  let sawFinish = false;
   let startPrompt: number | null = null;
   let startCached: number | null = null;
   let lastUsage: {
@@ -387,6 +388,7 @@ export function composeStreamTransformer(
       if (ev.type === "content_delta" && ev.text === "") continue;
       if (ev.type === "reasoning_delta" && ev.text === "") continue;
       if (ev.type === "done") streamDone = true;
+      if (ev.type === "finish" && ev.finish_reason !== "") sawFinish = true;
       // Kumpulkan usage dari seluruh aliran:
       if (ev.type === "message_start" && ev.usage) {
         startPrompt = ev.usage.prompt_tokens;
@@ -448,12 +450,16 @@ export function composeStreamTransformer(
       return countTokensFor(clientFormat, text);
     },
     done(): boolean {
-      return streamDone;
+      return streamDone || sawFinish;
     },
     getUsage() {
       return lastUsage;
     },
     terminate(): Uint8Array {
+      // EOF bersih: sintesis sentinel seperti dulu (kompatibel dengan
+      // upstream yang lupa mengirim [DONE]). Kasus putus tengah jalan
+      // terdeteksi lewat read-error upstream → marker upstream_disconnect
+      // dari executor, bukan dari sini.
       if (streamDone) return enc.encode("");
       if (clientFormat === "openai-responses") return enc.encode("");
       if (clientFormat === "openai-chat") return enc.encode("data: [DONE]\n\n");

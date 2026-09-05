@@ -31,6 +31,7 @@ import {
   updatePool,
 } from "../.server/outbound-proxy";
 import { reload } from "../.server/registry";
+import { joinApiUrl } from "../.server/adapter";
 import { useStreaming } from "../hooks/use-streaming";
 import { MessageInput } from "../components/message-input";
 import { Brain } from "../components/ui/feedback";
@@ -179,8 +180,7 @@ export async function action({ request, params }: Route.ActionArgs) {
 
     const entry = getRegistryEntry(id);
     const modelsUrl =
-      entry?.modelsUrl ??
-      new URL("/v1/models", provider.base_url).toString();
+      entry?.modelsUrl ?? joinApiUrl(provider.base_url, "/v1/models");
 
     const headers = new Headers({ "Content-Type": "application/json" });
     if (provider.auth_type === "bearer") {
@@ -903,16 +903,25 @@ export default function ProviderDetail({
   };
 
   // Commit giliran assistant tepat sekali ketika selesai + auto-save.
+  // Truncation (putus tengah jalan) di-commit sebagai turn normal berisi
+  // potongan — bukan "Error:" — agar auto-lanjut / kirim berikutnya bisa
+  // menyambung konteks. Error HTTP asli tetap di-commit sebagai error.
   useEffect(() => {
     if (!awaitingAssistantRef.current) return;
-    if (!(stream.done || stream.error)) return;
+    if (!(stream.done || stream.truncated || stream.error)) return;
     awaitingAssistantRef.current = false;
     const ms = streamStartRef.current
       ? Date.now() - streamStartRef.current
       : null;
+    const isTruncated = !!(stream as { truncated?: boolean }).truncated;
+    const hasPartial = stream.response !== "";
     const assistantTurn: ChatMsg = {
       role: "assistant",
-      content: stream.error ? `Error: ${stream.error}` : stream.response,
+      content:
+        stream.error && !hasPartial
+          ? `Error: ${stream.error}`
+          : stream.response +
+            (isTruncated ? "\n\n…(terputus — lanjutkan)" : ""),
       model: chatModel,
       ms,
       thinking: stream.thinking || null,
@@ -939,7 +948,7 @@ export default function ProviderDetail({
       );
       chatSaveFetcher.submit(fd, { method: "post" });
     }
-  }, [stream.done, stream.error]);
+  }, [stream.done, stream.truncated, stream.error]);
 
   const { dialog, confirm } = useConfirm();
   const { toast } = useToast();

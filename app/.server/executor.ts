@@ -194,105 +194,203 @@ function extractUsage(json: unknown): {
 	};
 }
 
+export const UPSTREAM_DISCONNECT_CODE = "upstream_disconnect";
+
+function disconnectMarker(): Uint8Array {
+  return ENCODER.encode(
+    `data: ${JSON.stringify({ error: { code: UPSTREAM_DISCONNECT_CODE, message: "upstream closed mid-stream" } })}\n\n`,
+  );
+}
+
 function buildStreamResponse(
-	upstream: Response,
-	options: ExecutorOptions,
-	transformer: StreamTransformer,
+  upstream: Response,
+  options: ExecutorOptions,
+  transformer: StreamTransformer,
 ): Response {
-	const started = Date.now();
-	let completionTokens = 0;
-	let finalized = false;
+  const started = Date.now();
+  let completionTokens = 0;
+  let finalized = false;
+  let gotFirstByte = false;
+  let forwardedBytes = 0;
 
-	const finalize = (
-		log: Partial<RequestLog> & Pick<RequestLog, "status">,
-	): void => {
-		if (finalized) return;
-		finalized = true;
-		clearInterval(kaTimer);
-		const usage = options.streamTransformer?.getUsage?.() ?? null;
-		options.onComplete({
-			duration_ms: Date.now() - started,
-			completion_tokens: usage?.completion_tokens ?? completionTokens,
-			prompt_tokens: usage?.prompt_tokens ?? null,
-			cached_tokens: usage?.cached_tokens ?? null,
-			...log,
-		});
-	};
+  const finalize = (
+    log: Partial<RequestLog> & Pick<RequestLog, "status">,
+  ): void => {
+    if (finalized) return;
+    finalized = true;
+    clearInterval(kaTimer);
+    try {
+      options.signal?.removeEventListener("abort", onClientAbort);
+    } catch {
+      /* ignore */
+    }
+    try {
+      reader?.cancel().catch(() => undefined);
+    } catch {
+      /* ignore */
+    }
+    const usage = options.streamTransformer?.getUsage?.() ?? null;
+    options.onComplete({
+      duration_ms: Date.now() - started,
+      completion_tokens: usage?.completion_tokens ?? completionTokens,
+      prompt_tokens: usage?.prompt_tokens ?? null,
+      cached_tokens: usage?.cached_tokens ?? null,
+      ...log,
+    });
+  };
 
-	let kaTimer: ReturnType<typeof setInterval> | undefined = undefined;
-	let gotFirstByte = false;
-	// Decoder satu instance per stream — mode streaming aman untuk multibyte
-	// yang terpotong di batas chunk.
-	const dec = new TextDecoder();
+  let kaTimer: ReturnType<typeof setInterval> | undefined = undefined;
+  // Decoder satu instance per stream — mode streaming aman untuk multibyte
+  // yang terpotong di batas chunk.
+  const dec = new TextDecoder();
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
 
-	// TransformStream + pipeTo (bukan wrapper ReadableStream manual):
-	// native piping di semua runtime — wrapper reader/pull manual terbukti
-	// menunda flush chunk pertama ~450ms pada beberapa stack server.
-	const ts = new TransformStream<Uint8Array, Uint8Array>({
-		start(c) {
-			// Keep-alive tiap 10s sampai byte pertama upstream datang.
-			kaTimer = setInterval(() => {
-				if (gotFirstByte) return;
-				try {
-					c.enqueue(ENCODER.encode(": keep-alive\n\n"));
-				} catch {
-					/* ignore */
-				}
-			}, 10_000);
-		},
-		transform(chunk, c) {
-			if (!gotFirstByte) {
-				gotFirstByte = true;
-				clearInterval(kaTimer);
-			}
-			let out: Uint8Array;
-			let chunkText: string;
-			if (transformer.transformChunk) {
-				const r = transformer.transformChunk(chunk);
-				out = r.out;
-				chunkText = r.text; // frame kontrol punya text → tetap dihitung
-			} else {
-				out = transformer.transform(chunk);
-				chunkText =
-					out.byteLength > 0 ? dec.decode(out, { stream: true }) : "";
-			}
-			completionTokens +=
-				transformer.countTokens?.(chunkText) ?? countDeltaContent(chunkText);
-			if (out.byteLength > 0) c.enqueue(out);
-		},
-		flush(c) {
-			const rest = transformer.flush();
-			if (rest.byteLength > 0) c.enqueue(rest);
-			const term = transformer.terminate?.() ?? new Uint8Array(0);
-			if (term.byteLength > 0) c.enqueue(term);
-			finalize({ status: "success" });
-		},
-	});
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      // Keep-alive tiap 10s sampai byte pertama upstream datang.
+      kaTimer = setInterval(() => {
+        if (gotFirstByte) return;
+        try {
+          controller.enqueue(ENCODER.encode(": keep-alive\n\n"));
+        } catch {
+          /* ignore */
+        }
+      }, 10_000);
 
-	// Client putus koneksi → hentikan upstream & catat.
-	const onClientAbort = (): void => {
-		finalize({ status: "error", error_message: "client disconnected" });
-		upstream.body?.cancel().catch(() => undefined);
-	};
-	options.signal?.addEventListener("abort", onClientAbort, { once: true });
+      const onUpstreamEnd = (clean: boolean): void => {
+        clearInterval(kaTimer);
+        try {
+          if (clean) {
+            const rest = transformer.flush();
+            if (rest.byteLength > 0) {
+              forwardedBytes += rest.byteLength;
+              controller.enqueue(rest);
+            }
+            const term = transformer.terminate?.() ?? new Uint8Array(0);
+            if (term.byteLength > 0) {
+              forwardedBytes += term.byteLength;
+              controller.enqueue(term);
+            }
+            finalize({ status: "success" });
+          }
+        } catch {
+          /* ignore */
+        }
+        try {
+          controller.close();
+        } catch {
+          /* ignore */
+        }
+      };
 
-	upstream.body!.pipeTo(ts.writable).catch((err: unknown) => {
-		if (options.signal?.aborted) {
-			// Sudah dicatat oleh onClientAbort.
-			return;
-		}
-		const message = err instanceof Error ? err.message : String(err);
-		finalize({ status: "error", error_message: message });
-	});
+      (async () => {
+        try {
+          reader = upstream.body!.getReader();
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          finalize({ status: "error", error_message: message });
+          try {
+            controller.close();
+          } catch {
+            /* ignore */
+          }
+          return;
+        }
+        for (;;) {
+          if (options.signal?.aborted) return; // onClientAbort yang finalize
+          let read: Awaited<ReturnType<NonNullable<typeof reader>["read"]>>;
+          try {
+            read = await reader.read();
+          } catch (err) {
+            // Putus tengah jalan setelah bytes terkirim → marker eksplisit
+            // (tanpa [DONE]) agar client bisa auto-lanjut potongan.
+            if (!options.signal?.aborted && gotFirstByte) {
+              try {
+                controller.enqueue(disconnectMarker());
+              } catch {
+                /* ignore */
+              }
+            }
+            const message = err instanceof Error ? err.message : String(err);
+            finalize({ status: "error", error_message: message || "upstream_disconnect" });
+            try {
+              controller.close();
+            } catch {
+              /* ignore */
+            }
+            return;
+          }
+          if (read.done) {
+            onUpstreamEnd(true);
+            return;
+          }
+          const chunk = read.value;
+          if (!gotFirstByte) {
+            gotFirstByte = true;
+            clearInterval(kaTimer);
+          }
+          let out: Uint8Array;
+          let chunkText: string;
+          if (transformer.transformChunk) {
+            const r = transformer.transformChunk(chunk);
+            out = r.out;
+            chunkText = r.text; // frame kontrol punya text → tetap dihitung
+          } else {
+            out = transformer.transform(chunk);
+            chunkText =
+              out.byteLength > 0 ? dec.decode(out, { stream: true }) : "";
+          }
+          completionTokens +=
+            transformer.countTokens?.(chunkText) ?? countDeltaContent(chunkText);
+          if (out.byteLength > 0) {
+            forwardedBytes += out.byteLength;
+            try {
+              controller.enqueue(out);
+            } catch {
+              return; // client menutup koneksi
+            }
+          }
+        }
+      })().catch((err: unknown) => {
+        if (options.signal?.aborted) return; // sudah dicatat onClientAbort
+        const message = err instanceof Error ? err.message : String(err);
+        finalize({ status: "error", error_message: message });
+        try {
+          controller.close();
+        } catch {
+          /* ignore */
+        }
+      });
+    },
+    cancel() {
+      finalize({ status: "error", error_message: "client disconnected" });
+      try {
+        reader?.cancel().catch(() => undefined);
+      } catch {
+        /* ignore */
+      }
+    },
+  });
 
-	return new Response(ts.readable, {
-		headers: {
-			"Content-Type": "text/event-stream",
-			"Cache-Control": "no-cache",
-			Connection: "keep-alive",
-			"X-Accel-Buffering": "no",
-		},
-	});
+  // Client putus koneksi → hentikan upstream & catat.
+  const onClientAbort = (): void => {
+    finalize({ status: "error", error_message: "client disconnected" });
+    try {
+      reader?.cancel().catch(() => undefined);
+    } catch {
+      /* ignore */
+    }
+  };
+  options.signal?.addEventListener("abort", onClientAbort, { once: true });
+
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      Connection: "keep-alive",
+      "X-Accel-Buffering": "no",
+    },
+  });
 }
 
 export async function executeStreaming(

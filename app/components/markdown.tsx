@@ -22,18 +22,25 @@ function injectCopyHeaders(html: string): string {
 }
 
 /** Render markdown LLM (aman: input di-escape dulu) + syntax highlight. */
-export function Markdown({ text }: { text: string }) {
+export function Markdown({ text, highlight = true }: { text: string; highlight?: boolean }) {
   const ref = useRef<HTMLDivElement>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const html = useMemo(
     () =>
       injectCopyHeaders(
-        renderMarkdown(text, {
-          highlight: (code, lang) => highlightCode(code, lang).html,
-        }),
+        renderMarkdown(
+          text,
+          // Saat streaming: lewati highlight.js (bagian termahal) — blok kode
+          // tetap tampil sebagai <pre> escaped, highlight menyusul saat done.
+          highlight
+            ? {
+                highlight: (code, lang) => highlightCode(code, lang).html,
+              }
+            : undefined,
+        ),
       ),
-    [text],
+    [text, highlight],
   );
 
   const onClick = (e: React.MouseEvent) => {
