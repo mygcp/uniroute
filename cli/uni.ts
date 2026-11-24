@@ -3,23 +3,22 @@ import path from "node:path";
 import fs from "node:fs";
 import os from "node:os";
 import { spawn } from "node:child_process";
+import pkg from "../package.json";
 import { getPidPath, getLogPath, readPid, writePid, removePid, isAlive } from "./pid";
 import { runDoctor } from "./doctor";
 
-const VERSION = (() => {
-  try {
-    // try embedded import first (bundled), then filesystem
-    // @ts-ignore — package.json is bundled at compile time
-    const pkg = JSON.parse(fs.readFileSync(path.join(import.meta.dir, "../package.json"), "utf8"));
-    if (pkg.version) return pkg.version;
-  } catch {}
-  // fallback hardcoded — keep in sync with package.json
-  return "1.0.0";
-})();
+const VERSION = pkg.version || "1.0.0";
+
+function isCompiledBinary(): boolean {
+  const dir = import.meta.dir ?? "";
+  if (dir.startsWith("/$bunfs") || /^[A-Za-z]:[\\/]+~BUN/i.test(dir)) return true;
+  const bin = path.basename(process.execPath).replace(/\.exe$/i, "").toLowerCase();
+  return bin !== "bun" && bin !== "node";
+}
 
 function printHelp() {
   console.log(`
-UniRoute — self-hosted AI gateway
+UniRoute - self-hosted AI gateway
 
 Usage: uni <command> [options]   (also: uniroute)
 
@@ -54,7 +53,6 @@ Examples:
 function parseArgs(argv: string[]) {
   const args = argv.slice(2);
   let cmd = args[0] ?? "help";
-  // alias: uniroute -> uni
   if (cmd === "uniroute") cmd = args[1] ?? "help";
   const rest = cmd === args[0] ? args.slice(1) : args.slice(2);
   const flags: Record<string, string | boolean> = {};
@@ -107,34 +105,21 @@ async function cmdStart(flags: Record<string, string | boolean>) {
   const pidPath = getPidPath();
   const logPath = getLogPath();
 
-  // daemon mode: spawn child detached
   if (flags.daemon && !flags.daemonChild) {
     const existing = readPid(pidPath);
     if (existing && isAlive(existing)) {
-      console.error(`[uni] already running (pid ${existing}, ${pidPath}) — stop first`);
+      console.error(`[uni] already running (pid ${existing}, ${pidPath}) - stop first`);
       process.exit(1);
     }
-    // build spawn args: re-invoke same binary without --daemon, add --daemon-child
     const execPath = process.execPath;
-    const isBun = execPath.includes("bun");
-    let spawnCmd: string;
-    let spawnArgs: string[];
-    if (isBun) {
-      // bun cli/uni.ts start --daemon-child --port ...
-      const script = path.resolve(import.meta.dir, "uni.ts");
-      spawnCmd = execPath;
-      spawnArgs = [script, "start", "--daemon-child"];
-      if (flags.port) spawnArgs.push("--port", String(flags.port));
-      if (flags.host) spawnArgs.push("--host", String(flags.host));
-      if (flags.env) spawnArgs.push("--env", String(flags.env));
-    } else {
-      // compiled binary: uni start --daemon-child
-      spawnCmd = execPath;
-      spawnArgs = ["start", "--daemon-child"];
-      if (flags.port) spawnArgs.push("--port", String(flags.port));
-      if (flags.host) spawnArgs.push("--host", String(flags.host));
-      if (flags.env) spawnArgs.push("--env", String(flags.env));
-    }
+    const compiled = isCompiledBinary();
+    const spawnCmd = execPath;
+    const spawnArgs = compiled
+      ? ["start", "--daemon-child"]
+      : [path.resolve(import.meta.dir, "uni.ts"), "start", "--daemon-child"];
+    if (flags.port) spawnArgs.push("--port", String(flags.port));
+    if (flags.host) spawnArgs.push("--host", String(flags.host));
+    if (flags.env) spawnArgs.push("--env", String(flags.env));
 
     fs.mkdirSync(path.dirname(logPath), { recursive: true });
     const logFd = fs.openSync(logPath, "a");
@@ -143,11 +128,9 @@ async function cmdStart(flags: Record<string, string | boolean>) {
       stdio: ["ignore", logFd, logFd],
       env: process.env,
     });
-    // allow parent to exit independent of child
     child.unref();
     fs.closeSync(logFd);
 
-    // wait briefly for pid file
     for (let i = 0; i < 20; i++) {
       await Bun.sleep(200);
       const pid = readPid(pidPath);
@@ -160,39 +143,32 @@ async function cmdStart(flags: Record<string, string | boolean>) {
         process.exit(1);
       }
     }
-    console.error(`[uni] daemon start timeout — check ${logPath} and ${pidPath}`);
+    console.error(`[uni] daemon start timeout - check ${logPath} and ${pidPath}`);
     process.exit(1);
   }
 
-  // foreground or daemon-child: actually start server
   const port = flags.port ? Number(flags.port) : undefined;
   const hostname = flags.host ? String(flags.host) : undefined;
 
-  // write pid file (for both foreground and daemon-child)
   const myPid = process.pid;
   try {
     writePid(myPid, pidPath);
-    console.log(`[uni] pid ${myPid} → ${pidPath}`);
+    console.log(`[uni] pid ${myPid} -> ${pidPath}`);
     if (flags.daemonChild) console.log(`[uni] logging to ${logPath}`);
   } catch (e) {
     console.warn(`[uni] cannot write pid file ${pidPath}: ${e instanceof Error ? e.message : String(e)}`);
   }
 
-  // ensure pid removed on exit
   const cleanup = () => {
     const cur = readPid(pidPath);
     if (cur === myPid) removePid(pidPath);
   };
   process.on("exit", cleanup);
-  process.on("SIGTERM", () => { cleanup(); process.exit(0); });
-  process.on("SIGINT", () => { cleanup(); process.exit(0); });
 
-  // dynamic import server (avoid bundling issues when running via bun)
+  // Dynamic import keeps non-start commands from loading the server bundle.
   const { startServer } = await import("../server");
-  const server = startServer({ port, hostname });
-  // keep process alive — Bun.serve keeps event loop
-  console.log(`[uni] running ${flags.daemonChild ? "(daemon)" : "(foreground)"} — press Ctrl+C to stop / uni stop`);
-  // prevent exit: keep reference
+  const server = startServer({ port, hostname, onShutdown: cleanup });
+  console.log(`[uni] running ${flags.daemonChild ? "(daemon)" : "(foreground)"} - press Ctrl+C to stop / uni stop`);
   void server;
 }
 
@@ -204,7 +180,7 @@ function cmdStop() {
     process.exit(1);
   }
   if (!isAlive(pid)) {
-    console.error(`[uni] stale pid ${pid} — removing ${pidPath}`);
+    console.error(`[uni] stale pid ${pid} - removing ${pidPath}`);
     removePid(pidPath);
     process.exit(0);
   }
@@ -215,21 +191,20 @@ function cmdStop() {
     console.error(`[uni] kill failed: ${e instanceof Error ? e.message : String(e)}`);
     process.exit(1);
   }
-  // wait up to 5s
   const start = Date.now();
   const iv = setInterval(() => {
     if (!isAlive(pid) || Date.now() - start > 5000) {
       clearInterval(iv);
       if (!isAlive(pid)) {
         removePid(pidPath);
-        console.log(`[uni] stopped`);
+        console.log("[uni] stopped");
         process.exit(0);
       } else {
-        console.log(`[uni] SIGTERM timeout, sending SIGKILL...`);
+        console.log("[uni] SIGTERM timeout, sending SIGKILL...");
         try { process.kill(pid, "SIGKILL"); } catch {}
         setTimeout(() => {
           if (!isAlive(pid)) removePid(pidPath);
-          console.log(isAlive(pid) ? `[uni] still alive` : `[uni] killed`);
+          console.log(isAlive(pid) ? "[uni] still alive" : "[uni] killed");
           process.exit(isAlive(pid) ? 1 : 0);
         }, 1000);
       }
@@ -253,7 +228,6 @@ async function cmdRestart(flags: Record<string, string | boolean>) {
     }
     removePid(pidPath);
   } else if (pid) removePid(pidPath);
-  // start again
   await cmdStart(flags);
 }
 
@@ -267,11 +241,11 @@ function cmdStatus() {
     process.exit(1);
   }
   const alive = isAlive(pid);
-  console.log(`pid: ${pid} @ ${pidPath} — ${alive ? "alive" : "stale (not running)"}`);
+  console.log(`pid: ${pid} @ ${pidPath} - ${alive ? "alive" : "stale (not running)"}`);
   console.log(`log: ${logPath}`);
   if (alive) {
     try {
-      const stat = fs.statSync(`/proc/${pid}` as string);
+      const stat = fs.statSync(`/proc/${pid}`);
       const uptimeSec = Math.floor((Date.now() - stat.mtimeMs) / 1000);
       console.log(`uptime: ~${uptimeSec}s`);
     } catch {}
@@ -285,7 +259,7 @@ function cmdStatus() {
 function cmdLogs(flags: Record<string, string | boolean>) {
   const logPath = getLogPath();
   if (!fs.existsSync(logPath)) {
-    console.error(`[uni] no log file at ${logPath} — start with --daemon first`);
+    console.error(`[uni] no log file at ${logPath} - start with --daemon first`);
     process.exit(1);
   }
   const n = flags.n ? Number(flags.n) : 100;
@@ -307,37 +281,37 @@ async function cmdDoctor() {
     const icon = c.ok ? "✓" : "✗";
     console.log(`${icon} ${c.name}: ${c.msg}`);
   }
-  console.log(ok ? "\n[uni] doctor: ok" : "\n[uni] doctor: issues found — see above");
+  console.log(ok ? "\n[uni] doctor: ok" : "\n[uni] doctor: issues found - see above");
   process.exit(ok ? 0 : 1);
 }
 
 function getUpdateTarget(): { target: string; artifact: string; ext: string } | null {
-  const os = process.platform; // linux, darwin, win32
-  const arch = process.arch; // x64, arm64
-  if (os === "linux" && arch === "x64") return { target: "bun-linux-x64", artifact: "uni-linux-x64", ext: "" };
-  if (os === "linux" && arch === "arm64") return { target: "bun-linux-arm64", artifact: "uni-linux-arm64", ext: "" };
-  if (os === "darwin" && arch === "x64") return { target: "bun-darwin-x64", artifact: "uni-darwin-x64", ext: "" };
-  if (os === "darwin" && arch === "arm64") return { target: "bun-darwin-arm64", artifact: "uni-darwin-arm64", ext: "" };
-  if (os === "win32") return { target: "bun-windows-x64", artifact: "uni-windows-x64.exe", ext: ".exe" };
+  const platform = process.platform;
+  const arch = process.arch;
+  if (platform === "linux" && arch === "x64") return { target: "bun-linux-x64", artifact: "uni-linux-x64", ext: "" };
+  if (platform === "linux" && arch === "arm64") return { target: "bun-linux-arm64", artifact: "uni-linux-arm64", ext: "" };
+  if (platform === "darwin" && arch === "x64") return { target: "bun-darwin-x64", artifact: "uni-darwin-x64", ext: "" };
+  if (platform === "darwin" && arch === "arm64") return { target: "bun-darwin-arm64", artifact: "uni-darwin-arm64", ext: "" };
+  if (platform === "win32") return { target: "bun-windows-x64", artifact: "uni-windows-x64.exe", ext: ".exe" };
   return null;
 }
 
 async function cmdUpdate(flags: Record<string, string | boolean>) {
   const repo = process.env.UNIROUTE_REPO ?? process.env.REPO ?? "mygcp/uniroute";
-  const isCompiled = !process.execPath.includes("bun");
-  if (!isCompiled) {
-    console.log(`[uni] update: running via bun (dev) — self-update only for compiled binary`);
-    console.log(`  try: git pull && bun run build`);
+  const compiled = isCompiledBinary();
+  if (!compiled) {
+    console.log("[uni] update: running via bun (dev) - self-update only for compiled binary");
+    console.log("  try: git pull && bun run build");
     if (!flags.force) process.exit(0);
   }
 
   const current = VERSION;
-  console.log(`[uni] current ${current} — checking ${repo}...`);
+  console.log(`[uni] current ${current} - checking ${repo}...`);
 
   const apiUrl = `https://api.github.com/repos/${repo}/releases/latest`;
   let latest: { tag_name: string; assets: Array<{ name: string; browser_download_url: string }> };
   try {
-    const res = await fetch(apiUrl, { headers: { "Accept": "application/vnd.github+json", "User-Agent": "uni-update" } });
+    const res = await fetch(apiUrl, { headers: { Accept: "application/vnd.github+json", "User-Agent": "uni-update" } });
     if (!res.ok) throw new Error(`HTTP ${res.status} ${await res.text().then((t) => t.slice(0, 200))}`);
     latest = (await res.json()) as typeof latest;
   } catch (e) {
@@ -345,13 +319,12 @@ async function cmdUpdate(flags: Record<string, string | boolean>) {
     process.exit(1);
   }
 
-  const tag = latest.tag_name; // e.g. v1.1.0
+  const tag = latest.tag_name;
   const latestVer = tag.replace(/^v/, "");
   console.log(`[uni] latest ${tag} (current ${current})`);
 
   if (latestVer === current && !flags.force) {
-    console.log(`[uni] already up to date`);
-    if (flags.check) process.exit(0);
+    console.log("[uni] already up to date");
     process.exit(0);
   }
   if (flags.check) {
@@ -365,7 +338,6 @@ async function cmdUpdate(flags: Record<string, string | boolean>) {
     process.exit(1);
   }
 
-  // prefer bare binary asset (uni-linux-x64) over tar.gz for self-update
   const asset = latest.assets.find((a) => a.name === tgt.artifact) ?? latest.assets.find((a) => a.name === `${tgt.artifact}.tar.gz`);
   if (!asset) {
     console.error(`[uni] update: asset ${tgt.artifact} not found in ${tag}`);
@@ -377,7 +349,6 @@ async function cmdUpdate(flags: Record<string, string | boolean>) {
   console.log(`[uni] downloading ${asset.name} from ${url}...`);
 
   const tmp = path.join(osTmpDir(), `uni-update-${Date.now()}-${tgt.artifact}`);
-  // download
   try {
     const res = await fetch(url);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -389,17 +360,15 @@ async function cmdUpdate(flags: Record<string, string | boolean>) {
   }
 
   let newBinary = tmp;
-  // if tar.gz, extract binary inside
   if (asset.name.endsWith(".tar.gz")) {
     try {
       const outDir = `${tmp}.dir`;
       fs.mkdirSync(outDir, { recursive: true });
       const proc = Bun.spawnSync(["tar", "-xzf", tmp, "-C", outDir]);
       if (proc.exitCode !== 0) throw new Error(proc.stderr.toString().slice(0, 300));
-      // find uni binary inside
       const found = fs.readdirSync(outDir, { recursive: true } as any) as unknown as string[];
       const binName = tgt.artifact;
-      const candidate = (found as string[]).find((p) => String(p).endsWith(binName)) ?? found.find((p) => String(p).includes("uni-"));
+      const candidate = found.find((p) => String(p).endsWith(binName)) ?? found.find((p) => String(p).includes("uni-"));
       if (!candidate) throw new Error("binary not found in tar");
       const src = path.join(outDir, String(candidate));
       const extracted = `${tmp}.bin`;
@@ -412,29 +381,26 @@ async function cmdUpdate(flags: Record<string, string | boolean>) {
     }
   }
 
-  const dest = process.execPath;
-  // safety: if dest is bun, use ~/.local/bin/uni
-  let targetPath = dest;
-  if (dest.includes("bun")) {
+  let targetPath = process.execPath;
+  if (!compiled) {
     const homeBin = path.join(os.homedir(), ".local", "bin", "uni");
     const usrBin = "/usr/local/bin/uni";
     if (fs.existsSync(homeBin)) targetPath = homeBin;
-    else if (fs.existsSync(usrBin) && (()=>{ try{ fs.accessSync(path.dirname(usrBin), fs.constants.W_OK); return true;}catch{return false}})()) targetPath = usrBin;
+    else if (fs.existsSync(usrBin) && (() => { try { fs.accessSync(path.dirname(usrBin), fs.constants.W_OK); return true; } catch { return false; } })()) targetPath = usrBin;
     else {
-      console.log(`[uni] dev mode — new binary at ${newBinary}, copy manually to ~/.local/bin/uni`);
+      console.log(`[uni] dev mode - new binary at ${newBinary}, copy manually to ~/.local/bin/uni`);
       console.log(`  mv ${newBinary} ~/.local/bin/uni && chmod +x ~/.local/bin/uni`);
       process.exit(0);
     }
   }
 
   try {
-    // backup
     const bak = `${targetPath}.bak`;
     try { fs.copyFileSync(targetPath, bak); } catch {}
     fs.copyFileSync(newBinary, targetPath);
     fs.chmodSync(targetPath, 0o755);
-    console.log(`[uni] updated ${targetPath} ${current} -> ${latestVer} ✓`);
-    console.log(`  run: uni doctor && uni version`);
+    console.log(`[uni] updated ${targetPath} ${current} -> ${latestVer}`);
+    console.log("  run: uni doctor && uni version");
   } catch (e) {
     console.error(`[uni] replace failed (need sudo?): ${e instanceof Error ? e.message : String(e)}`);
     console.error(`  new binary kept at ${newBinary}`);
@@ -443,7 +409,7 @@ async function cmdUpdate(flags: Record<string, string | boolean>) {
 }
 
 function osTmpDir(): string {
-  return process.env.TMPDIR ?? process.env.TMP ?? "/tmp";
+  return process.env.TMPDIR ?? process.env.TMP ?? os.tmpdir();
 }
 
 async function main() {

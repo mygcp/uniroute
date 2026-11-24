@@ -56,7 +56,7 @@ detect_platform() {
     arm64|aarch64) ARCH="arm64" ;;
     *) echo "Unsupported arch: $ARCH" >&2; exit 1 ;;
   esac
-  echo "bun-$OS-$ARCH"
+  echo "$OS-$ARCH"
 }
 
 TARGET=$(detect_platform)

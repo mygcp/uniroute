@@ -8,6 +8,7 @@
 /.react-router/
 /build/
 /dist/
+/.bun-cache/
 
 # Local agent tooling / planning state
 .agents/

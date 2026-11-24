@@ -38,7 +38,7 @@ uni start --daemon --port 3000
 uni status && uni logs -f
 ```
 
-Or download `uni-*` from [Releases](https://github.com/mygcp/uniroute/releases) (each `uni-*.tar.gz` contains binary + `build/`).
+Or download `uni-*` from [Releases](https://github.com/mygcp/uniroute/releases) (standalone binary with client assets embedded).
 
 **Self-update:**
 
@@ -53,7 +53,7 @@ uni update --force
 Single binary via `bun build --compile` (GH Release builds `uni-linux-x64`, `uni-darwin-arm64`, etc.):
 
 ```bash
-bun run compile            # → dist/uni (needs build/ next to it)
+bun run compile            # -> dist/uni (self-contained binary)
 ./dist/uni start --daemon
 ./dist/uni doctor
 ```
