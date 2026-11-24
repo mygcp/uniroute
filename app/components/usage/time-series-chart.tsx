@@ -14,6 +14,16 @@ function fmtValue(value: number, metric: Metric): string {
   return value.toLocaleString();
 }
 
+function fmtShort(value: number, metric: Metric): string {
+  if (metric === "cost") {
+    if (value >= 1000) return `$${(value / 1000).toFixed(1)}k`;
+    return `$${value.toFixed(value < 1 && value > 0 ? 2 : 1)}`;
+  }
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
+  if (value >= 1_000) return `${(value / 1_000).toFixed(1)}k`;
+  return String(value);
+}
+
 export function TimeSeriesChart({ data, metric, barHeight = 160, format }: Props) {
   const [hovered, setHovered] = useState<number | null>(null);
   if (data.length === 0) {
@@ -24,23 +34,33 @@ export function TimeSeriesChart({ data, metric, barHeight = 160, format }: Props
     );
   }
   const fmt = (v: number): string => (format ? format(v) : fmtValue(v, metric));
+  const fmtLabel = (v: number): string => (format ? format(v) : fmtShort(v, metric));
   const max = Math.max(1, ...data.map((d) => d.value));
-  const fill = metric === "cost" ? "bg-success" : "bg-primary";
-  const active = hovered != null && hovered >= 0 && hovered < data.length ? data[hovered] : null;
+  const fill =
+    metric === "cost"
+      ? "bg-gradient-to-t from-success to-success/75"
+      : "bg-gradient-to-t from-primary to-info/90";
+  const active =
+    hovered != null && hovered >= 0 && hovered < data.length ? data[hovered] : null;
 
   return (
     <div>
-      <div className="w-full overflow-x-auto" role="img" aria-label={`${metric} time series`}>
-        <div className="flex items-end gap-1.5" style={{ minWidth: `${data.length * 32}px` }}>
+      <div
+        className="slim-scroll w-full overflow-x-auto overflow-y-hidden pb-1"
+        role="img"
+        aria-label={`${metric} time series`}
+      >
+        <div
+          className="flex items-end gap-2 pt-2"
+          style={{ minWidth: `${Math.max(data.length * 48, 120)}px` }}
+        >
           {data.map((d, i) => {
-            const h = d.value > 0 ? Math.max(3, (d.value / max) * barHeight) : 3;
+            const h = d.value > 0 ? Math.max(6, (d.value / max) * barHeight) : 4;
             const isActive = hovered === i;
             return (
               <div
                 key={`${d.labelFull}-${i}`}
-                className={`flex flex-1 cursor-default flex-col items-center gap-1 rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 ${
-                  isActive ? "opacity-100" : ""
-                }`}
+                className="flex flex-1 cursor-default flex-col items-center gap-1.5 rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
                 tabIndex={0}
                 role="button"
                 aria-label={`${d.labelFull}: ${fmt(d.value)}`}
@@ -52,21 +72,28 @@ export function TimeSeriesChart({ data, metric, barHeight = 160, format }: Props
                 onClick={() => setHovered(isActive ? null : i)}
               >
                 <span
-                  className={`text-xs leading-none tabular-nums ${
-                    isActive ? "block text-foreground" : "hidden text-muted-foreground sm:block"
+                  className={`truncate text-[11px] leading-none tabular-nums ${
+                    isActive
+                      ? "block font-semibold text-foreground"
+                      : "hidden text-muted-foreground sm:block"
                   }`}
                 >
-                  {fmt(d.value)}
+                  {fmtLabel(d.value)}
                 </span>
-                <div className="flex w-full items-end" style={{ height: barHeight }}>
+                <div
+                  className="flex w-full max-w-[68px] items-end"
+                  style={{ height: barHeight }}
+                >
                   <div
-                    className={`bar-grow-y w-full rounded-sm ${
-                      d.value > 0 ? fill : "bg-[#4b5563]"
-                    } ${isActive ? "ring-2 ring-foreground/60" : ""}`}
-                    style={{ height: `${h}px`, animationDelay: `${i * 25}ms` }}
+                    className={`bar-grow-y w-full rounded-t-md ${
+                      d.value > 0 ? fill : "bg-track"
+                    } ${isActive ? "ring-2 ring-primary/60" : ""}`}
+                    style={{ height: `${h}px`, animationDelay: `${i * 20}ms` }}
                   />
                 </div>
-                <span className="text-xs leading-none text-muted-foreground">{d.label}</span>
+                <span className="truncate text-[11px] leading-none text-muted-foreground">
+                  {d.label}
+                </span>
               </div>
             );
           })}
@@ -76,7 +103,7 @@ export function TimeSeriesChart({ data, metric, barHeight = 160, format }: Props
         {active ? (
           <>
             <span className="font-medium text-foreground">{active.labelFull}</span>
-            {" — "}
+            {" · "}
             {fmt(active.value)}
           </>
         ) : (

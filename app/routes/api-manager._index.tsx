@@ -1,16 +1,23 @@
-import { Form, Link } from "react-router";
+import { Form, Link, useSubmit } from "react-router";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { Route } from "./+types/api-manager._index";
 import {
 	Download,
+	Eye,
 	KeyRound,
 	Lock,
 	LockOpen,
 	Plus,
 	RotateCw,
+	Search,
 	Trash2,
 	Settings,
 } from "lucide-react";
+
+export function meta() {
+	return [{ title: "API Keys | UniRoute" }];
+}
+import { requireSession } from "../.server/auth";
 import {
 	listClientKeys,
 	isRequireApiKey,
@@ -79,6 +86,8 @@ type Result = {
 } | null;
 
 export async function action({ request }: Route.ActionArgs) {
+	const denied = requireSession(request);
+	if (denied) return denied;
 	const form = await request.formData();
 	const intent = String(form.get("intent"));
 
@@ -222,6 +231,15 @@ export default function ApiManager({
 	const [statusFilter, setStatusFilter] = useState("any");
 	const [selected, setSelected] = useState<Set<number>>(new Set());
 
+	useEffect(() => {
+		const validIds = new Set(keys.map((r) => r.key.id));
+		setSelected((prev) => {
+			if (prev.size === 0) return prev;
+			const next = new Set([...prev].filter((id) => validIds.has(id)));
+			return next.size === prev.size ? prev : next;
+		});
+	}, [keys]);
+
 	const filtered = keys.filter(
 		(r) =>
 			(statusFilter === "any" || r.status === statusFilter) &&
@@ -262,13 +280,13 @@ export default function ApiManager({
 			/>
 
 			{rotated && rotated.length > 0 ? (
-				<div className="mb-4 rounded-lg border border-warning/30 bg-warning/10 p-4 text-sm">
+				<div className="mb-4 rounded-xl border border-warning/35 bg-warning/10 p-4 text-sm">
 					<p className="font-semibold text-foreground">
-						New keys below are shown only once — copy them now:
+						New keys below are shown only once. Copy them now:
 					</p>
 					{rotated.map((r) => (
 						<div key={r.id} className="mt-2 flex items-center gap-2">
-							<code className="break-all rounded bg-surface-2 px-3 py-2 font-mono text-xs text-foreground">
+							<code className="break-all rounded-lg border border-border bg-surface px-3 py-2 font-mono text-xs text-foreground">
 								{r.key}
 							</code>
 							<CopyButton text={r.key} label="Copy" />
@@ -278,12 +296,12 @@ export default function ApiManager({
 			) : null}
 
 			{reveal ? (
-				<div className="mb-4 rounded-lg border border-warning/30 bg-warning/10 p-4 text-sm">
+				<div className="mb-4 rounded-xl border border-warning/35 bg-warning/10 p-4 text-sm">
 					<p className="font-semibold text-foreground">
 						Full key (key #{reveal.id}):
 					</p>
 					<div className="mt-2 flex items-center gap-2">
-						<code className="break-all rounded bg-surface-2 px-3 py-2 font-mono text-xs text-foreground">
+						<code className="break-all rounded-lg border border-border bg-surface px-3 py-2 font-mono text-xs text-foreground">
 							{reveal.key}
 						</code>
 						<CopyButton text={reveal.key} label="Copy" />
@@ -314,19 +332,25 @@ export default function ApiManager({
 				padded={false}
 				className="mb-4 flex flex-wrap items-center gap-3 p-3"
 			>
-				<Input
-					value={query}
-					onChange={(e) => setQuery(e.target.value)}
-					placeholder="Search…"
-					aria-label="Search keys"
-					autoComplete="off"
-					className="sm:w-64"
-				/>
+				<div className="relative w-full sm:w-64">
+					<Search
+						size={14}
+						className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-muted-foreground"
+					/>
+					<Input
+						value={query}
+						onChange={(e) => setQuery(e.target.value)}
+						placeholder="Search keys…"
+						aria-label="Search keys"
+						autoComplete="off"
+						className="pl-8"
+					/>
+				</div>
 				<Select
 					value={statusFilter}
 					onChange={(e) => setStatusFilter(e.target.value)}
 					aria-label="Filter by status"
-					className="sm:w-48"
+					className="w-full sm:w-44"
 				>
 					<option value="any">All status</option>
 					<option value="active">Active</option>
@@ -335,46 +359,75 @@ export default function ApiManager({
 					<option value="expired">Expired</option>
 				</Select>
 
-				<Form method="post" className="flex items-center gap-2">
-					<input type="hidden" name="intent" value="require" />
-					<input
-						type="hidden"
-						name="enabled"
-						value={requireApiKey ? "0" : "1"}
-					/>
-					<Button
-						type="submit"
-						size="sm"
-						variant={requireApiKey ? "primary" : "outline"}
-						title="Master switch: require an API key for all requests"
-					>
-						Require API key: {requireApiKey ? "ON" : "OFF"}
-					</Button>
-				</Form>
+				<div className="ml-auto flex flex-wrap items-center gap-2">
+					<Form method="post" className="flex items-center">
+						<input type="hidden" name="intent" value="require" />
+						<input
+							type="hidden"
+							name="enabled"
+							value={requireApiKey ? "0" : "1"}
+						/>
+						<Button
+							type="submit"
+							size="sm"
+							variant={requireApiKey ? "primary" : "outline"}
+							title="Master switch: require an API key for all requests"
+						>
+							Require API key: {requireApiKey ? "ON" : "OFF"}
+						</Button>
+					</Form>
+					{keys.length > 0 ? <ExportDrawer /> : null}
+				</div>
 			</Card>
 
 			{selected.size > 0 ? (
-				<div className="mb-4 rounded-xl border border-primary/30 bg-primary/5 p-3 text-sm">
+				<div className="mb-4 flex flex-wrap items-center gap-2 rounded-xl border border-primary/30 bg-primary/8 p-3 text-sm">
 					<span className="font-medium text-foreground">
-						{selected.size} selected —{" "}
+						{selected.size} selected
 					</span>
 					<BulkRow ids={selected} setSelected={setSelected} />
 				</div>
 			) : null}
 
-			<ExportBar />
-
 			{filtered.length === 0 ? (
 				<Card>
-					<EmptyState
-						icon={<KeyRound size={20} />}
-						title="No API keys yet"
-						description="Create a key to start routing requests."
-					/>
+					{keys.length === 0 ? (
+						<EmptyState
+							icon={<KeyRound size={20} />}
+							title="No API keys yet"
+							description="Create a key to start routing requests with budgets and rate limits."
+							action={
+								<Link
+									to="/api-manager/create"
+									className={buttonClass("primary", "sm")}
+								>
+									<Plus size={14} /> Create New Key
+								</Link>
+							}
+						/>
+					) : (
+						<EmptyState
+							icon={<Search size={20} />}
+							title="No keys match your filter"
+							description="Try clearing your search term or status filter."
+							action={
+								<Button
+									variant="outline"
+									size="sm"
+									onClick={() => {
+										setQuery("");
+										setStatusFilter("any");
+									}}
+								>
+									Clear filters
+								</Button>
+							}
+						/>
+					)}
 				</Card>
 			) : (
 				<Card padded={false}>
-					<Table>
+					<Table className="min-w-[780px]">
 						<THead>
 							<tr>
 								<THeadCell className="pr-2">
@@ -398,7 +451,7 @@ export default function ApiManager({
 								<THeadCell>Status</THeadCell>
 								<THeadCell>Usage</THeadCell>
 								<THeadCell>Budget</THeadCell>
-								<THeadCell className="pr-0">Actions</THeadCell>
+								<THeadCell>Actions</THeadCell>
 							</tr>
 						</THead>
 						<tbody>
@@ -416,12 +469,13 @@ export default function ApiManager({
 											/>
 										</TCell>
 										<TCell>
-											<a
-												href={`/api-manager/${r.key.id}`}
+											<Link
+												to={`/api-manager/${r.key.id}`}
+												prefetch="intent"
 												className="font-medium text-primary hover:underline"
 											>
 												{r.key.name}
-											</a>
+											</Link>
 											{r.key.description ? (
 												<p className="text-xs text-muted-foreground">
 													{r.key.description}
@@ -453,34 +507,31 @@ export default function ApiManager({
 													</span>
 												</div>
 											) : (
-												<span className="text-xs text-muted-foreground">—</span>
+												<span className="text-xs text-muted-foreground">-</span>
 											)}
 										</TCell>
-										<TCell className="pr-0">
+										<TCell>
 											<div className="flex items-center gap-1">
-												<CopyButton text={masked(r.key)} label="Copy key" />
+												<CopyButton text={masked(r.key)} label="Copy key prefix" />
 												<Form method="post">
 													<input type="hidden" name="intent" value="reveal" />
 													<input type="hidden" name="id" value={r.key.id} />
-													<Tooltip
-														label={
+													<Button
+														type="submit"
+														variant="ghost"
+														size="icon"
+														disabled={!revealAllowed || !r.revealable}
+														title={
 															!revealAllowed
-																? "Reveal is disabled — set ALLOW_API_KEY_REVEAL=1 to enable"
+																? "Reveal is disabled. Set ALLOW_API_KEY_REVEAL=1 to enable."
 																: !r.revealable
 																	? "This key has no stored secret to reveal"
 																	: "Reveal full key"
 														}
+														aria-label="Reveal full key"
 													>
-														<Button
-															type="submit"
-															variant="ghost"
-															size="icon"
-															disabled={!revealAllowed || !r.revealable}
-															aria-label="Reveal full key"
-														>
-															<LockOpen size={14} />
-														</Button>
-													</Tooltip>
+														<Eye size={14} />
+													</Button>
 												</Form>
 												<RowAction
 													intent="rotate"
@@ -510,14 +561,15 @@ export default function ApiManager({
 													icon={<Trash2 size={14} />}
 													danger
 												/>
-												<a
-													href={`/api-manager/${r.key.id}`}
+												<Link
+													to={`/api-manager/${r.key.id}`}
+													prefetch="intent"
 													title="Manage / Edit"
 													aria-label="Manage / Edit"
-													className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted hover:text-foreground"
+													className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-glass-hover hover:text-foreground"
 												>
 													<Settings size={14} />
-												</a>
+												</Link>
 											</div>
 										</TCell>
 									</TRow>
@@ -605,63 +657,59 @@ function BulkRow({
 	setSelected: (s: Set<number>) => void;
 }) {
 	const { dialog, confirm } = useConfirm();
+	const submit = useSubmit();
 
-	const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
-		const action = String(
-			(
-				e.currentTarget.elements.namedItem(
-					"bulk_action",
-				) as HTMLButtonElement | null
-			)?.value ?? "",
-		);
+	const runAction = async (action: "suspend" | "reactivate" | "rotate" | "delete") => {
 		const msg =
 			action === "delete"
 				? {
-						title: `Delete ${ids.size} API keys?`,
+						title: `Delete ${ids.size} API key${ids.size === 1 ? "" : "s"}?`,
 						description: "This action cannot be undone.",
 						confirmLabel: "Delete",
 						variant: "danger" as const,
 					}
 				: action === "suspend"
 					? {
-							title: `Suspend ${ids.size} API keys?`,
-							description: "Requests with these keys will be rejected.",
+							title: `Suspend ${ids.size} API key${ids.size === 1 ? "" : "s"}?`,
+							description: "Requests using these keys will be rejected.",
 							confirmLabel: "Suspend",
 							variant: "primary" as const,
 						}
 					: action === "rotate"
 						? {
-								title: `Rotate ${ids.size} API keys?`,
+								title: `Rotate ${ids.size} API key${ids.size === 1 ? "" : "s"}?`,
 								description: "The old keys stay valid for the grace period.",
 								confirmLabel: "Rotate",
 								variant: "primary" as const,
 							}
 						: null;
-		if (!msg) return;
-		e.preventDefault();
-		const form = e.currentTarget;
-		const ok = await confirm(msg);
-		if (ok) form.submit();
+		if (msg) {
+			const ok = await confirm(msg);
+			if (!ok) return;
+		}
+		const fd = new FormData();
+		fd.set("intent", "bulk");
+		fd.set("bulk_action", action);
+		fd.set("selected_ids", Array.from(ids).join(","));
+		submit(fd, { method: "post" });
+		setSelected(new Set());
 	};
 
 	return (
 		<>
-			<Form
-				method="post"
-				className="inline-flex flex-wrap items-center gap-2"
-				onSubmit={handleSubmit}
-			>
-				<input type="hidden" name="intent" value="bulk" />
-				<input
-					type="hidden"
-					name="selected_ids"
-					value={Array.from(ids).join(",")}
-				/>
-				{["suspend", "reactivate", "rotate", "delete", "export"].map((a) => (
-					<Button key={a} type="submit" name="bulk_action" value={a} size="sm">
-						{a}
-					</Button>
-				))}
+			<div className="inline-flex flex-wrap items-center gap-1.5">
+				<Button type="button" variant="outline" size="sm" onClick={() => runAction("suspend")}>
+					Suspend
+				</Button>
+				<Button type="button" variant="outline" size="sm" onClick={() => runAction("reactivate")}>
+					Reactivate
+				</Button>
+				<Button type="button" variant="outline" size="sm" onClick={() => runAction("rotate")}>
+					Rotate
+				</Button>
+				<Button type="button" variant="danger" size="sm" onClick={() => runAction("delete")}>
+					Delete
+				</Button>
 				<Button
 					type="button"
 					variant="ghost"
@@ -670,50 +718,86 @@ function BulkRow({
 				>
 					Clear
 				</Button>
-			</Form>
+			</div>
 			{dialog}
 		</>
 	);
 }
 
-function ExportBar() {
+function ExportDrawer() {
+	const [open, setOpen] = useState(false);
+	const rootRef = useRef<HTMLDivElement>(null);
+
+	useEffect(() => {
+		if (!open) return;
+		const onMouseDown = (e: MouseEvent) => {
+			if (rootRef.current && !rootRef.current.contains(e.target as Node)) {
+				setOpen(false);
+			}
+		};
+		const onKeyDown = (e: KeyboardEvent) => {
+			if (e.key === "Escape") setOpen(false);
+		};
+		document.addEventListener("mousedown", onMouseDown);
+		document.addEventListener("keydown", onKeyDown);
+		return () => {
+			document.removeEventListener("mousedown", onMouseDown);
+			document.removeEventListener("keydown", onKeyDown);
+		};
+	}, [open]);
+
 	return (
-		<Form
-			method="get"
-			action="/api-manager/export"
-			className="mb-4 flex flex-wrap items-end gap-3 rounded-xl border border-border bg-surface p-3 text-sm shadow-sm"
-		>
-			<div>
-				<Label htmlFor="export-status">Status</Label>
-				<Select id="export-status" name="status" className="sm:w-44">
-					<option value="any">All status</option>
-					<option value="active">Active</option>
-					<option value="suspended">Locked</option>
-					<option value="expired">Expired</option>
-				</Select>
-			</div>
-			<div>
-				<Label htmlFor="export-before">Created before</Label>
-				<Input
-					type="date"
-					id="export-before"
-					name="created_before"
-					className="sm:w-44"
-				/>
-			</div>
-			<div>
-				<Label htmlFor="export-format">Format</Label>
-				<Select id="export-format" name="format" className="sm:w-44">
-					<option value="csv">CSV</option>
-					<option value="json">JSON</option>
-				</Select>
-			</div>
-			<Button type="submit" variant="outline">
+		<div ref={rootRef} className="relative">
+			<Button
+				type="button"
+				size="sm"
+				variant="outline"
+				onClick={() => setOpen((v) => !v)}
+				aria-expanded={open}
+			>
 				<Download size={14} /> Export
 			</Button>
-			<span className="text-xs text-muted-foreground">
-				Download CSV/JSON by filter
-			</span>
-		</Form>
+			{open ? (
+				<div className="dialog-pop absolute right-0 z-40 mt-2 w-72 rounded-xl border border-border-strong bg-surface p-4 shadow-xl">
+					<Form
+						method="get"
+						action="/api-manager/export"
+						reloadDocument
+						className="space-y-3"
+						onSubmit={() => setOpen(false)}
+					>
+						<p className="text-xs font-semibold text-foreground">Export keys</p>
+						<div>
+							<Label htmlFor="export-status">Status</Label>
+							<Select id="export-status" name="status" controlSize="sm">
+								<option value="any">All status</option>
+								<option value="active">Active</option>
+								<option value="suspended">Locked</option>
+								<option value="expired">Expired</option>
+							</Select>
+						</div>
+						<div>
+							<Label htmlFor="export-before">Created before</Label>
+							<Input controlSize="sm" type="date" id="export-before" name="created_before" />
+						</div>
+						<div>
+							<Label htmlFor="export-format">Format</Label>
+							<Select id="export-format" name="format" controlSize="sm">
+								<option value="csv">CSV</option>
+								<option value="json">JSON</option>
+							</Select>
+						</div>
+						<div className="flex justify-end gap-2 border-t border-border pt-3">
+							<Button type="button" variant="outline" size="sm" onClick={() => setOpen(false)}>
+								Close
+							</Button>
+							<Button type="submit" size="sm">
+								<Download size={13} /> Download
+							</Button>
+						</div>
+					</Form>
+				</div>
+			) : null}
+		</div>
 	);
 }

@@ -9,14 +9,19 @@ import {
 	buildCodexConfig,
 	buildConfig,
 	buildOpencodePatch,
+	detectUniRouteConfig,
+	installMcp,
+	isMcpInstalled,
 	mergeCodexConfig,
 	mergeJsonConfig,
 	createBackup,
 	deleteBackup,
 	listBackups,
 	readConfig,
+	removeMcp,
 	removeUniRouteFromConfig,
 	restoreBackup,
+	statusAll,
 	writeHarnessConfig,
 } from "./agents-config";
 
@@ -285,6 +290,103 @@ describe("remove / reset to default", () => {
 		const home = tmpHome();
 		try {
 			expect(() => removeUniRouteFromConfig("opencode", home)).toThrow(ConfigError);
+			rmSync(home, { recursive: true, force: true });
+		} catch (e) {
+			rmSync(home, { recursive: true, force: true });
+			throw e;
+		}
+	});
+
+	test("detectUniRouteConfig & statusAll distinguish existing user config from linked UniRoute config", () => {
+		const home = tmpHome();
+		try {
+			// User already has a Codex config with [profiles.work], no UniRoute yet.
+			mkdirSync(path.join(home, ".codex"), { recursive: true });
+			writeFileSync(
+				path.join(home, ".codex", "config.toml"),
+				['approval_policy = "on-request"', "", "[profiles.work]", 'model = "gpt-5"'].join("\n"),
+			);
+			let codexStatus = statusAll(home).find((s) => s.id === "codex")!;
+			expect(codexStatus.exists).toBe(true);
+			expect(codexStatus.unirouteConfigured).toBe(false);
+			expect(() => removeUniRouteFromConfig("codex", home)).toThrow(ConfigError);
+
+			// Apply UniRoute -> unirouteConfigured becomes true with baseUrl + model.
+			writeHarnessConfig("codex", INPUT, home);
+			codexStatus = statusAll(home).find((s) => s.id === "codex")!;
+			expect(codexStatus.unirouteConfigured).toBe(true);
+			expect(codexStatus.unirouteBaseUrl).toBe("http://192.168.1.10:3000/v1");
+			expect(codexStatus.unirouteModel).toBe("big-pickle");
+
+			// Remove UniRoute -> file still exists for user settings, but unirouteConfigured is false
+			// and [profiles.work]'s model is preserved!
+			const res = removeUniRouteFromConfig("codex", home);
+			expect(res.fileDeleted).toBe(false);
+			const after = readConfig("codex", home)!;
+			expect(after).toContain("[profiles.work]");
+			expect(after).toContain('model = "gpt-5"');
+			expect(detectUniRouteConfig("codex", after).configured).toBe(false);
+
+			codexStatus = statusAll(home).find((s) => s.id === "codex")!;
+			expect(codexStatus.exists).toBe(true);
+			expect(codexStatus.unirouteConfigured).toBe(false);
+			expect(codexStatus.unirouteBaseUrl).toBeNull();
+			expect(codexStatus.unirouteModel).toBeNull();
+
+			// Restore works even if parent dir was removed.
+			rmSync(path.join(home, ".codex"), { recursive: true, force: true });
+			const bak = listBackups("codex", home)[0]!.file;
+			restoreBackup("codex", bak, home);
+			expect(existsSync(path.join(home, ".codex", "config.toml"))).toBe(true);
+
+			rmSync(home, { recursive: true, force: true });
+		} catch (e) {
+			rmSync(home, { recursive: true, force: true });
+			throw e;
+		}
+	});
+});
+
+describe("MCP auto-registration", () => {
+	test("codex installMcp writes valid quoted TOML with header and roundtrips removeMcp", () => {
+		const home = tmpHome();
+		try {
+			const cmd = ["bun", "C:\\Users\\user\\uniroute\\app\\.server\\mcp-server.ts"];
+			installMcp("codex", cmd, home);
+			expect(isMcpInstalled("codex", home)).toBe(true);
+			const content = readConfig("codex", home)!;
+			expect(content).toContain("[mcp_servers.uniroute]");
+			expect(content).toContain('command = "bun"');
+			expect(content).toContain(
+				'args = ["C:\\\\Users\\\\user\\\\uniroute\\\\app\\\\.server\\\\mcp-server.ts"]',
+			);
+
+			removeMcp("codex", home);
+			expect(isMcpInstalled("codex", home)).toBe(false);
+			rmSync(home, { recursive: true, force: true });
+		} catch (e) {
+			rmSync(home, { recursive: true, force: true });
+			throw e;
+		}
+	});
+
+	test("opencode removeMcp preserves sibling keys inside mcp object", () => {
+		const home = tmpHome();
+		try {
+			const ocPath = path.join(home, ".config", "opencode", "opencode.json");
+			mkdirSync(path.dirname(ocPath), { recursive: true });
+			writeFileSync(
+				ocPath,
+				JSON.stringify({ mcp: { enabled: true, servers: {} } }, null, 2),
+			);
+			installMcp("opencode", ["bun", "mcp-server.ts"], home);
+			expect(isMcpInstalled("opencode", home)).toBe(true);
+
+			removeMcp("opencode", home);
+			expect(isMcpInstalled("opencode", home)).toBe(false);
+			const obj = JSON.parse(readFileSync(ocPath, "utf8"));
+			expect(obj.mcp.enabled).toBe(true);
+			expect(obj.mcp.servers).toBeUndefined();
 			rmSync(home, { recursive: true, force: true });
 		} catch (e) {
 			rmSync(home, { recursive: true, force: true });

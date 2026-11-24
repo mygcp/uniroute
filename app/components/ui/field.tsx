@@ -6,9 +6,9 @@ import type {
 } from "react";
 
 const base =
-  "w-full rounded-lg border border-glass-border bg-glass-strong px-3 text-sm text-foreground backdrop-blur-sm shadow-[inset_0_1px_0_var(--glass-highlight)] transition-colors placeholder:text-muted-foreground focus:border-primary/40 focus:outline-none focus:ring-2 focus:ring-primary/20 disabled:opacity-50";
+  "w-full rounded-lg border border-border bg-surface px-3 text-sm text-foreground transition-colors placeholder:text-muted-foreground/75 hover:border-border-strong focus:border-primary focus:outline-none focus:ring-2 focus:ring-ring/25 disabled:opacity-50";
 const invalidBase =
-  "border-danger/40 data-[invalid=true]:border-danger/60 data-[invalid=true]:focus:border-danger data-[invalid=true]:focus:ring-danger/25";
+  "border-danger/65 data-[invalid=true]:border-danger data-[invalid=true]:focus:border-danger data-[invalid=true]:focus:ring-danger/25";
 
 export function Label({
   className = "",
@@ -27,18 +27,23 @@ export function Label({
 
 export type InputProps = InputHTMLAttributes<HTMLInputElement> & {
   invalid?: boolean;
+  controlSize?: "sm" | "md";
 };
 
-export function Input({ invalid, className = "", ...rest }: InputProps) {
+export function Input({
+  invalid,
+  controlSize = "md",
+  className = "",
+  ...rest
+}: InputProps) {
+  const sizeClass = controlSize === "sm" ? "h-8 text-xs" : "h-9 text-sm";
   return (
     <input
       data-invalid={invalid ? "true" : undefined}
-      className={[
-        base,
-        invalid ? invalidBase : "",
-        "h-9",
-        className,
-      ].join(" ")}
+      aria-invalid={invalid || undefined}
+      className={[base, invalid ? invalidBase : "", sizeClass, className]
+        .filter(Boolean)
+        .join(" ")}
       {...rest}
     />
   );
@@ -52,7 +57,10 @@ export function Textarea({
   return (
     <textarea
       data-invalid={invalid ? "true" : undefined}
-      className={[base, invalid ? invalidBase : "", "py-2", className].join(" ")}
+      aria-invalid={invalid || undefined}
+      className={[base, invalid ? invalidBase : "", "py-2", className]
+        .filter(Boolean)
+        .join(" ")}
       {...rest}
     />
   );
@@ -60,13 +68,30 @@ export function Textarea({
 
 export function Select({
   invalid,
+  controlSize = "md",
   className = "",
   ...rest
-}: SelectHTMLAttributes<HTMLSelectElement> & { invalid?: boolean }) {
+}: SelectHTMLAttributes<HTMLSelectElement> & {
+  invalid?: boolean;
+  controlSize?: "sm" | "md";
+}) {
+  const sizeClass =
+    controlSize === "sm"
+      ? "h-8 text-xs leading-[1.875rem]"
+      : "h-9 text-sm leading-[2.125rem]";
   return (
     <select
       data-invalid={invalid ? "true" : undefined}
-      className={[base, invalid ? invalidBase : "", "h-9", className].join(" ")}
+      aria-invalid={invalid || undefined}
+      className={[
+        base,
+        invalid ? invalidBase : "",
+        "ui-select py-0 bg-surface",
+        sizeClass,
+        className,
+      ]
+        .filter(Boolean)
+        .join(" ")}
       {...rest}
     />
   );
@@ -80,7 +105,7 @@ export function Checkbox({
     <input
       type="checkbox"
       className={[
-        "h-4 w-4 rounded border border-glass-border bg-glass-strong accent-primary",
+        "h-4 w-4 rounded border border-border-strong bg-surface accent-primary-solid",
         className,
       ].join(" ")}
       {...rest}

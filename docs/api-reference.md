@@ -64,10 +64,19 @@ Routing uses the `model` field; it must be registered under a provider.
 | `/`, `/home` | Dashboard + usage chart |
 | `/providers`, `/providers/[id]`, `/providers/create` | Providers, keys, models, chat playground |
 | `/api-manager` (+ create/$id) | Client API keys |
-| `/combo`, `/compression`, `/proxies` (+create) | Combo engine, compression, proxy engine |
+| `/combo` | Model combos ([guide](combos.md)) |
+| `/compression` | RTK and Caveman Engine setup, global compression ([guide](compression.md)) |
+| `/proxies` (+create) | Proxy engine |
+| `/mcp` | MCP server page: remote endpoint toggle, bearer token, registration commands |
 | `/logs`, `/logs/proxy` | Realtime request & proxy logs |
 | `/analytics/usage` | Usage analytics |
 | `/agents` | AI Agents — harness config & MCP registration |
+
+## MCP endpoint
+
+`POST /api/mcp` is a Streamable HTTP MCP server on the main port. It is off
+until enabled on the `/mcp` page, and uses `Authorization: Bearer umcp_...`
+when authentication is required. See [AI Agents & MCP](ai-agents.md).
 
 Other internal endpoints (`/api/logs/*`, `/api-manager/export`, etc.) are
 used by the dashboard and are not public contract.

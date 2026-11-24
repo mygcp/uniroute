@@ -245,8 +245,12 @@ export function useStreaming() {
 					setDone(true);
 					return;
 				}
+				const base =
+					messages.length > 0 && messages[messages.length - 1]?.role === "assistant"
+						? messages.slice(0, -1)
+						: messages;
 				messages = [
-					...messages,
+					...base,
 					{ role: "assistant", content: accum.text },
 				];
 				continue;
@@ -258,7 +262,7 @@ export function useStreaming() {
 			setTruncated(accum.text.trim() !== "");
 			setAutoContinued(continued);
 			if (accum.text.trim() === "") {
-				setError(r.sawDisconnect ? "upstream_disconnect" : "stream terputus");
+				setError(r.sawDisconnect ? "upstream_disconnect" : "Stream disconnected");
 			}
 			return;
 		}

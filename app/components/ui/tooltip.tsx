@@ -1,12 +1,33 @@
-import type { ReactNode } from "react";
+import { useId, type ReactNode } from "react";
 
-export function Tooltip({ label, children }: { label: string; children: ReactNode }) {
+export function Tooltip({
+  label,
+  side = "top",
+  align = "center",
+  children,
+}: {
+  label: string;
+  side?: "top" | "bottom";
+  align?: "center" | "start" | "end";
+  children: ReactNode;
+}) {
+  const tipId = useId();
+
+  const sideClass = side === "bottom" ? "top-full mt-2" : "bottom-full mb-2";
+  const alignClass =
+    align === "end"
+      ? "right-0"
+      : align === "start"
+        ? "left-0"
+        : "left-1/2 -translate-x-1/2";
+
   return (
-    <span className="group/tip relative inline-flex">
+    <span className="group/tip relative inline-flex" aria-describedby={tipId}>
       {children}
       <span
+        id={tipId}
         role="tooltip"
-        className="pointer-events-none absolute bottom-full left-1/2 z-50 mb-1.5 -translate-x-1/2 whitespace-nowrap rounded-md border border-glass-border bg-surface-2/90 px-2 py-1 text-xs text-foreground opacity-0 shadow-md backdrop-blur-sm transition-opacity group-hover/tip:opacity-100 group-focus-within/tip:opacity-100"
+        className={`pointer-events-none absolute z-[80] whitespace-nowrap rounded-lg border border-border-strong bg-surface px-2.5 py-1 text-xs font-medium text-foreground opacity-0 shadow-lg transition-opacity duration-150 group-hover/tip:opacity-100 group-focus-within/tip:opacity-100 ${sideClass} ${alignClass}`}
       >
         {label}
       </span>

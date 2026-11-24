@@ -25,7 +25,6 @@ Baseline numbers (2026-08-24, deterministic mock, median of 7 pairs):
 | Handler pre-flight until upstream fetch | 15–20ms |
 | Full-stream throughput overhead | +5–13ms (<1%) |
 | Stream byte reduction (empty-frame filter) | −23% on the noisy mock |
-| Test suite | 301 tests ≈ 6s |
 
 ## Invariants — DO NOT BREAK in new code
 
@@ -90,12 +89,7 @@ BASE=http://localhost:5173 PASSWORD=CHANGEME node scripts/bench/run-bench.mjs
 node scripts/bench/register-bench-provider.mjs --clean
 ```
 
-Record results with a date in the history table below. Compare **total &
+Record any new measurements in the PR description. Compare **total &
 bytes** for throughput; direct ttft includes the mock's empty frames, so the
 gateway ttft (filtered) being "slower" is expected and desired.
 
-## Optimization history
-
-| Date | Changes |
-| --- | --- |
-| 2026-08-24 | Registry cache + central invalidation (removed per-request reload); prepared-statement cache for node:sqlite; executor rebuilt on `TransformStream`/`pipeTo`; empty-delta filter; decoder hoist + streaming decode; lightweight `getRoutingPoolId()`; proxy metadata via `onProxyUsed` (no re-query); fixed production build (`.server` imports leaking into client bundle in provider routes) |

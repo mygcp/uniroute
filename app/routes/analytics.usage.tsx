@@ -1,7 +1,8 @@
-import { Fragment, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router";
 import type { Route } from "./+types/analytics.usage";
-import { ChevronDown, Search, TrendingUp, X } from "lucide-react";
+import { ArrowDown, ArrowUp, ArrowUpDown, ChevronDown, Search, TrendingUp, X } from "lucide-react";
+import { Badge } from "../components/ui/badge";
 import {
   getUsageData,
   type BreakdownEntry,
@@ -17,7 +18,7 @@ import { Tabs } from "../components/ui/tabs";
 import { Card, CardHeader, CardTitle } from "../components/ui/card";
 
 export function meta() {
-  return [{ title: "Usage — UniRoute" }];
+  return [{ title: "Usage Analytics | UniRoute" }];
 }
 
 const RANGES: TimeRange[] = ["day", "week", "month", "year", "all"];
@@ -67,20 +68,20 @@ function rangeTitle(range: TimeRange): string {
 }
 
 function fmtTokens(n: number): string {
-  return n > 0 ? n.toLocaleString() : "—";
+  return n > 0 ? n.toLocaleString() : "-";
 }
 
 function fmtCost(n: number): string {
-  return n > 0 ? `$${n.toFixed(2)}` : "—";
+  return n > 0 ? `$${n.toFixed(2)}` : "-";
 }
 
 function fmtCostPrecise(n: number): string {
-  if (n <= 0) return "—";
+  if (n <= 0) return "-";
   return n >= 1 ? `$${n.toFixed(2)}` : `$${n.toFixed(4)}`;
 }
 
 function fmtBreakdownValue(value: number, metric: Metric): string {
-  if (metric === "cost") return value > 0 ? `$${value.toFixed(2)}` : "—";
+  if (metric === "cost") return value > 0 ? `$${value.toFixed(2)}` : "-";
   return `${value.toLocaleString()} tokens`;
 }
 
@@ -90,7 +91,7 @@ function shortError(msg: string, max = 60): string {
     const parsed = JSON.parse(msg) as { error?: { message?: string }; message?: string };
     text = parsed?.error?.message ?? parsed?.message ?? msg;
   } catch {
-    /* not JSON — use raw text */
+    /* not JSON - use raw text */
   }
   return text.length > max ? text.slice(0, max - 1) + "…" : text;
 }
@@ -149,21 +150,31 @@ function InteractiveBreakdown({
   return (
     <ul className="space-y-2">
       {data.map((d, i) => {
-        const active = selected === d.name;
+        const isOther = d.name === "Other";
+        const active = !isOther && selected === d.name;
         const pctW = Math.round((d.value / max) * 100);
         const fill =
-          d.name === "Other" ? "bg-[#6b7280]" : i % 2 === 0 ? "bg-primary" : "bg-primary/70";
+          isOther ? "bg-muted-foreground/60" : i % 2 === 0 ? "bg-primary" : "bg-primary/70";
         return (
           <li key={`${d.name}-${i}`}>
             <button
               type="button"
-              onClick={() => onSelect(active ? null : d.name)}
+              disabled={isOther}
+              onClick={() => {
+                if (!isOther) onSelect(active ? null : d.name);
+              }}
               aria-pressed={active}
-              title={`${d.name}: ${fmtBreakdownValue(d.value, metric)} (${d.pct}%) — click to filter details`}
+              title={
+                isOther
+                  ? `${d.name}: ${fmtBreakdownValue(d.value, metric)} (${d.pct}%)`
+                  : `${d.name}: ${fmtBreakdownValue(d.value, metric)} (${d.pct}%), click to filter details`
+              }
               className={`flex w-full flex-col gap-1 rounded-lg border px-2 py-1.5 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 md:flex-row md:items-center md:gap-3 ${
                 active
                   ? "border-primary/60 bg-primary/10"
-                  : "border-transparent hover:border-glass-border hover:bg-glass-hover"
+                  : isOther
+                    ? "cursor-default border-transparent opacity-85"
+                    : "border-transparent hover:border-border hover:bg-glass-hover"
               }`}
             >
               <span className="flex items-center justify-between gap-2 md:w-40 md:shrink-0">
@@ -175,7 +186,7 @@ function InteractiveBreakdown({
                 </span>
               </span>
               <span className="flex flex-1 items-center gap-2">
-                <span className="h-4 flex-1 overflow-hidden rounded-sm bg-white/5">
+                <span className="h-4 flex-1 overflow-hidden rounded-md bg-track">
                   <span className={`bar-grow-x block h-full ${fill}`} style={{ width: `${pctW}%` }} />
                 </span>
                 <span className="w-10 shrink-0 text-right text-xs tabular-nums text-muted-foreground">
@@ -193,7 +204,9 @@ function InteractiveBreakdown({
   );
 }
 
-/** Per-model drilldown table: click a row to expand providers + per-request stats. */
+type ModelSortKey = "requests" | "tokens" | "cost" | "errorRate" | "model";
+
+/** Per-model sortable drilldown table: click a row to expand providers and per-request stats. */
 function ModelTable({
   models,
   drill,
@@ -203,102 +216,204 @@ function ModelTable({
   drill: string | null;
   onDrill: (model: string | null) => void;
 }) {
+  const [sortBy, setSortBy] = useState<ModelSortKey>("tokens");
+  const [sortDir, setSortDir] = useState<"desc" | "asc">("desc");
+
+  const sorted = useMemo(() => {
+    const copy = [...models];
+    copy.sort((a, b) => {
+      const mul = sortDir === "asc" ? 1 : -1;
+      if (sortBy === "model") {
+        return mul * a.model.localeCompare(b.model, undefined, { sensitivity: "base" });
+      }
+      return mul * (a[sortBy] - b[sortBy]);
+    });
+    return copy;
+  }, [models, sortBy, sortDir]);
+
+  const maxTokens = Math.max(1, ...models.map((m) => m.tokens));
+  const maxReqs = Math.max(1, ...models.map((m) => m.requests));
+
+  const toggleSort = (key: ModelSortKey) => {
+    if (sortBy === key) {
+      setSortDir((d) => (d === "desc" ? "asc" : "desc"));
+    } else {
+      setSortBy(key);
+      setSortDir(key === "model" ? "asc" : "desc");
+    }
+  };
+
   if (models.length === 0) {
-    return <p className="py-6 text-center text-sm text-muted-foreground">No models match this filter</p>;
+    return (
+      <p className="py-10 text-center text-sm text-muted-foreground">
+        No models match this filter.
+      </p>
+    );
   }
+
+  const SortTh = ({
+    col,
+    label,
+    align = "right",
+    className = "",
+  }: {
+    col: ModelSortKey;
+    label: string;
+    align?: "left" | "right";
+    className?: string;
+  }) => {
+    const active = sortBy === col;
+    return (
+      <th
+        scope="col"
+        aria-sort={active ? (sortDir === "asc" ? "ascending" : "descending") : "none"}
+        className={`py-2.5 px-3 font-semibold ${align === "right" ? "text-right" : "text-left"} ${className}`}
+      >
+        <button
+          type="button"
+          onClick={() => toggleSort(col)}
+          className={`inline-flex items-center gap-1 text-[11px] font-semibold uppercase tracking-wider transition-colors hover:text-foreground ${
+            active ? "text-primary" : "text-muted-foreground"
+          }`}
+        >
+          {label}
+          {active ? (
+            sortDir === "asc" ? (
+              <ArrowUp size={11} aria-hidden="true" />
+            ) : (
+              <ArrowDown size={11} aria-hidden="true" />
+            )
+          ) : (
+            <ArrowUpDown size={11} aria-hidden="true" className="opacity-50" />
+          )}
+        </button>
+      </th>
+    );
+  };
+
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full min-w-[32rem] text-left text-sm">
-        <thead>
-          <tr className="border-b border-glass-border text-xs text-muted-foreground">
-            <th scope="col" className="w-6 py-2 pr-2 font-medium" aria-label="Expand" />
-            <th scope="col" className="py-2 pr-3 font-medium">Model</th>
-            <th scope="col" className="py-2 pr-3 text-right font-medium">Requests</th>
-            <th scope="col" className="hidden py-2 pr-3 text-right font-medium sm:table-cell">Tokens</th>
-            <th scope="col" className="py-2 pr-3 text-right font-medium">Cost</th>
-            <th scope="col" className="py-2 text-right font-medium">Err %</th>
+    <div className="table-wrap">
+      <table className="w-full min-w-[38rem] text-left text-sm">
+        <thead className="border-y border-border bg-surface-2/60">
+          <tr>
+            <th scope="col" className="w-10 py-2.5 pl-4 pr-1" aria-label="Expand" />
+            <SortTh col="model" label="Model" align="left" />
+            <SortTh col="requests" label="Requests" />
+            <SortTh col="tokens" label="Tokens" />
+            <SortTh col="cost" label="Est. Cost" />
+            <SortTh col="errorRate" label="Error Rate" className="pr-4" />
           </tr>
         </thead>
-        <tbody>
-          {models.map((m) => {
+        <tbody className="divide-y divide-border/70">
+          {sorted.map((m) => {
             const open = drill === m.model;
+            const tokPct = Math.max(2, Math.round((m.tokens / maxTokens) * 100));
+            const reqPct = Math.max(2, Math.round((m.requests / maxReqs) * 100));
             return (
               <Fragment key={m.model}>
                 <tr
-                  onClick={() => onDrill(open ? null : m.model)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" || e.key === " ") {
-                      e.preventDefault();
-                      onDrill(open ? null : m.model);
-                    }
-                  }}
-                  tabIndex={0}
-                  aria-expanded={open}
-                  title={`${m.model}: ${m.requests} requests, ${fmtBreakdownValue(m.tokens, "tokens")}, ${fmtCostPrecise(m.cost)} — click for providers`}
-                  className={`cursor-pointer border-b border-glass-border/50 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 ${
-                    open ? "bg-primary/10" : "hover:bg-glass-hover"
+                  className={`transition-colors ${
+                    open ? "bg-primary/8" : "hover:bg-glass-hover"
                   }`}
                 >
-                  <td className="py-2 pr-2 text-muted-foreground">
-                    <ChevronDown
-                      size={16}
-                      className={`transition-transform ${open ? "rotate-180" : ""}`}
-                    />
+                  <td className="py-3 pl-4 pr-1">
+                    <button
+                      type="button"
+                      onClick={() => onDrill(open ? null : m.model)}
+                      aria-expanded={open}
+                      aria-label={`${open ? "Collapse" : "Expand"} details for ${m.model}`}
+                      className="grid h-7 w-7 place-items-center rounded-md border border-border bg-surface text-muted-foreground transition-colors hover:border-border-strong hover:text-foreground"
+                    >
+                      <ChevronDown
+                        size={14}
+                        aria-hidden="true"
+                        className={`transition-transform ${open ? "rotate-180" : ""}`}
+                      />
+                    </button>
                   </td>
-                  <td className="max-w-36 truncate py-2 pr-3 font-medium text-foreground" title={m.model}>
-                    {m.model}
+                  <td className="py-3 px-3">
+                    <button
+                      type="button"
+                      onClick={() => onDrill(open ? null : m.model)}
+                      className="block max-w-[260px] text-left sm:max-w-[340px]"
+                      title={m.model}
+                    >
+                      <span className="block truncate font-mono text-xs font-semibold text-foreground hover:text-primary">
+                        {m.model}
+                      </span>
+                      <span className="mt-0.5 block truncate text-[11px] text-muted-foreground">
+                        {m.providers.join(", ")}
+                      </span>
+                    </button>
                   </td>
-                  <td className="py-2 pr-3 text-right tabular-nums text-muted-foreground">
-                    {m.requests.toLocaleString()}
+                  <td className="py-3 px-3 text-right">
+                    <div className="inline-flex flex-col items-end">
+                      <span className="font-mono text-xs font-medium tabular-nums text-foreground">
+                        {m.requests.toLocaleString()}
+                      </span>
+                      <span className="mt-1 h-1 w-16 overflow-hidden rounded-full bg-track">
+                        <span
+                          className="block h-full rounded-full bg-info"
+                          style={{ width: `${reqPct}%` }}
+                        />
+                      </span>
+                    </div>
                   </td>
-                  <td className="hidden py-2 pr-3 text-right tabular-nums text-muted-foreground sm:table-cell">
-                    {m.tokens.toLocaleString()}
+                  <td className="py-3 px-3 text-right">
+                    <div className="inline-flex flex-col items-end">
+                      <span className="font-mono text-xs font-medium tabular-nums text-foreground">
+                        {m.tokens.toLocaleString()}
+                      </span>
+                      <span className="mt-1 h-1 w-20 overflow-hidden rounded-full bg-track">
+                        <span
+                          className="block h-full rounded-full bg-primary"
+                          style={{ width: `${tokPct}%` }}
+                        />
+                      </span>
+                    </div>
                   </td>
-                  <td className="py-2 pr-3 text-right tabular-nums text-muted-foreground">
+                  <td className="py-3 px-3 text-right font-mono text-xs tabular-nums text-foreground">
                     {fmtCostPrecise(m.cost)}
                   </td>
-                  <td
-                    className={`py-2 text-right tabular-nums ${
-                      m.errorRate > 0 ? "text-danger" : "text-muted-foreground"
-                    }`}
-                  >
-                    {m.errorRate}%
+                  <td className="py-3 pl-3 pr-4 text-right">
+                    <Badge tone={m.errorRate > 0 ? "danger" : "success"}>
+                      {m.errorRate}%
+                    </Badge>
                   </td>
                 </tr>
                 {open ? (
-                  <tr className="border-b border-glass-border/50 bg-white/[0.02]">
-                    <td />
-                    <td colSpan={5} className="py-3 pr-2">
-                      <div className="flex flex-wrap gap-1.5">
-                        {m.providers.map((p) => (
-                          <span
-                            key={p}
-                            className="rounded-full bg-white/5 px-2 py-0.5 text-xs text-muted-foreground"
-                          >
-                            {p}
-                          </span>
-                        ))}
-                      </div>
-                      <dl className="mt-2 flex flex-wrap gap-x-5 gap-y-1 text-xs text-muted-foreground">
-                        <div className="flex gap-1.5">
-                          <dt>Avg tokens / req:</dt>
-                          <dd className="tabular-nums text-foreground">
+                  <tr className="bg-surface-2/40">
+                    <td colSpan={6} className="px-4 py-3.5 sm:px-6">
+                      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                        <div className="rounded-lg border border-border bg-surface px-3 py-2">
+                          <p className="text-[11px] text-muted-foreground">Avg tokens / req</p>
+                          <p className="mt-0.5 font-mono text-sm font-semibold tabular-nums text-foreground">
                             {m.avgTokensPerReq.toLocaleString()}
-                          </dd>
+                          </p>
                         </div>
-                        <div className="flex gap-1.5">
-                          <dt>Cost / req:</dt>
-                          <dd className="tabular-nums text-foreground">
+                        <div className="rounded-lg border border-border bg-surface px-3 py-2">
+                          <p className="text-[11px] text-muted-foreground">Avg cost / req</p>
+                          <p className="mt-0.5 font-mono text-sm font-semibold tabular-nums text-foreground">
                             {fmtCostPrecise(m.requests ? m.cost / m.requests : 0)}
-                          </dd>
+                          </p>
                         </div>
-                        <div className="flex gap-1.5">
-                          <dt>Failed requests:</dt>
-                          <dd className="tabular-nums text-foreground">
-                            {m.errors} of {m.requests}
-                          </dd>
+                        <div className="rounded-lg border border-border bg-surface px-3 py-2">
+                          <p className="text-[11px] text-muted-foreground">Failed requests</p>
+                          <p className="mt-0.5 font-mono text-sm font-semibold tabular-nums text-foreground">
+                            {m.errors.toLocaleString()} / {m.requests.toLocaleString()}
+                          </p>
                         </div>
-                      </dl>
+                        <div className="rounded-lg border border-border bg-surface px-3 py-2">
+                          <p className="text-[11px] text-muted-foreground">Providers</p>
+                          <div className="mt-1 flex flex-wrap gap-1">
+                            {m.providers.map((p) => (
+                              <Badge key={p} tone="neutral">
+                                {p}
+                              </Badge>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
                     </td>
                   </tr>
                 ) : null}
@@ -331,6 +446,11 @@ export default function AnalyticsUsage({ loaderData }: Route.ComponentProps) {
   const [drill, setDrill] = useState<string | null>(null);
   const [modelQuery, setModelQuery] = useState("");
   const [showSuccessTrend, setShowSuccessTrend] = useState(false);
+  const modelCardRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    setSelected(null);
+  }, [dimension]);
 
   const errTotal = errors.total || 1;
   const successPct = errors.total ? Math.round((errors.success / errors.total) * 100) : 0;
@@ -389,10 +509,10 @@ export default function AnalyticsUsage({ loaderData }: Route.ComponentProps) {
       />
       <StatCard
         title="Latency p95"
-        value={latency.p95 > 0 ? latency.p95.toLocaleString() : "—"}
+        value={latency.p95 > 0 ? latency.p95.toLocaleString() : "-"}
         suffix={latency.p95 > 0 ? "ms" : undefined}
         accent="bg-warning"
-        subline={`p50: ${latency.p50 > 0 ? `${latency.p50.toLocaleString()}ms` : "—"}`}
+        subline={`p50: ${latency.p50 > 0 ? `${latency.p50.toLocaleString()}ms` : "-"}`}
       />
     </>
   );
@@ -402,7 +522,7 @@ export default function AnalyticsUsage({ loaderData }: Route.ComponentProps) {
       <PageHeader
         title="Usage"
         icon={<TrendingUp size={20} />}
-        subtitle={`${RANGE_LABEL[range]} — ${rangeTitle(range)}`}
+        subtitle={`${RANGE_LABEL[range]} · ${rangeTitle(range)}`}
         actions={
           <Tabs
             tabs={RANGES.map((r) => RANGE_LABEL[r])}
@@ -436,17 +556,22 @@ export default function AnalyticsUsage({ loaderData }: Route.ComponentProps) {
         />
         <StatCard
           title="Success Rate"
-          value={fmtTokens(performance.successRate)}
-          suffix="%"
+          value={performance.requests > 0 ? performance.successRate : "-"}
+          suffix={performance.requests > 0 ? "%" : undefined}
           accent="bg-success"
           delta={deltaProps(trends.successRate, true)}
           deltaSuffix=" pts"
         />
-        <StatCard title="Error Rate" value={errorPct} suffix="%" accent="bg-danger" />
+        <StatCard
+          title="Error Rate"
+          value={performance.requests > 0 ? errorPct : "-"}
+          suffix={performance.requests > 0 ? "%" : undefined}
+          accent="bg-danger"
+        />
         <StatCard
           title="Avg Latency"
-          value={fmtTokens(performance.avgLatencyMs)}
-          suffix="ms"
+          value={performance.avgLatencyMs > 0 ? performance.avgLatencyMs.toLocaleString() : "-"}
+          suffix={performance.avgLatencyMs > 0 ? "ms" : undefined}
           accent="bg-warning"
           delta={deltaProps(trends.avgLatencyMs, false)}
         />
@@ -465,8 +590,8 @@ export default function AnalyticsUsage({ loaderData }: Route.ComponentProps) {
         <CardHeader className="flex-wrap">
           <CardTitle>
             {showSuccessTrend
-              ? `Success rate — ${rangeTitle(range)}`
-              : `${metric === "tokens" ? "Tokens" : "Cost"} — ${DIMENSION_LABEL[dimension]} — ${rangeTitle(range)}`}
+              ? `Success rate · ${rangeTitle(range)}`
+              : `${metric === "tokens" ? "Tokens" : "Cost"} · ${rangeTitle(range)}`}
           </CardTitle>
           <div className="flex flex-wrap items-center gap-2">
             <Tabs
@@ -474,15 +599,16 @@ export default function AnalyticsUsage({ loaderData }: Route.ComponentProps) {
               active={showSuccessTrend ? "Success %" : "Volume"}
               onChange={(label) => setShowSuccessTrend(label === "Success %")}
             />
-            <span className="text-xs text-muted-foreground">·</span>
-            <Tabs
-              tabs={METRICS.map((m) => (m === "tokens" ? "Tokens" : "Cost"))}
-              active={metric === "tokens" ? "Tokens" : "Cost"}
-              onChange={(label) => {
-                const m = label === "Cost" ? "cost" : "tokens";
-                setMetric(m);
-              }}
-            />
+            {!showSuccessTrend ? (
+              <Tabs
+                tabs={METRICS.map((m) => (m === "tokens" ? "Tokens" : "Cost"))}
+                active={metric === "tokens" ? "Tokens" : "Cost"}
+                onChange={(label) => {
+                  const m = label === "Cost" ? "cost" : "tokens";
+                  setMetric(m);
+                }}
+              />
+            ) : null}
           </div>
         </CardHeader>
         {showSuccessTrend ? (
@@ -490,31 +616,12 @@ export default function AnalyticsUsage({ loaderData }: Route.ComponentProps) {
         ) : (
           <TimeSeriesChart data={timeSeries} metric={metric} />
         )}
-        <div className="mt-3 border-t border-glass-border pt-3">
-          <Tabs
-            tabs={DIMENSIONS.map((d) => DIMENSION_LABEL[d])}
-            active={DIMENSION_LABEL[dimension]}
-            onChange={(label) => {
-              const d = DIMENSIONS.find((x) => DIMENSION_LABEL[x] === label)!;
-              setDimension(d);
-            }}
-          />
-        </div>
       </Card>
 
       <Card className="mb-6">
         <CardHeader className="flex-wrap">
-          <CardTitle>Top {breakdown.length || 10} — {DIMENSION_LABEL[dimension]}</CardTitle>
+          <CardTitle>Top {breakdown.length || 10} · {DIMENSION_LABEL[dimension]}</CardTitle>
           <div className="flex flex-wrap items-center gap-2">
-            <Tabs
-              tabs={METRICS.map((m) => (m === "tokens" ? "Tokens" : "Cost"))}
-              active={metric === "tokens" ? "Tokens" : "Cost"}
-              onChange={(label) => {
-                const m = label === "Cost" ? "cost" : "tokens";
-                setMetric(m);
-              }}
-            />
-            <span className="text-xs text-muted-foreground">·</span>
             <Tabs
               tabs={DIMENSIONS.map((d) => DIMENSION_LABEL[d])}
               active={DIMENSION_LABEL[dimension]}
@@ -538,7 +645,7 @@ export default function AnalyticsUsage({ loaderData }: Route.ComponentProps) {
               <button
                 type="button"
                 onClick={() => setSelected(null)}
-                className="flex items-center gap-1 rounded-full bg-white/5 px-2 py-0.5 text-xs text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+                className="flex cursor-pointer items-center gap-1 rounded-full border border-border bg-surface-2 px-2 py-0.5 text-xs text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
               >
                 <X size={12} /> Clear
               </button>
@@ -549,37 +656,46 @@ export default function AnalyticsUsage({ loaderData }: Route.ComponentProps) {
         </p>
       </Card>
 
-      <Card className="mb-6">
-        <CardHeader className="flex-wrap">
-          <CardTitle>Model details</CardTitle>
-          <label className="flex items-center gap-1.5 rounded-lg border border-glass-border bg-white/[0.02] px-2 py-1.5 text-sm focus-within:ring-2 focus-within:ring-ring/50">
-            <Search size={14} className="shrink-0 text-muted-foreground" />
-            <span className="sr-only">Filter models</span>
-            <input
-              value={modelQuery}
-              onChange={(e) => setModelQuery(e.target.value)}
-              placeholder="Filter models…"
-              className="w-32 bg-transparent text-sm text-foreground placeholder:text-muted-foreground focus:outline-none sm:w-44"
-            />
-            {modelQuery ? (
-              <button
-                type="button"
-                onClick={() => setModelQuery("")}
-                aria-label="Clear model filter"
-                className="text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
-              >
-                <X size={14} />
-              </button>
-            ) : null}
-          </label>
-        </CardHeader>
-        {selected && dimension === "apikey" ? (
-          <p className="mb-3 text-xs text-muted-foreground">
-            Breakdown filters apply to Model / Provider dimensions; showing all models.
-          </p>
-        ) : null}
-        <ModelTable models={filteredModels} drill={drill} onDrill={setDrill} />
-      </Card>
+      <div ref={modelCardRef}>
+        <Card padded={false} className="mb-6 overflow-hidden">
+          <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3.5 sm:px-5">
+            <div>
+              <h2 className="text-sm font-semibold text-foreground">
+                Model Performance ({filteredModels.length})
+              </h2>
+              <p className="text-xs text-muted-foreground">
+                Click any column header to sort, or expand a row to inspect per-request metrics.
+              </p>
+            </div>
+            <label className="flex h-9 items-center gap-1.5 rounded-lg border border-border bg-surface px-2.5 text-sm transition-colors hover:border-border-strong focus-within:border-primary focus-within:ring-2 focus-within:ring-ring/25">
+              <Search size={14} className="shrink-0 text-muted-foreground" aria-hidden="true" />
+              <span className="sr-only">Filter models</span>
+              <input
+                value={modelQuery}
+                onChange={(e) => setModelQuery(e.target.value)}
+                placeholder="Filter models..."
+                className="w-36 bg-transparent text-sm text-foreground placeholder:text-muted-foreground focus:outline-none sm:w-52"
+              />
+              {modelQuery ? (
+                <button
+                  type="button"
+                  onClick={() => setModelQuery("")}
+                  aria-label="Clear model filter"
+                  className="text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+                >
+                  <X size={14} aria-hidden="true" />
+                </button>
+              ) : null}
+            </label>
+          </div>
+          {selected && dimension === "apikey" ? (
+            <p className="px-4 pb-3 text-xs text-muted-foreground sm:px-5">
+              Breakdown filters apply to Model / Provider dimensions; showing all models.
+            </p>
+          ) : null}
+          <ModelTable models={filteredModels} drill={drill} onDrill={setDrill} />
+        </Card>
+      </div>
 
       <Card>
         <CardHeader className="flex-wrap">
@@ -588,7 +704,7 @@ export default function AnalyticsUsage({ loaderData }: Route.ComponentProps) {
         <div className="space-y-5">
           <div>
             <div
-              className="flex h-4 w-full overflow-hidden rounded-full bg-white/5"
+              className="flex h-4 w-full overflow-hidden rounded-full bg-track"
               role="img"
               aria-label={`${errors.success} success, ${errors.error} errors`}
             >
@@ -620,11 +736,13 @@ export default function AnalyticsUsage({ loaderData }: Route.ComponentProps) {
                     <button
                       type="button"
                       onClick={() => {
+                        setSelected(null);
                         setModelQuery(m.model);
                         setDrill(m.model);
+                        modelCardRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
                       }}
-                      title={`${m.model}: ${m.errors} failures (${m.errorRate}%) — click to inspect`}
-                      className="flex w-full items-center gap-2 rounded-lg px-1 py-0.5 text-left text-sm transition hover:bg-glass-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+                      title={`${m.model}: ${m.errors} failures (${m.errorRate}%), click to inspect`}
+                      className="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2 py-1 text-left text-sm transition hover:bg-glass-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
                     >
                       <code className="flex-1 truncate text-xs text-muted-foreground">
                         {m.model}
@@ -651,7 +769,7 @@ export default function AnalyticsUsage({ loaderData }: Route.ComponentProps) {
                     <code title={e.message} className="flex-1 truncate text-xs text-muted-foreground">
                       {shortError(e.message)}
                     </code>
-                    <span className="shrink-0 rounded-full bg-white/5 px-2 py-0.5 text-xs tabular-nums text-muted-foreground">
+                    <span className="shrink-0 rounded-full border border-border bg-surface-2 px-2 py-0.5 text-xs tabular-nums text-muted-foreground">
                       {e.count}
                     </span>
                   </li>
@@ -662,10 +780,10 @@ export default function AnalyticsUsage({ loaderData }: Route.ComponentProps) {
             <p className="text-sm text-muted-foreground">No errors in this period</p>
           )}
 
-          <div className="border-t border-glass-border pt-3 text-xs text-muted-foreground">
+          <div className="border-t border-border pt-3 text-xs text-muted-foreground">
             Avg cost / request: <span className="tabular-nums">{fmtCostPrecise(performance.costPerReq)}</span> · Avg
             tokens / request: <span className="tabular-nums">{fmtTokens(Math.round(performance.tokensPerReq))}</span> · Latency
-            p50 / p95: <span className="tabular-nums">{latency.p50 > 0 ? `${latency.p50}ms` : "—"} / {latency.p95 > 0 ? `${latency.p95}ms` : "—"}</span>
+            p50 / p95: <span className="tabular-nums">{latency.p50 > 0 ? `${latency.p50}ms` : "-"} / {latency.p95 > 0 ? `${latency.p95}ms` : "-"}</span>
           </div>
         </div>
       </Card>

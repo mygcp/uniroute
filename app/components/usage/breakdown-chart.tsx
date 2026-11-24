@@ -30,7 +30,7 @@ export function BreakdownChart({ data, metric }: Props) {
         {data.map((d, i) => {
           const pctW = Math.round((d.value / max) * 100);
           const fill =
-            d.name === "Other" ? "bg-[#6b7280]" : i % 2 === 0 ? "bg-primary" : "bg-primary/70";
+            d.name === "Other" ? "bg-muted-foreground/60" : i % 2 === 0 ? "bg-primary" : "bg-primary/70";
           return (
             <li key={`${d.name}-${i}`} className="flex flex-col gap-1 md:flex-row md:items-center md:gap-3">
               <div className="flex items-center justify-between gap-2 md:w-40 md:shrink-0">
@@ -42,7 +42,7 @@ export function BreakdownChart({ data, metric }: Props) {
                 </span>
               </div>
               <div className="flex flex-1 items-center gap-2">
-                <div className="h-4 flex-1 overflow-hidden rounded-sm bg-white/5">
+                <div className="h-4 flex-1 overflow-hidden rounded-sm bg-track">
                   <div
                     className={`bar-grow-x h-full ${fill}`}
                     style={{ width: `${pctW}%`, animationDelay: `${i * 25}ms` }}

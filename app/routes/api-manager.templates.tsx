@@ -2,6 +2,7 @@ import { Form } from "react-router";
 import { useEffect, useRef } from "react";
 import type { Route } from "./+types/api-manager.templates";
 import { LayoutTemplate, Trash2 } from "lucide-react";
+import { requireSession } from "../.server/auth";
 import {
 	listTemplates,
 	createTemplate,
@@ -16,11 +17,17 @@ import { Table, THead, THeadCell, TRow, TCell } from "../components/ui/table";
 import { useConfirm } from "../components/ui/confirm-dialog";
 import { useToast } from "../components/ui/toast";
 
+export function meta() {
+	return [{ title: "API Key Templates | UniRoute" }];
+}
+
 export function loader() {
 	return { templates: listTemplates() };
 }
 
 export async function action({ request }: Route.ActionArgs) {
+	const denied = requireSession(request);
+	if (denied) return denied;
 	const form = await request.formData();
 	const intent = String(form.get("intent"));
 	if (intent === "delete") {
@@ -28,41 +35,55 @@ export async function action({ request }: Route.ActionArgs) {
 		return { notice: { ok: true, message: "Template deleted" } };
 	}
 	if (intent === "create") {
-		const parseList = (name: string): string[] | undefined => {
-			const raw = String(form.get(name) ?? "").trim();
+		const name = String(form.get("name") ?? "").trim();
+		if (!name) {
+			return { notice: { ok: false, message: "Template name is required." } };
+		}
+		const parseList = (field: string): string[] | undefined => {
+			const raw = String(form.get(field) ?? "").trim();
 			const items = raw
 				.split(/[\n,]+/)
 				.map((s) => s.trim())
 				.filter(Boolean);
 			return items.length > 0 ? items : undefined;
 		};
-		const num = (name: string): number | undefined => {
-			const raw = String(form.get(name) ?? "").trim();
+		const num = (field: string): number | undefined => {
+			const raw = String(form.get(field) ?? "").trim();
 			if (!raw) return undefined;
 			const n = Number(raw);
 			return Number.isFinite(n) ? n : undefined;
 		};
-		createTemplate(
-			String(form.get("name") ?? "").trim(),
-			String(form.get("description") ?? "").trim() || null,
-			{
-				name: String(form.get("name") ?? "").trim(),
-				allowedModels: parseList("allowed_models"),
-				budget: { monthly: num("budget_monthly") },
-				quota: {
-					rpm: num("quota_rpm"),
-					tpm: num("quota_tpm"),
-					concurrent_requests: num("quota_concurrent"),
+		try {
+			createTemplate(
+				name,
+				String(form.get("description") ?? "").trim() || null,
+				{
+					name,
+					allowedModels: parseList("allowed_models"),
+					budget: { monthly: num("budget_monthly") },
+					quota: {
+						rpm: num("quota_rpm"),
+						tpm: num("quota_tpm"),
+						concurrent_requests: num("quota_concurrent"),
+					},
+					scopes: [],
 				},
-				scopes: [],
-			},
-		);
-		return {
-			notice: {
-				ok: true,
-				message: `Template "${String(form.get("name") ?? "").trim()}" created`,
-			},
-		};
+			);
+			return {
+				notice: {
+					ok: true,
+					message: `Template "${name}" created`,
+				},
+			};
+		} catch (err) {
+			const msg =
+				err instanceof Error && /UNIQUE/i.test(err.message)
+					? `A template named "${name}" already exists.`
+					: err instanceof Error
+						? err.message
+						: "Failed to create template.";
+			return { notice: { ok: false, message: msg } };
+		}
 	}
 	return null;
 }
@@ -76,10 +97,12 @@ export default function Templates({ loaderData, actionData }: Route.ComponentPro
 	const lastNoticeRef = useRef<{ ok: boolean; message: string } | undefined>(
 		undefined,
 	);
+	const formRef = useRef<HTMLFormElement>(null);
 	useEffect(() => {
 		if (notice === lastNoticeRef.current) return;
 		lastNoticeRef.current = notice;
 		if (notice) {
+			if (notice.ok) formRef.current?.reset();
 			toast({
 				title: notice.ok ? "Done" : "Action failed",
 				description: notice.message,
@@ -94,10 +117,12 @@ export default function Templates({ loaderData, actionData }: Route.ComponentPro
 				title="API Key Templates"
 				icon={<LayoutTemplate size={20} />}
 				subtitle="Reusable configurations for creating API keys."
+				backTo="/api-manager"
+				backLabel="Back to API Keys"
 			/>
 
 			<Card className="mb-6">
-				<Form method="post" className="space-y-3">
+				<Form ref={formRef} method="post" className="space-y-3">
 					<input type="hidden" name="intent" value="create" />
 					<div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
 						<div>
@@ -183,13 +208,13 @@ export default function Templates({ loaderData, actionData }: Route.ComponentPro
 				</Card>
 			) : (
 				<Card padded={false}>
-					<Table>
+					<Table className="min-w-[540px]">
 						<THead>
 							<tr>
 								<THeadCell>Name</THeadCell>
 								<THeadCell>Description</THeadCell>
 								<THeadCell>Models</THeadCell>
-								<THeadCell className="pr-0">Actions</THeadCell>
+								<THeadCell>Actions</THeadCell>
 							</tr>
 						</THead>
 						<tbody>
@@ -199,12 +224,12 @@ export default function Templates({ loaderData, actionData }: Route.ComponentPro
 										{t.name}
 									</TCell>
 									<TCell className="text-muted-foreground">
-										{t.description ?? "—"}
+										{t.description ?? "-"}
 									</TCell>
-									<TCell className="text-xs text-muted-foreground">
+									<TCell className="max-w-xs break-words text-xs text-muted-foreground">
 										{t.config.allowedModels?.join(", ") || "all"}
 									</TCell>
-									<TCell className="pr-0">
+									<TCell>
 										<DeleteTemplateButton id={t.id} name={t.name} />
 									</TCell>
 								</TRow>

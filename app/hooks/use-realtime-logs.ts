@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 export type InflightRequest = {
   reqId: string;
@@ -142,14 +142,14 @@ export function useRealtimeLogs(
   }, []);
 
   /** Remove a log locally (after a successful server delete). */
-  function remove(id: number, type: "request" | "proxy") {
+  const remove = useCallback((id: number, type: "request" | "proxy") => {
     setLogs((prev) => prev.filter((l) => !(l.id === id && l.type === type)));
-  }
+  }, []);
 
   /** Replace the whole list locally (after clearing). */
-  function reset(next: LogEvent[] = []) {
+  const reset = useCallback((next: LogEvent[] = []) => {
     setLogs(next);
-  }
+  }, []);
 
   return {
     logs,

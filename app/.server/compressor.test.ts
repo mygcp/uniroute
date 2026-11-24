@@ -11,8 +11,10 @@ beforeAll(async () => {
 
 import {
   compress,
+  compressCanonicalRequest,
   getSettings,
   isEnabled,
+  saveSettings,
   testCompression,
 } from "./compressor";
 import { query } from "./db";
@@ -105,4 +107,32 @@ describe("testCompression", () => {
     expect(r.output).toBe("contoh prompt");
     expect(r.settings.rtk_enabled).toBe(true);
   }, 10000);
+});
+
+describe("compressCanonicalRequest (global pipeline)", () => {
+  test("injects Caveman output voice globally without duplicating", async () => {
+    saveSettings({
+      rtk_enabled: false,
+      caveman_enabled: false,
+      caveman_voice: "caveman",
+    });
+    const req = {
+      model: "gpt-4o",
+      stream: false,
+      extra: {},
+      messages: [
+        { role: "system" as const, content: "You are a helpful coder." },
+        { role: "user" as const, content: "Why does React rerender?" },
+      ],
+    };
+    const r1 = await compressCanonicalRequest(req);
+    expect(r1.voiceInjected).toBe(true);
+    expect(String(req.messages[0]!.content)).toContain("[Caveman Mode]");
+
+    // Calling again should not duplicate the directive
+    const r2 = await compressCanonicalRequest(req);
+    expect(r2.voiceInjected).toBe(false);
+
+    saveSettings({ caveman_voice: "off" });
+  });
 });

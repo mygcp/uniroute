@@ -1,7 +1,12 @@
 import { Form } from "react-router";
 import { useEffect, useRef, useState } from "react";
 import type { Route } from "./+types/api-manager.groups";
-import { Users, Trash2, Plus } from "lucide-react";
+import { Pencil, Users, Trash2, Plus, X } from "lucide-react";
+
+export function meta() {
+	return [{ title: "API Key Groups | UniRoute" }];
+}
+import { requireSession } from "../.server/auth";
 import {
 	listGroups,
 	createGroup,
@@ -37,6 +42,8 @@ export function loader() {
 }
 
 export async function action({ request }: Route.ActionArgs) {
+	const denied = requireSession(request);
+	if (denied) return denied;
 	const form = await request.formData();
 	const intent = String(form.get("intent"));
 	const num = (name: string): number | undefined => {
@@ -48,19 +55,32 @@ export async function action({ request }: Route.ActionArgs) {
 
 	if (intent === "create") {
 		const name = String(form.get("name") ?? "").trim();
-		createGroup(
-			name,
-			String(form.get("description") ?? "").trim() || null,
-			{
-				monthly_budget: num("budget"),
-				tokens_per_month: num("tokens"),
-			},
-			String(form.get("member_ids") ?? "")
-				.split(",")
-				.map((s) => Number(s))
-				.filter((n) => n > 0),
-		);
-		return { notice: { ok: true, message: `Group "${name}" created` } };
+		if (!name) {
+			return { notice: { ok: false, message: "Group name is required." } };
+		}
+		try {
+			createGroup(
+				name,
+				String(form.get("description") ?? "").trim() || null,
+				{
+					monthly_budget: num("budget"),
+					tokens_per_month: num("tokens"),
+				},
+				String(form.get("member_ids") ?? "")
+					.split(",")
+					.map((s) => Number(s))
+					.filter((n) => n > 0),
+			);
+			return { notice: { ok: true, message: `Group "${name}" created` } };
+		} catch (err) {
+			const msg =
+				err instanceof Error && /UNIQUE/i.test(err.message)
+					? `A group named "${name}" already exists.`
+					: err instanceof Error
+						? err.message
+						: "Failed to create group.";
+			return { notice: { ok: false, message: msg } };
+		}
 	}
 	if (intent === "delete") {
 		deleteGroup(Number(form.get("id")));
@@ -90,6 +110,7 @@ export async function action({ request }: Route.ActionArgs) {
 export default function Groups({ loaderData, actionData }: Route.ComponentProps) {
 	const { keys, groups } = loaderData;
 	const [creating, setCreating] = useState(false);
+	const [editingGroupId, setEditingGroupId] = useState<number | null>(null);
 	const notice = (
 		actionData as { notice?: { ok: boolean; message: string } } | undefined
 	)?.notice;
@@ -101,6 +122,10 @@ export default function Groups({ loaderData, actionData }: Route.ComponentProps)
 		if (notice === lastNoticeRef.current) return;
 		lastNoticeRef.current = notice;
 		if (notice) {
+			if (notice.ok) {
+				setCreating(false);
+				setEditingGroupId(null);
+			}
 			toast({
 				title: notice.ok ? "Done" : "Action failed",
 				description: notice.message,
@@ -116,9 +141,12 @@ export default function Groups({ loaderData, actionData }: Route.ComponentProps)
 				title="API Key Groups / Teams"
 				icon={<Users size={20} />}
 				subtitle="Group keys to share budgets and quotas."
+				backTo="/api-manager"
+				backLabel="Back to API Keys"
 				actions={
-					<Button type="button" onClick={() => setCreating((v) => !v)}>
-						<Plus size={16} /> New Group
+					<Button type="button" variant={creating ? "outline" : "primary"} onClick={() => setCreating((v) => !v)}>
+						{creating ? <X size={16} /> : <Plus size={16} />}
+						{creating ? "Close" : "New Group"}
 					</Button>
 				}
 			/>
@@ -218,8 +246,53 @@ export default function Groups({ loaderData, actionData }: Route.ComponentProps)
 											</p>
 										) : null}
 									</div>
-									<DeleteGroupButton id={group.id} />
+									<div className="flex items-center gap-1.5">
+										<Button
+											type="button"
+											variant="outline"
+											size="sm"
+											onClick={() =>
+												setEditingGroupId(editingGroupId === group.id ? null : group.id)
+											}
+										>
+											{editingGroupId === group.id ? <X size={13} /> : <Pencil size={13} />}
+											{editingGroupId === group.id ? "Close" : "Edit quota"}
+										</Button>
+										<DeleteGroupButton id={group.id} />
+									</div>
 								</div>
+
+								{editingGroupId === group.id ? (
+									<Form
+										method="post"
+										className="mb-4 grid grid-cols-1 items-end gap-3 rounded-xl border border-primary/25 bg-primary/5 p-3 sm:grid-cols-3"
+									>
+										<input type="hidden" name="intent" value="update" />
+										<input type="hidden" name="id" value={group.id} />
+										<div>
+											<Label htmlFor={`edit-budget-${group.id}`}>Shared budget ($/mo)</Label>
+											<Input
+												id={`edit-budget-${group.id}`}
+												name="budget"
+												type="number"
+												step="any"
+												defaultValue={quota?.monthly_budget ?? ""}
+											/>
+										</div>
+										<div>
+											<Label htmlFor={`edit-tokens-${group.id}`}>Shared tokens/mo</Label>
+											<Input
+												id={`edit-tokens-${group.id}`}
+												name="tokens"
+												type="number"
+												defaultValue={quota?.tokens_per_month ?? ""}
+											/>
+										</div>
+										<Button type="submit" size="md">
+											Save quota
+										</Button>
+									</Form>
+								) : null}
 
 								<div className="mb-3 grid grid-cols-1 gap-3 text-sm sm:grid-cols-2">
 									<QuotaBox
@@ -334,6 +407,11 @@ function MemberSelect({
 	defaultValue?: number[];
 }) {
 	const [selected, setSelected] = useState<Set<number>>(new Set(defaultValue));
+	const defaultKey = defaultValue.join(",");
+	useEffect(() => {
+		setSelected(new Set(defaultValue));
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [defaultKey]);
 	const toggle = (id: number) =>
 		setSelected((prev) => {
 			const next = new Set(prev);
@@ -343,21 +421,25 @@ function MemberSelect({
 		});
 	return (
 		<div>
-			<div className="flex flex-wrap gap-2">
-				{keys.map((k) => (
-					<label
-						key={k.id}
-						className="flex items-center gap-1 rounded-full border border-border bg-surface-2 px-2 py-1 text-xs"
-					>
-						<Checkbox
-							checked={selected.has(k.id)}
-							onChange={() => toggle(k.id)}
-							aria-label={`Toggle ${k.name}`}
-						/>
-						{k.name} <span className="text-muted-foreground">{k.masked}</span>
-					</label>
-				))}
-			</div>
+			{keys.length === 0 ? (
+				<p className="text-xs text-muted-foreground">No client API keys available yet.</p>
+			) : (
+				<div className="flex flex-wrap gap-2">
+					{keys.map((k) => (
+						<label
+							key={k.id}
+							className="flex cursor-pointer items-center gap-1.5 rounded-full border border-border bg-surface-2 px-2.5 py-1 text-xs"
+						>
+							<Checkbox
+								checked={selected.has(k.id)}
+								onChange={() => toggle(k.id)}
+								aria-label={`Toggle ${k.name}`}
+							/>
+							{k.name} <span className="font-mono text-muted-foreground">{k.masked}</span>
+						</label>
+					))}
+				</div>
+			)}
 			<input type="hidden" name={name} value={Array.from(selected).join(",")} />
 		</div>
 	);

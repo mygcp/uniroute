@@ -1,7 +1,10 @@
 import type { Route } from "./+types/api-manager.export";
+import { requireSession } from "../.server/auth";
 import { applyBulk, exportKeysCsv } from "../.server/key-bulk";
 
 export function loader({ request }: Route.LoaderArgs) {
+	const denied = requireSession(request);
+	if (denied) return denied;
 	const url = new URL(request.url);
 	const status = url.searchParams.get("status") ?? "any";
 	const createdBefore = url.searchParams.get("created_before");

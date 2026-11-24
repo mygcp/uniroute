@@ -10,6 +10,8 @@ bun run test        # all unit tests
 bun run typecheck   # react-router typegen + tsc
 ```
 
+Note: the dev server compiles on demand, so the first request (login, endpoint) can take a few seconds. For representative performance numbers use `bun run build && bun run start`.
+
 ## Testing
 
 Unit tests use `bun:test` and live next to the modules they cover
@@ -53,7 +55,20 @@ app/
   components/        # UI (ui/, usage/, chart)
   hooks/             # use-realtime-logs, use-streaming, …
   lib/               # client-safe helpers (format, markdown)
-  .server/           # server modules (db, proxy-handler, mcp-server.ts, …)
+  registry/          # CLIENT provider templates (URL/auth hints, static model lists)
+  .server/           # server-only modules
+    registry.ts      # SERVER in-memory model->providers cache (hot path)
+                     # Do NOT confuse with app/registry above.
 docs/                # this documentation
 scripts/bench/       # gateway streaming benchmark toolkit
 ```
+
+### Registry cache (do not break)
+
+- `app/registry/*` = static provider templates used for URL/auth hints.
+- `app/.server/registry.ts` = runtime cache of active providers/models from SQLite.
+- Every mutation of providers/models MUST call `reload()` from `.server/registry`
+  (service layer does it automatically; raw SQL in routes/MCP must do it manually).
+- `handleProxy` never reloads per request - regression locked by
+  `provider-models.test.ts`.
+

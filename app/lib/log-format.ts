@@ -7,8 +7,11 @@ export type PriceMap = Record<string, PricePair>;
 export type KeyLabelMap = Record<string, string>;
 
 export function fmtTs(ts: number): string {
+  if (!Number.isFinite(ts) || ts <= 0) return "—";
   const ms = ts < 1e12 ? ts * 1000 : ts;
-  return new Date(ms).toLocaleString();
+  const d = new Date(ms);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
 /**

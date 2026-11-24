@@ -1,4 +1,4 @@
-import { useDeferredValue, useEffect, useMemo, useRef } from "react";
+import { useDeferredValue, useEffect, useMemo, useState } from "react";
 import { Brain, Spinner } from "./ui/feedback";
 import { Markdown } from "./markdown";
 import { estimateTps, formatClock, formatSecs } from "../lib/format";
@@ -8,21 +8,13 @@ type Props = {
   streaming: boolean;
   done: boolean;
   error: string;
-  /** Progressive thinking/reasoning output (model yang berpikir). */
   thinking?: string;
-  /** Waktu berjalan (ms) — dipakai untuk tok/s live. */
   latencyMs?: number | null;
-  /** Usage resmi dari chunk akhir (bila provider mengirim). */
   usage?: {
     completion_tokens?: number;
   } | null;
 };
 
-/**
- * Bubble asisten: thought block (collapsible) + markdown + caret streaming
- * + meter tok/s yang SELALU tampil (estimasi bila tanpa usage resmi) +
- * durasi & jam selesai (24h).
- */
 export function StreamingResponse({
   content,
   streaming,
@@ -32,13 +24,16 @@ export function StreamingResponse({
   latencyMs,
   usage,
 }: Props) {
-  const endRef = useRef<number | null>(null);
+  const [endedAt, setEndedAt] = useState<number | null>(null);
+
   useEffect(() => {
-    if (streaming) endRef.current = null;
-    else if (done && endRef.current == null) endRef.current = Date.now();
+    if (streaming) {
+      setEndedAt(null);
+    } else if (done) {
+      setEndedAt((prev) => prev ?? Date.now());
+    }
   }, [streaming, done]);
 
-  // useMemo: meter O(1) ini tidak boleh menambah biaya render per chunk.
   const meter = useMemo(() => {
     const secs = formatSecs(latencyMs);
     let tps: number | null = null;
@@ -53,13 +48,9 @@ export function StreamingResponse({
   }, [content.length, latencyMs, usage?.completion_tokens]);
   const { secs, tps, tpsEstimated } = meter;
 
-  const clock = !streaming && done ? formatClock(endRef.current) : null;
+  const clock = !streaming && done ? formatClock(endedAt) : null;
   const thinkingOpen = streaming && content === "" && thinking !== "";
   const showMeter = !error && (streaming || done);
-  // Markdown full re-parse + highlight tiap frame = O(n²) sepanjang stream
-  // (~2.5ms/frame untuk 1.8k char, linear terhadap panjang). Tunda render
-  // markdown saat streaming agar React me-render paling banyak beberapa
-  // kali per detik dengan nilai terbaru — caret + meter tetap live.
   const deferredContent = useDeferredValue(content);
 
   return (
@@ -73,13 +64,13 @@ export function StreamingResponse({
           {thinking !== "" ? (
             <details
               open={thinkingOpen || undefined}
-              className="mb-2 rounded-lg border border-info/25 bg-info/5 px-2.5 py-1.5"
+              className="mb-2 rounded-lg border border-info/25 bg-info/8 px-2.5 py-1.5"
             >
               <summary className="flex cursor-pointer items-center gap-1.5 text-xs font-medium text-info">
                 <Brain size={12} />
                 {streaming && content === "" ? "Thinking…" : "Thought process"}
               </summary>
-              <div className="mt-1.5 max-h-48 overflow-y-auto text-xs leading-relaxed whitespace-pre-wrap break-words text-muted-foreground">
+              <div className="mt-1.5 max-h-48 overflow-y-auto whitespace-pre-wrap break-words text-xs leading-relaxed text-muted-foreground">
                 {thinking}
               </div>
             </details>
@@ -94,7 +85,7 @@ export function StreamingResponse({
         </>
       )}
       {showMeter && (
-        <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs tabular-nums text-muted-foreground">
+        <p className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs tabular-nums text-muted-foreground">
           {streaming && content === "" && thinking === "" ? (
             <span className="flex items-center gap-1.5">
               <Spinner size={12} /> thinking…

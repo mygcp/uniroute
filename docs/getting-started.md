@@ -108,5 +108,6 @@ or provider ([Proxy Engine](proxy-engine.md)).
   transport/proxy/endpoint/TLS appear in the detail panel.
 - **Usage** (`/analytics/usage`) — input/output/cache tokens plus cost estimates.
 
-Next steps: set up outbound proxies in [Proxy Engine](proxy-engine.md),
+Next steps: cut token usage with [Compression](compression.md), chain models
+with [Model Combos](combos.md), set up outbound proxies in [Proxy Engine](proxy-engine.md),
 add routing rules, then connect your coding agent via [MCP](ai-agents.md).

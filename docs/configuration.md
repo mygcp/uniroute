@@ -30,6 +30,16 @@ All configuration is done through environment variables (`.env` file).
 | `UNIROUTE_MCP_TOKEN` | Optional bearer token for the MCP HTTP transport (`bun app/.server/mcp-server.ts --http`). |
 | `UNIROUTE_MCP_PORT` | MCP HTTP port when `--http` is given without a value (default `3007`). |
 
+## Compression tools
+
+| Variable | Purpose |
+| --- | --- |
+| `UNIROUTE_TOOLS_DIR` | Where RTK and Caveman Engine binaries are downloaded (default `~/.uniroute/bin`). |
+| `UNIROUTE_RTK_VERSION` / `UNIROUTE_CAVEMAN_VERSION` | Pin a release instead of the latest. |
+| `UNIROUTE_RTK_DOWNLOAD_URL` / `UNIROUTE_CAVEMAN_DOWNLOAD_URL` | Download from a mirror. |
+
+See [Compression](compression.md).
+
 ## Harness config backups
 
 Every harness config write automatically creates a copy under

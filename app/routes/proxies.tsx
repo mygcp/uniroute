@@ -1,7 +1,9 @@
-import { Form, Link, redirect, useFetcher, useNavigation } from "react-router";
+import { Form, Link, redirect, useFetcher, useNavigation, useOutlet, useSearchParams, useSubmit } from "react-router";
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 import type { Route } from "./+types/proxies";
+import { requireSession } from "../.server/auth";
 import { query } from "../.server/db";
+import { fmtTs } from "../lib/log-format";
 import {
 	listProxies,
 	listPools,
@@ -38,7 +40,7 @@ import { useConfirm } from "../components/ui/confirm-dialog";
 import { useToast } from "../components/ui/toast";
 
 export function meta() {
-	return [{ title: "Proxies — UniRoute" }];
+	return [{ title: "Proxies | UniRoute" }];
 }
 
 //---------------------------------------------------------------------------
@@ -263,8 +265,11 @@ async function testRows(
 }
 
 export async function action({ request }: Route.ActionArgs) {
+	const denied = requireSession(request);
+	if (denied) return denied;
 	const form = await request.formData();
 	const intent = String(form.get("intent"));
+	const tabParam = new URL(request.url).searchParams.get("tab");
 
 	if (intent === "toggle") {
 		const id = Number(form.get("id"));
@@ -275,12 +280,12 @@ export async function action({ request }: Route.ActionArgs) {
 
 	if (intent === "delete") {
 		deleteProxy(Number(form.get("id")));
-		return redirect("/proxies");
+		return redirect(tabParam ? `/proxies?tab=${encodeURIComponent(tabParam)}` : "/proxies");
 	}
 
 	if (intent === "delete-many") {
 		for (const id of form.getAll("ids").map(Number)) deleteProxy(id);
-		return redirect("/proxies");
+		return redirect(tabParam ? `/proxies?tab=${encodeURIComponent(tabParam)}` : "/proxies");
 	}
 
 	// Hapus semua proxy yang terakhir kali dites gagal (last_error != NULL).
@@ -448,14 +453,14 @@ export async function action({ request }: Route.ActionArgs) {
 
 	if (intent === "create-pool") {
 		createPool({
-			name: String(form.get("name") || ""),
+			name: String(form.get("name") || "").trim(),
 			proxy_ids: [],
 			strategy: String(form.get("strategy")) as
 				| "round_robin"
 				| "priority"
 				| "random",
 		});
-		return redirect("/proxies");
+		return redirect("/proxies?tab=pools");
 	}
 
 	if (intent === "update-pool") {
@@ -466,27 +471,31 @@ export async function action({ request }: Route.ActionArgs) {
 				| "priority"
 				| "random",
 		});
-		return redirect("/proxies");
+		return redirect("/proxies?tab=pools");
 	}
 
 	if (intent === "delete-pool") {
 		deletePool(Number(form.get("id")));
-		return redirect("/proxies");
+		return redirect("/proxies?tab=pools");
 	}
 
 	if (intent === "set-global") {
 		const raw = String(form.get("pool_id") || "");
 		setGlobalProxyPool(raw ? Number(raw) : null);
-		return redirect("/proxies");
+		return redirect("/proxies?tab=pools");
 	}
 
 	if (intent === "assign") {
+		const targetType =
+			String(form.get("target_type")) === "provider" ? "provider" : "client_key";
+		const targetId = String(form.get("target_id"));
+		unassignPool(targetType, targetId);
 		assignPool({
 			proxyPoolId: Number(form.get("pool_id")),
-			targetType: String(form.get("target_type")) === "provider" ? "provider" : "client_key",
-			targetId: String(form.get("target_id")),
+			targetType,
+			targetId,
 		});
-		return redirect("/proxies");
+		return redirect("/proxies?tab=pools");
 	}
 
 	if (intent === "unassign") {
@@ -494,7 +503,7 @@ export async function action({ request }: Route.ActionArgs) {
 			String(form.get("target_type")) === "provider" ? "provider" : "client_key",
 			String(form.get("target_id")),
 		);
-		return redirect("/proxies");
+		return redirect("/proxies?tab=pools");
 	}
 
 	if (intent === "import") {
@@ -574,6 +583,7 @@ const ProxyListRow = memo(function ProxyListRow({
 	}>();
 	const testing = rowFetcher.state !== "idle";
 	const single = rowFetcher.data?.test;
+	const submit = useSubmit();
 	const result =
 		single && single.id === proxy.id
 			? { ok: single.ok, latencyMs: single.latencyMs }
@@ -581,35 +591,33 @@ const ProxyListRow = memo(function ProxyListRow({
 	const health = healthOf(proxy);
 	return (
 		<TRow key={proxy.id}>
-			<TCell className="w-8 px-4 py-3">
+			<TCell className="w-8 px-3 py-2.5">
 				<Checkbox
 					checked={selected}
 					onChange={(e) => onToggle(proxy.id, e.target.checked)}
 					aria-label={`Select proxy ${proxy.name}`}
 				/>
 			</TCell>
-			<TCell className="px-4 py-3 font-medium text-foreground">
-				<Link to={`/proxies/${proxy.id}`} prefetch="intent" className="hover:text-primary">
+			<TCell className="max-w-[140px] truncate px-2.5 py-2.5 font-medium text-foreground">
+				<Link to={`/proxies/${proxy.id}`} prefetch="intent" className="hover:text-primary" title={proxy.name}>
 					{proxy.name}
 				</Link>
 			</TCell>
-			<TCell className="px-4 py-3">
+			<TCell className="whitespace-nowrap px-2.5 py-2.5">
 				<Badge tone="neutral" style="subtle">
 					{proxy.type}
 				</Badge>
 			</TCell>
-			<TCell className="px-4 py-3 font-mono text-xs text-muted-foreground">
+			<TCell className="whitespace-nowrap px-2.5 py-2.5 font-mono text-xs text-muted-foreground">
 				{proxy.host}:{proxy.port}
 			</TCell>
-			<TCell className="px-4 py-3 text-muted-foreground">
-				{proxy.username ? proxy.username : "—"}
+			<TCell className="max-w-[90px] truncate px-2.5 py-2.5 text-muted-foreground">
+				{proxy.username ? proxy.username : "-"}
 			</TCell>
-			<TCell className="px-4 py-3 text-muted-foreground">
-				{proxy.last_used_at
-					? new Date(proxy.last_used_at).toLocaleString()
-					: "never"}
+			<TCell className="whitespace-nowrap px-2.5 py-2.5 text-xs text-muted-foreground">
+				{proxy.last_used_at ? fmtTs(proxy.last_used_at) : "Never"}
 			</TCell>
-			<TCell className="px-4 py-3">
+			<TCell className="whitespace-nowrap px-2.5 py-2.5">
 				<Badge
 					tone={proxy.is_active ? "success" : "danger"}
 					style="subtle"
@@ -617,7 +625,7 @@ const ProxyListRow = memo(function ProxyListRow({
 					{proxy.is_active ? "Active" : "Inactive"}
 				</Badge>
 			</TCell>
-			<TCell className="px-4 py-3">
+			<TCell className="whitespace-nowrap px-2.5 py-2.5">
 				<span
 					title={
 						health === "error"
@@ -643,11 +651,11 @@ const ProxyListRow = memo(function ProxyListRow({
 					</Badge>
 				</span>
 			</TCell>
-			<TCell className="px-4 py-3">
+			<TCell className="whitespace-nowrap px-3 py-2.5">
 				<div className="flex items-center justify-end gap-2">
 					<Button
 						size="icon"
-						variant="ghost"
+						variant="outline"
 						type="button"
 						title="Test connection"
 						aria-label="Test connection"
@@ -681,28 +689,27 @@ const ProxyListRow = memo(function ProxyListRow({
 					</Form>
 					<Form
 						method="post"
-						onSubmit={async (e) => {
-							if (
-								!(await confirm({
-									title: "Delete proxy?",
-									description: `Proxy "${proxy.name}" will be permanently removed.`,
-									confirmLabel: "Delete",
-									variant: "danger",
-								}))
-							) {
-								e.preventDefault();
-							}
+						onSubmit={(e) => {
+							e.preventDefault();
+							const form = e.currentTarget;
+							void confirm({
+								title: "Delete proxy?",
+								description: `Proxy "${proxy.name}" will be permanently removed.`,
+								confirmLabel: "Delete",
+								variant: "danger",
+							}).then((ok) => {
+								if (ok) submit(form);
+							});
 						}}
 					>
 						<input type="hidden" name="intent" value="delete" />
 						<input type="hidden" name="id" value={proxy.id} />
 						<Button
 							size="icon"
-							variant="ghost"
+							variant="danger"
 							type="submit"
 							title="Delete proxy"
 							aria-label="Delete proxy"
-							className="text-danger"
 						>
 							<Trash2 size={14} />
 						</Button>
@@ -819,7 +826,7 @@ const SavedProxyRow = memo(function SavedProxyRow({
 			<TCell className="px-2 py-1.5 text-right">
 				<Button
 					size="icon"
-					variant="ghost"
+					variant="outline"
 					type="button"
 					title="Test connection"
 					aria-label="Test connection"
@@ -877,20 +884,21 @@ function BulkDeleteForm({
 	ids: Set<number>;
 	confirm: ConfirmFn;
 }) {
+	const submit = useSubmit();
 	return (
 		<Form
 			method="post"
-			onSubmit={async (e) => {
-				if (
-					!(await confirm({
-						title: "Delete selected proxies?",
-						description: `${ids.size} selected proxies will be permanently removed.`,
-						confirmLabel: "Delete",
-						variant: "danger",
-					}))
-				) {
-					e.preventDefault();
-				}
+			onSubmit={(e) => {
+				e.preventDefault();
+				const form = e.currentTarget;
+				void confirm({
+					title: "Delete selected proxies?",
+					description: `${ids.size} selected proxies will be permanently removed.`,
+					confirmLabel: "Delete",
+					variant: "danger",
+				}).then((ok) => {
+					if (ok) submit(form);
+				});
 			}}
 		>
 			<input type="hidden" name="intent" value="delete-many" />
@@ -899,9 +907,9 @@ function BulkDeleteForm({
 			))}
 			<Button
 				size="sm"
-				variant="outline"
+				variant="danger"
 				type="submit"
-				className="gap-1.5 text-danger"
+				className="gap-1.5"
 			>
 				<Trash2 size={14} /> Delete
 			</Button>
@@ -914,9 +922,34 @@ function BulkDeleteForm({
 //---------------------------------------------------------------------------
 
 type TabKey = "list" | "free" | "import" | "pools";
+const VALID_TABS = new Set<TabKey>(["list", "free", "import", "pools"]);
 
-export default function Proxies({ loaderData }: Route.ComponentProps) {
-	const [tab, setTab] = useState<TabKey>("list");
+export default function Proxies(props: Route.ComponentProps) {
+	const outlet = useOutlet();
+	if (outlet) return outlet;
+	return <ProxiesView loaderData={props.loaderData} />;
+}
+
+function ProxiesView({ loaderData }: { loaderData: Route.ComponentProps["loaderData"] }) {
+	const [searchParams, setSearchParams] = useSearchParams();
+	const rawTab = searchParams.get("tab") as TabKey | null;
+	const tab: TabKey = rawTab && VALID_TABS.has(rawTab) ? rawTab : "list";
+	const setTab = useCallback(
+		(next: TabKey) => {
+			setSearchParams(
+				(prev) => {
+					const copy = new URLSearchParams(prev);
+					if (next === "list") copy.delete("tab");
+					else copy.set("tab", next);
+					return copy;
+				},
+				{ replace: true },
+			);
+		},
+		[setSearchParams],
+	);
+	const submit = useSubmit();
+	const [assignTargetType, setAssignTargetType] = useState<"provider" | "client_key">("provider");
 	const [staging, setStaging] = useState<FreeProxyRow[]>([]);
 	const [selected, setSelected] = useState<Set<string>>(new Set());
 	const [savedSelected, setSavedSelected] = useState<Set<number>>(new Set());
@@ -957,6 +990,13 @@ export default function Proxies({ loaderData }: Route.ComponentProps) {
 
 	const syncResults = syncFetcher.data?.freeList;
 	const syncSig = syncResults?.map((r) => rowKey(r)).join("\n") ?? null;
+	useEffect(() => {
+		if (syncResults && syncSig !== loadedSig) {
+			setStaging(syncResults);
+			setSelected(new Set());
+			setLoadedSig(syncSig);
+		}
+	}, [syncResults, syncSig, loadedSig]);
 	const freeTests = new Map(
 		(batchFetcher.data?.freeTests ?? []).map((t) => [t.key, t]),
 	);
@@ -1042,13 +1082,15 @@ export default function Proxies({ loaderData }: Route.ComponentProps) {
 
 	// Buang seleksi untuk proxy yang sudah tidak ada (setelah delete/bulk).
 	useEffect(() => {
+		const validIds = new Set(loaderData.proxies.map((p) => p.id));
 		setListSel((prev) => {
 			if (prev.size === 0) return prev;
-			const next = new Set(
-				[...prev].filter((id) =>
-					loaderData.proxies.some((p) => p.id === id),
-				),
-			);
+			const next = new Set([...prev].filter((id) => validIds.has(id)));
+			return next.size === prev.size ? prev : next;
+		});
+		setSavedSelected((prev) => {
+			if (prev.size === 0) return prev;
+			const next = new Set([...prev].filter((id) => validIds.has(id)));
 			return next.size === prev.size ? prev : next;
 		});
 	}, [loaderData.proxies]);
@@ -1210,14 +1252,16 @@ export default function Proxies({ loaderData }: Route.ComponentProps) {
 					) : (
 						<>
 							{/* Toolbar: search, health filter, custom test URL */}
-							<div className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-3">
+							<div className="flex flex-wrap items-center gap-2 border-b border-border bg-surface-2/30 px-4 py-3">
 								<Input
+									controlSize="sm"
 									value={listSearch}
 									onChange={(e) => setListSearch(e.target.value)}
-									placeholder="Search name / host…"
+									placeholder="Search name / host..."
 									className="w-full sm:w-48"
 								/>
 								<Select
+									controlSize="sm"
 									value={listFilter}
 									onChange={(e) =>
 										setListFilter(
@@ -1232,7 +1276,7 @@ export default function Proxies({ loaderData }: Route.ComponentProps) {
 									<option value="ok">Healthy</option>
 									<option value="error">Error</option>
 								</Select>
-								<span className="text-xs text-muted-foreground">
+								<span className="text-xs tabular-nums text-muted-foreground">
 									{filteredProxies.length} of {loaderData.proxies.length}
 								</span>
 
@@ -1240,9 +1284,8 @@ export default function Proxies({ loaderData }: Route.ComponentProps) {
 									<>
 										<Button
 											size="sm"
-											variant="ghost"
+											variant="outline"
 											type="button"
-											className="text-xs"
 											title="Select all proxies whose last test failed"
 											onClick={() => {
 												const next = new Set(listSel);
@@ -1256,25 +1299,25 @@ export default function Proxies({ loaderData }: Route.ComponentProps) {
 										</Button>
 										<Form
 											method="post"
-											onSubmit={async (e) => {
-												if (
-													!(await confirm({
-														title: "Delete all error proxies?",
-														description: `${errorCount} proxies whose last connection test failed will be permanently removed.`,
-														confirmLabel: "Delete",
-														variant: "danger",
-													}))
-												) {
-													e.preventDefault();
-												}
+											onSubmit={(e) => {
+												e.preventDefault();
+												const form = e.currentTarget;
+												void confirm({
+													title: "Delete all error proxies?",
+													description: `${errorCount} proxies whose last connection test failed will be permanently removed.`,
+													confirmLabel: "Delete",
+													variant: "danger",
+												}).then((ok) => {
+													if (ok) submit(form);
+												});
 											}}
 										>
 											<input type="hidden" name="intent" value="delete-errors" />
 											<Button
 												size="sm"
-												variant="outline"
+												variant="danger"
 												type="submit"
-												className="gap-1.5 text-danger"
+												className="gap-1.5"
 											>
 												<Trash2 size={14} /> Delete error ({errorCount})
 											</Button>
@@ -1284,10 +1327,11 @@ export default function Proxies({ loaderData }: Route.ComponentProps) {
 
 								<div className="ml-auto flex flex-wrap items-center gap-2">
 									<Input
+										controlSize="sm"
 										defaultValue="https://api.openai.com/v1/models"
 										id="bulk-test-url"
 										placeholder="Test URL"
-										className="w-full font-mono text-xs sm:w-64"
+										className="w-full font-mono sm:w-64"
 									/>
 									<Button
 										size="sm"
@@ -1363,7 +1407,7 @@ export default function Proxies({ loaderData }: Route.ComponentProps) {
 							)}
 
 							{manySummary && !manyRunning && (
-								<div className="border-b border-border px-4 py-2 text-xs">
+								<div className="border-b border-border bg-surface-2/40 px-4 py-2 text-xs">
 									<span className="font-medium text-success">
 										{manySummary.ok} OK
 									</span>{" "}
@@ -1371,7 +1415,7 @@ export default function Proxies({ loaderData }: Route.ComponentProps) {
 										{manySummary.total - manySummary.ok} failed
 									</span>{" "}
 									<span className="text-muted-foreground">
-										— health & latency saved to the database.
+										- health & latency saved to the database.
 									</span>
 								</div>
 							)}
@@ -1382,10 +1426,10 @@ export default function Proxies({ loaderData }: Route.ComponentProps) {
 							) : null}
 
 							<div className="max-h-[70vh] overflow-auto">
-								<Table>
+								<Table className="min-w-[780px]">
 									<THead className="sticky top-0 z-10 bg-surface">
 										<TRow>
-											<THeadCell className="w-8 px-4">
+											<THeadCell className="w-8 px-3">
 												<Checkbox
 													checked={allShownSelected}
 													onChange={(e) => {
@@ -1399,14 +1443,14 @@ export default function Proxies({ loaderData }: Route.ComponentProps) {
 													aria-label="Select all shown proxies"
 												/>
 											</THeadCell>
-											<THeadCell>Name</THeadCell>
-											<THeadCell>Type</THeadCell>
-											<THeadCell>Address</THeadCell>
-											<THeadCell>Auth</THeadCell>
-											<THeadCell>Last Used</THeadCell>
-											<THeadCell>Status</THeadCell>
-											<THeadCell>Health</THeadCell>
-											<THeadCell className="text-right">Actions</THeadCell>
+											<THeadCell className="px-2.5">Name</THeadCell>
+											<THeadCell className="px-2.5">Type</THeadCell>
+											<THeadCell className="px-2.5">Address</THeadCell>
+											<THeadCell className="px-2.5">Auth</THeadCell>
+											<THeadCell className="px-2.5">Last Used</THeadCell>
+											<THeadCell className="px-2.5">Status</THeadCell>
+											<THeadCell className="px-2.5">Health</THeadCell>
+											<THeadCell className="px-3 text-right">Actions</THeadCell>
 										</TRow>
 									</THead>
 									<tbody>
@@ -1439,34 +1483,46 @@ export default function Proxies({ loaderData }: Route.ComponentProps) {
 							them, then move the good ones to the proxy list. Syncing
 							replaces the previously staged list.
 						</p>
-						<syncFetcher.Form method="post" className="flex flex-wrap gap-2">
+						<syncFetcher.Form method="post" className="grid grid-cols-1 items-end gap-3 sm:grid-cols-12">
 							<input type="hidden" name="intent" value="sync-free" />
-							<Select name="source" defaultValue="proxyscrape-http" className="w-auto">
-								<option value="auto">Auto (try all sources)</option>
-								{FREE_SOURCES.map((s) => (
-									<option key={s.id} value={s.id}>
-										{s.label}
-									</option>
-								))}
-							</Select>
-							<Input
-								name="custom_url"
-								placeholder="or custom list URL (e.g. your Webshare download link)"
-								className="min-w-52 flex-1 font-mono"
-							/>
-							<Input
-								name="limit"
-								type="number"
-								min={1}
-								max={500}
-								defaultValue={100}
-								title="Max proxies"
-								className="w-24"
-							/>
-							<Button type="submit" disabled={syncRunning}>
-								<RefreshCw size={14} /> Sync
-								{syncRunning && <Spinner size={14} />}
-							</Button>
+							<div className="sm:col-span-4">
+								<Label htmlFor="free-source">Source</Label>
+								<Select id="free-source" name="source" defaultValue="proxyscrape-http">
+									<option value="auto">Auto (try all sources)</option>
+									{FREE_SOURCES.map((s) => (
+										<option key={s.id} value={s.id}>
+											{s.label}
+										</option>
+									))}
+								</Select>
+							</div>
+							<div className="sm:col-span-5">
+								<Label htmlFor="free-custom-url">Custom list URL (optional)</Label>
+								<Input
+									id="free-custom-url"
+									name="custom_url"
+									placeholder="e.g. Webshare or raw list URL"
+									className="font-mono"
+								/>
+							</div>
+							<div className="sm:col-span-1">
+								<Label htmlFor="free-limit">Limit</Label>
+								<Input
+									id="free-limit"
+									name="limit"
+									type="number"
+									min={1}
+									max={500}
+									defaultValue={100}
+									title="Max proxies to fetch"
+								/>
+							</div>
+							<div className="sm:col-span-2">
+								<Button type="submit" disabled={syncRunning} className="w-full">
+									{syncRunning ? <Spinner size={14} /> : <RefreshCw size={14} />}
+									{syncRunning ? "Syncing…" : "Sync"}
+								</Button>
+							</div>
 						</syncFetcher.Form>
 					</Card>
 
@@ -1518,8 +1574,9 @@ export default function Proxies({ loaderData }: Route.ComponentProps) {
 											size="sm"
 											variant="outline"
 											type="submit"
-											disabled={selectedRows.length === 0}
+											disabled={selectedRows.length === 0 || batchFetcher.state !== "idle"}
 										>
+											{batchFetcher.state !== "idle" ? <Spinner size={13} /> : null}
 											Test selected
 										</Button>
 									</batchFetcher.Form>
@@ -1533,16 +1590,17 @@ export default function Proxies({ loaderData }: Route.ComponentProps) {
 										<Button
 											size="sm"
 											type="submit"
-											disabled={selectedRows.length === 0}
+											disabled={selectedRows.length === 0 || batchFetcher.state !== "idle"}
 											className="gap-1.5"
 										>
-											<Plus size={14} /> Move Proxy List
+											{batchFetcher.state !== "idle" ? <Spinner size={13} /> : <Plus size={14} />}
+											Move to Proxy List
 										</Button>
 									</batchFetcher.Form>
 									<Button
 										size="sm"
-										variant="outline"
-										className="gap-1.5 text-danger"
+										variant="danger"
+										className="gap-1.5"
 										disabled={selected.size === 0}
 										onClick={() => {
 											setStaging((prev) =>
@@ -1558,23 +1616,23 @@ export default function Proxies({ loaderData }: Route.ComponentProps) {
 						</div>
 
 						{staging.length === 0 && syncResults && (
-							<div className="mb-3 rounded-lg bg-muted p-4 text-sm text-muted-foreground">
+							<div className="mb-3 rounded-lg border border-border bg-surface-2/50 p-4 text-sm text-muted-foreground">
 								{syncResults.length > 0
-									? `${syncResults.length} free proxies fetched — click "Load" to review them.`
+									? `${syncResults.length} free proxies fetched. Click "Load" to review them.`
 									: "No proxies found from this source. Try another source or a custom URL."}
 							</div>
 						)}
 
 						{staging.length === 0 && !syncResults && (
 							<p className="text-xs text-muted-foreground">
-								Nothing staged yet — hit Sync above to fetch the latest free
+								Nothing staged yet. Hit Sync above to fetch the latest free
 								proxies.
 							</p>
 						)}
 
 						{staging.length > 0 && (
 							<div className="max-h-80 overflow-y-auto rounded-lg border border-border">
-								<Table>
+								<Table className="min-w-[500px]">
 									<THead className="sticky top-0 bg-surface">
 										<TRow>
 											<THeadCell className="w-8 px-2" />
@@ -1603,7 +1661,7 @@ export default function Proxies({ loaderData }: Route.ComponentProps) {
 						)}
 
 						{batchFetcher.data?.moveResult && (
-							<div className="mt-3 rounded-lg bg-muted p-3 text-xs text-foreground">
+							<div className="mt-3 rounded-lg border border-border bg-surface-2/50 p-3 text-xs text-foreground">
 								<span className="font-semibold text-success">
 									{batchFetcher.data.moveResult.moved.length} moved to proxy list
 								</span>
@@ -1627,40 +1685,74 @@ export default function Proxies({ loaderData }: Route.ComponentProps) {
 						</div>
 						<customTestFetcher.Form
 							method="post"
-							className="grid grid-cols-1 gap-2 sm:grid-cols-6"
+							className="grid grid-cols-1 items-end gap-2 sm:grid-cols-12"
 						>
 							<input type="hidden" name="intent" value="test-custom" />
-							<Select name="type" defaultValue="http-connect" className="px-2">
-								<option value="http-connect">CONNECT</option>
-								<option value="socks5">SOCKS5</option>
-							</Select>
-							<Input
-								name="host"
-								required
-								placeholder="host"
-								className="font-mono sm:col-span-2"
-							/>
-							<Input
-								name="port"
-								type="number"
-								required
-								min={1}
-								max={65535}
-								placeholder="port"
-							/>
-							<Input
-								name="username"
-								placeholder="user (opt)"
-								autoComplete="off"
-							/>
-							<Button type="submit" className="w-full sm:w-auto">Test</Button>
+							<div className="sm:col-span-2">
+								<Label htmlFor="ct-type">Protocol</Label>
+								<Select id="ct-type" name="type" defaultValue="http-connect" className="px-2">
+									<option value="http-connect">HTTP CONNECT</option>
+									<option value="socks5">SOCKS5</option>
+								</Select>
+							</div>
+							<div className="sm:col-span-3">
+								<Label htmlFor="ct-host">Host</Label>
+								<Input
+									id="ct-host"
+									name="host"
+									required
+									placeholder="proxy.example.com"
+									className="font-mono"
+								/>
+							</div>
+							<div className="sm:col-span-2">
+								<Label htmlFor="ct-port">Port</Label>
+								<Input
+									id="ct-port"
+									name="port"
+									type="number"
+									required
+									min={1}
+									max={65535}
+									placeholder="8080"
+								/>
+							</div>
+							<div className="sm:col-span-2">
+								<Label htmlFor="ct-user">Username</Label>
+								<Input
+									id="ct-user"
+									name="username"
+									placeholder="optional"
+									autoComplete="off"
+								/>
+							</div>
+							<div className="sm:col-span-2">
+								<Label htmlFor="ct-pass">Password</Label>
+								<Input
+									id="ct-pass"
+									name="password"
+									type="password"
+									placeholder="optional"
+									autoComplete="new-password"
+								/>
+							</div>
+							<div className="sm:col-span-1">
+								<Button
+									type="submit"
+									className="w-full"
+									disabled={customTestFetcher.state !== "idle"}
+								>
+									{customTestFetcher.state !== "idle" ? <Spinner size={14} /> : "Test"}
+								</Button>
+							</div>
 						</customTestFetcher.Form>
 						{customTestFetcher.data?.customTest && (
 							<div
-								className={`mt-3 rounded-lg px-3 py-2 text-sm ${
+								role="status"
+								className={`mt-3 rounded-lg border px-3 py-2 text-sm font-medium ${
 									customTestFetcher.data.customTest.ok
-										? "bg-success/15 text-success"
-										: "bg-danger/15 text-danger"
+										? "border-success/30 bg-success/10 text-success"
+										: "border-danger/30 bg-danger/10 text-danger"
 								}`}
 							>
 								{customTestFetcher.data.customTest.ok
@@ -1684,17 +1776,17 @@ export default function Proxies({ loaderData }: Route.ComponentProps) {
 							{savedSelected.size > 0 && (
 								<Form
 									method="post"
-									onSubmit={async (e) => {
-										if (
-											!(await confirm({
-												title: "Delete selected proxies?",
-												description: `${savedSelected.size} selected free proxies will be permanently removed.`,
-												confirmLabel: "Delete",
-												variant: "danger",
-											}))
-										) {
-											e.preventDefault();
-										}
+									onSubmit={(e) => {
+										e.preventDefault();
+										const form = e.currentTarget;
+										void confirm({
+											title: "Delete selected proxies?",
+											description: `${savedSelected.size} selected free proxies will be permanently removed.`,
+											confirmLabel: "Delete",
+											variant: "danger",
+										}).then((ok) => {
+											if (ok) submit(form);
+										});
 									}}
 								>
 									{[...savedSelected].map((id) => (
@@ -1704,8 +1796,8 @@ export default function Proxies({ loaderData }: Route.ComponentProps) {
 									<Button
 										type="submit"
 										size="sm"
-										variant="outline"
-										className="gap-1.5 text-danger"
+										variant="danger"
+										className="gap-1.5"
 									>
 										<Trash2 size={14} /> Delete selected ({savedSelected.size})
 									</Button>
@@ -1715,13 +1807,13 @@ export default function Proxies({ loaderData }: Route.ComponentProps) {
 
 						{freeSaved.length === 0 && (
 							<p className="text-xs text-muted-foreground">
-								No auth-free proxies saved yet — sync and move some above.
+								No auth-free proxies saved yet. Sync and move some above.
 							</p>
 						)}
 
 						{freeSaved.length > 0 && (
 							<div className="max-h-72 overflow-y-auto rounded-lg border border-border">
-								<Table>
+								<Table className="min-w-[640px]">
 									<THead className="sticky top-0 bg-surface">
 										<TRow>
 											<THeadCell className="w-8 px-2" />
@@ -1777,7 +1869,7 @@ export default function Proxies({ loaderData }: Route.ComponentProps) {
 						</Button>
 					</importFetcher.Form>
 					{importFetcher.data?.importResult && (
-						<div className="mt-4 rounded-lg bg-muted p-3 text-xs text-foreground">
+						<div className="mt-4 rounded-lg border border-border bg-surface-2/50 p-3 text-xs text-foreground">
 							<span className="font-semibold text-success">
 								{importFetcher.data.importResult.imported} imported
 							</span>
@@ -1811,7 +1903,7 @@ export default function Proxies({ loaderData }: Route.ComponentProps) {
 								defaultValue={loaderData.globalPoolId ?? ""}
 								className="flex-1"
 							>
-								<option value="">— None (direct) —</option>
+								<option value="">None (direct)</option>
 								{loaderData.pools.map((pool) => (
 									<option key={pool.id} value={pool.id}>
 										{pool.name}
@@ -1858,28 +1950,27 @@ export default function Proxies({ loaderData }: Route.ComponentProps) {
 										</h3>
 										<Form
 											method="post"
-											onSubmit={async (e) => {
-												if (
-													!(await confirm({
-														title: "Delete pool?",
-														description: `Pool "${pool.name}" and its proxy assignments will be deleted.`,
-														confirmLabel: "Delete",
-														variant: "danger",
-													}))
-												) {
-													e.preventDefault();
-												}
+											onSubmit={(e) => {
+												e.preventDefault();
+												const form = e.currentTarget;
+												void confirm({
+													title: "Delete pool?",
+													description: `Pool "${pool.name}" and its proxy assignments will be deleted.`,
+													confirmLabel: "Delete",
+													variant: "danger",
+												}).then((ok) => {
+													if (ok) submit(form);
+												});
 											}}
 										>
 											<input type="hidden" name="intent" value="delete-pool" />
 											<input type="hidden" name="id" value={pool.id} />
 											<Button
 												size="icon"
-												variant="ghost"
+												variant="danger"
 												type="submit"
 												title="Delete pool"
 												aria-label="Delete pool"
-												className="text-danger"
 											>
 												<Trash2 size={14} />
 											</Button>
@@ -1944,15 +2035,30 @@ export default function Proxies({ loaderData }: Route.ComponentProps) {
 								</div>
 							))}
 						</div>
-						<Form method="post" className="mt-4 flex flex-wrap gap-2">
+						<Form method="post" className="mt-4 grid grid-cols-1 items-end gap-2 sm:grid-cols-12">
 							<input type="hidden" name="intent" value="create-pool" />
-							<Input name="name" placeholder="Pool name" className="flex-1" />
-							<Select name="strategy" defaultValue="round_robin" className="w-auto">
-								<option value="round_robin">Round-robin</option>
-								<option value="priority">Priority</option>
-								<option value="random">Random</option>
-							</Select>
-							<Button type="submit">Create pool</Button>
+							<div className="sm:col-span-6">
+								<Label htmlFor="new-pool-name">Pool name</Label>
+								<Input
+									id="new-pool-name"
+									name="name"
+									required
+									placeholder="e.g. US Residential"
+								/>
+							</div>
+							<div className="sm:col-span-4">
+								<Label htmlFor="new-pool-strategy">Strategy</Label>
+								<Select id="new-pool-strategy" name="strategy" defaultValue="round_robin">
+									<option value="round_robin">Round-robin</option>
+									<option value="priority">Priority</option>
+									<option value="random">Random</option>
+								</Select>
+							</div>
+							<div className="sm:col-span-2">
+								<Button type="submit" className="w-full">
+									Create pool
+								</Button>
+							</div>
 						</Form>
 					</Card>
 
@@ -1969,7 +2075,7 @@ export default function Proxies({ loaderData }: Route.ComponentProps) {
 							</p>
 						)}
 						{loaderData.assignments.length > 0 && (
-							<Table>
+							<Table className="min-w-[520px]">
 								<THead>
 									<TRow>
 										<THeadCell className="px-2">Target</THeadCell>
@@ -2005,17 +2111,17 @@ export default function Proxies({ loaderData }: Route.ComponentProps) {
 												<TCell className="px-2 py-2 text-right">
 													<Form
 														method="post"
-														onSubmit={async (e) => {
-															if (
-																!(await confirm({
-																	title: "Remove assignment?",
-																	description: "This pool assignment will be removed.",
-																	confirmLabel: "Remove",
-																	variant: "danger",
-																}))
-															) {
-																e.preventDefault();
-															}
+														onSubmit={(e) => {
+															e.preventDefault();
+															const form = e.currentTarget;
+															void confirm({
+																title: "Remove assignment?",
+																description: "This pool assignment will be removed.",
+																confirmLabel: "Remove",
+																variant: "danger",
+															}).then((ok) => {
+																if (ok) submit(form);
+															});
 														}}
 													>
 														<input type="hidden" name="intent" value="unassign" />
@@ -2032,8 +2138,7 @@ export default function Proxies({ loaderData }: Route.ComponentProps) {
 														<Button
 															type="submit"
 															size="sm"
-															variant="ghost"
-															className="text-xs text-danger"
+															variant="danger"
 														>
 															Remove
 														</Button>
@@ -2047,28 +2152,91 @@ export default function Proxies({ loaderData }: Route.ComponentProps) {
 						)}
 						<Form
 							method="post"
-							className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-4"
+							className="mt-4 grid grid-cols-1 items-end gap-2 sm:grid-cols-12"
 						>
 							<input type="hidden" name="intent" value="assign" />
-							<Select name="target_type" defaultValue="provider">
-								<option value="provider">Provider</option>
-								<option value="client_key">API Key</option>
-							</Select>
-							<Select name="target_id">
-								{loaderData.providers.map((p) => (
-									<option key={p.id} value={p.id}>
-										{p.name}
-									</option>
-								))}
-							</Select>
-							<Select name="pool_id">
-								{loaderData.pools.map((pool) => (
-									<option key={pool.id} value={pool.id}>
-										{pool.name}
-									</option>
-								))}
-							</Select>
-							<Button type="submit">Assign</Button>
+							<div className="sm:col-span-3">
+								<Label htmlFor="assign-kind">Target kind</Label>
+								<Select
+									id="assign-kind"
+									name="target_type"
+									value={assignTargetType}
+									onChange={(e) =>
+										setAssignTargetType(
+											e.target.value === "client_key" ? "client_key" : "provider",
+										)
+									}
+								>
+									<option value="provider">Provider</option>
+									<option value="client_key">API Key</option>
+								</Select>
+							</div>
+							<div className="sm:col-span-4">
+								<Label htmlFor="assign-target">
+									{assignTargetType === "provider" ? "Provider" : "API Key"}
+								</Label>
+								<Select
+									id="assign-target"
+									name="target_id"
+									disabled={
+										assignTargetType === "provider"
+											? loaderData.providers.length === 0
+											: loaderData.apiKeys.length === 0
+									}
+								>
+									{assignTargetType === "provider" ? (
+										loaderData.providers.length === 0 ? (
+											<option value="">No providers configured</option>
+										) : (
+											loaderData.providers.map((p) => (
+												<option key={p.id} value={p.id}>
+													{p.name}
+												</option>
+											))
+										)
+									) : loaderData.apiKeys.length === 0 ? (
+										<option value="">No client API keys configured</option>
+									) : (
+										loaderData.apiKeys.map((k) => (
+											<option key={k.id} value={String(k.id)}>
+												{k.name}
+											</option>
+										))
+									)}
+								</Select>
+							</div>
+							<div className="sm:col-span-3">
+								<Label htmlFor="assign-pool">Proxy pool</Label>
+								<Select
+									id="assign-pool"
+									name="pool_id"
+									disabled={loaderData.pools.length === 0}
+								>
+									{loaderData.pools.length === 0 ? (
+										<option value="">Create a pool first</option>
+									) : (
+										loaderData.pools.map((pool) => (
+											<option key={pool.id} value={pool.id}>
+												{pool.name}
+											</option>
+										))
+									)}
+								</Select>
+							</div>
+							<div className="sm:col-span-2">
+								<Button
+									type="submit"
+									className="w-full"
+									disabled={
+										loaderData.pools.length === 0 ||
+										(assignTargetType === "provider"
+											? loaderData.providers.length === 0
+											: loaderData.apiKeys.length === 0)
+									}
+								>
+									Assign
+								</Button>
+							</div>
 						</Form>
 					</Card>
 				</div>

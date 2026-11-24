@@ -1,9 +1,9 @@
 import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { useFetcher } from "react-router";
-import { Clock, Globe, KeyRound } from "lucide-react";
+import { ChevronDown, ChevronRight, Clock, FolderOpen, Globe, KeyRound, Trash2 } from "lucide-react";
 import type { Route } from "./+types/logs.proxy";
 import { query } from "../.server/db";
-import { Combobox } from "../components/combobox";
+import { Combobox } from "../components/ui/combobox";
 import {
   useRealtimeLogs,
   type LogEvent,
@@ -12,6 +12,9 @@ import { useToast } from "../components/ui/toast";
 import { useConfirm } from "../components/ui/confirm-dialog";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
+import { Input } from "../components/ui/field";
+import { PageHeader } from "../components/ui/page-header";
+import { Spinner } from "../components/ui/feedback";
 import { LogViewer } from "../components/log-viewer";
 import {
   fmtNum,
@@ -27,7 +30,7 @@ const COLS = `
   op.name AS proxy_name, op.host AS proxy_host, op.port AS proxy_port`;
 
 export function meta() {
-  return [{ title: "Proxy Logs — UniRoute" }];
+  return [{ title: "Proxy Logs | UniRoute" }];
 }
 
 export function loader() {
@@ -200,104 +203,122 @@ const Row = memo(function Row({
 
   return (
     <div
-      onClick={() => onSelect(key)}
-      className={`min-w-0 cursor-pointer overflow-hidden border-b border-border px-2 py-1.5 text-sm transition-colors hover:bg-muted ${
-        selected ? "bg-primary/10" : ""
+      className={`border-b border-border/70 text-sm transition-colors last:border-b-0 ${
+        selected ? "bg-primary/8" : "hover:bg-glass-hover"
       }`}
     >
-      <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-        <span className="w-full shrink-0 text-xs text-muted-foreground sm:w-24">
-          {fmtTs(event.created_at)}
-        </span>
-        <Badge tone={LEVEL_TONE[String(event.level)] ?? "neutral"}>
-          {String(event.level)}
-        </Badge>
-        <Badge tone="neutral" title={`source: ${String(event.source)}`}>
-          {String(event.source)}
-        </Badge>
-        <span
-          className="min-w-0 max-w-full flex-1 basis-full truncate text-foreground sm:basis-auto"
-          title={message}
-        >
-          {message}
-        </span>
-        <button
-          type="button"
-          title={selected ? "Close details" : "Inspect"}
-          onClick={(e) => {
-            e.stopPropagation();
-            onSelect(key);
-          }}
-          className="rounded border border-border px-1.5 text-xs text-muted-foreground hover:bg-muted"
-        >
-          {selected ? "▾" : "▸"}
-        </button>
-        <button
-          type="button"
-          title="Delete"
-          aria-label="Delete"
-          onClick={(e) => {
-            e.stopPropagation();
-            onDelete(Number(event.id));
-          }}
-          className="rounded border border-border px-1.5 text-xs text-danger hover:bg-danger/10"
-        >
-          ✕
-        </button>
-      </div>
-      {hasMeta ? (
-        <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-          {latency != null ? (
-            <Badge tone="neutral" title={`latency: ${fmtNum(latency)} ms`}>
-              <Clock size={12} />
-              <span className="font-mono">{fmtNum(latency)}ms</span>
+      <div className="flex flex-col gap-2 px-4 py-2.5 lg:grid lg:grid-cols-[148px_82px_130px_minmax(0,1fr)_96px_68px] lg:items-center lg:gap-3">
+        {/* Timestamp */}
+        <div className="flex items-center justify-between gap-2 lg:block">
+          <span className="font-mono text-xs tabular-nums text-muted-foreground">
+            {fmtTs(event.created_at)}
+          </span>
+          <div className="flex items-center gap-1.5 lg:hidden">
+            <Badge tone={LEVEL_TONE[String(event.level)] ?? "neutral"}>
+              {String(event.level)}
             </Badge>
-          ) : null}
-          {event.provider_id ? (
-            <Badge
-              tone="neutral"
-              title={`provider: ${String(event.provider_id)}`}
-            >
-              {String(event.provider_id)}
-            </Badge>
-          ) : null}
-          {event.endpoint ? (
-            <Badge tone="neutral" title={`endpoint: ${String(event.endpoint)}`}>
-              {String(event.endpoint)}
-            </Badge>
-          ) : null}
-          {event.client_ip ? (
-            <Badge
-              tone="neutral"
-              title={`client IP: ${String(event.client_ip)}`}
-              className="max-w-full"
-            >
-              <span className="max-w-[160px] truncate font-mono">
-                {String(event.client_ip)}
-              </span>
-            </Badge>
-          ) : null}
-          {proxyShort ? (
-            <Badge tone="primary" title={proxyTitle ?? undefined} className="max-w-full">
-              <Globe size={12} />
-              <span className="max-w-[160px] truncate">{proxyShort}</span>
-            </Badge>
-          ) : null}
-          {keyLabel ? (
-            <Badge
-              tone="neutral"
-              title={`API key: ${keyLabel}${
-                event.api_key_id != null ? ` (#${event.api_key_id})` : ""
-              }`}
-              className="max-w-full"
-            >
-              <KeyRound size={12} />
-              <span className="max-w-[140px] truncate">{keyLabel}</span>
-            </Badge>
+            <Badge tone="neutral">{String(event.source)}</Badge>
+          </div>
+        </div>
+
+        {/* Level */}
+        <div className="hidden lg:block">
+          <Badge tone={LEVEL_TONE[String(event.level)] ?? "neutral"}>
+            {String(event.level)}
+          </Badge>
+        </div>
+
+        {/* Source */}
+        <div className="hidden min-w-0 lg:block">
+          <span
+            className="block truncate font-mono text-xs text-muted-foreground"
+            title={`source: ${String(event.source)}`}
+          >
+            {String(event.source)}
+          </span>
+        </div>
+
+        {/* Message + compact metadata pills */}
+        <div className="min-w-0">
+          <p className="truncate text-xs font-medium text-foreground" title={message}>
+            {message}
+          </p>
+          {hasMeta ? (
+            <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
+              {event.provider_id ? (
+                <span className="rounded border border-border bg-surface-2 px-1.5 py-0.25">
+                  {String(event.provider_id)}
+                </span>
+              ) : null}
+              {event.endpoint ? (
+                <span className="truncate font-mono">{String(event.endpoint)}</span>
+              ) : null}
+              {event.client_ip ? (
+                <span className="font-mono">{String(event.client_ip)}</span>
+              ) : null}
+              {proxyShort ? (
+                <span
+                  className="inline-flex items-center gap-1 rounded border border-primary/25 bg-primary/10 px-1.5 py-0.25 text-primary"
+                  title={proxyTitle ?? undefined}
+                >
+                  <Globe size={10} aria-hidden="true" />
+                  <span className="max-w-[140px] truncate">{proxyShort}</span>
+                </span>
+              ) : null}
+              {keyLabel ? (
+                <span
+                  className="inline-flex items-center gap-1 rounded border border-border bg-surface-2 px-1.5 py-0.25"
+                  title={`API key: ${keyLabel}`}
+                >
+                  <KeyRound size={10} aria-hidden="true" />
+                  <span className="max-w-[120px] truncate">{keyLabel}</span>
+                </span>
+              ) : null}
+            </div>
           ) : null}
         </div>
+
+        {/* Latency */}
+        <div className="flex items-center justify-between gap-2 text-xs lg:block lg:text-right">
+          <span className="text-[11px] text-muted-foreground lg:hidden">Latency</span>
+          <span className="font-mono tabular-nums text-muted-foreground">
+            {latency != null ? `${fmtNum(latency)}ms` : "-"}
+          </span>
+        </div>
+
+        {/* Actions */}
+        <div className="flex items-center justify-end gap-1">
+          <button
+            type="button"
+            title={selected ? "Close details" : "Inspect log"}
+            aria-label={selected ? "Close log details" : "Inspect log details"}
+            aria-expanded={selected}
+            onClick={() => onSelect(key)}
+            className="grid h-7 w-7 place-items-center rounded-md border border-border bg-surface text-muted-foreground transition-colors hover:border-border-strong hover:bg-surface-2 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+          >
+            {selected ? (
+              <ChevronDown size={14} aria-hidden="true" />
+            ) : (
+              <ChevronRight size={14} aria-hidden="true" />
+            )}
+          </button>
+          <button
+            type="button"
+            title="Delete log"
+            aria-label="Delete log"
+            onClick={() => onDelete(Number(event.id))}
+            className="grid h-7 w-7 place-items-center rounded-md border border-border bg-surface text-danger transition-colors hover:border-danger/50 hover:bg-danger/12 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+          >
+            <Trash2 size={13} aria-hidden="true" />
+          </button>
+        </div>
+      </div>
+
+      {selected ? (
+        <div className="border-t border-border/60 bg-surface-2/40 px-4 py-3">
+          <Detail event={event} />
+        </div>
       ) : null}
-      {selected ? <Detail event={event} /> : null}
     </div>
   );
 });
@@ -389,14 +410,22 @@ export default function LogsProxy({ loaderData }: Route.ComponentProps) {
       toast({ title: "Delete failed", variant: "error" });
     } else {
       remove(pendingDelete.id, pendingDelete.type);
+      toast({ title: "Proxy log deleted", variant: "success" });
     }
-  }, [deleteFetcher.state, deleteFetcher.data, pendingDelete]);
+  }, [deleteFetcher.state, deleteFetcher.data, pendingDelete, remove, toast]);
 
+  const lastClearRef = useRef<unknown>(null);
   useEffect(() => {
-    if (clearFetcher.state === "idle" && clearFetcher.data) {
-      reset([]);
+    if (clearFetcher.state !== "idle" || !clearFetcher.data) return;
+    if (lastClearRef.current === clearFetcher.data) return;
+    lastClearRef.current = clearFetcher.data;
+    if (clearFetcher.data.ok !== true) {
+      toast({ title: "Failed to clear proxy logs", variant: "error" });
+      return;
     }
-  }, [clearFetcher.state, clearFetcher.data]);
+    reset([]);
+    toast({ title: "Proxy logs cleared", variant: "success" });
+  }, [clearFetcher.state, clearFetcher.data, reset, toast]);
 
   const activeFilters = Boolean(level || source || search);
 
@@ -414,52 +443,65 @@ export default function LogsProxy({ loaderData }: Route.ComponentProps) {
 
   return (
     <div>
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <h1 className="text-xl font-bold text-foreground">Proxy Logs</h1>
-        <div className="flex items-center gap-2">
-          <span className="text-sm text-muted-foreground">{filtered.length} shown</span>
-          <Button type="button" variant="danger" size="sm" onClick={handleClear}>
-            Clear
-          </Button>
-        </div>
-      </div>
+      <PageHeader
+        title="Proxy Logs"
+        icon={<FolderOpen size={20} />}
+        subtitle="System diagnostics, outbound proxy routing events, and runtime warnings."
+        actions={
+          <>
+            <span className="text-xs font-medium tabular-nums text-muted-foreground">
+              {filtered.length.toLocaleString()} shown
+            </span>
+            <Button
+              type="button"
+              variant="danger"
+              size="sm"
+              disabled={logs.length === 0 || clearFetcher.state !== "idle"}
+              onClick={handleClear}
+            >
+              {clearFetcher.state !== "idle" ? <Spinner size={13} /> : <Trash2 size={13} />}
+              Clear logs
+            </Button>
+          </>
+        }
+      />
 
-      <div className="mb-3 flex flex-wrap items-center gap-2">
+      <div className="mb-4 grid grid-cols-1 gap-2 sm:grid-cols-3">
         <Combobox
           options={OPTIONS.levels}
           value={level}
           onChange={setLevel}
-          placeholder="Level"
-          className="w-full rounded-lg border border-border px-3 py-1.5 text-sm text-foreground sm:w-32"
+          placeholder="Level…"
         />
         <Combobox
           options={options.source}
           value={source}
           onChange={setSource}
-          placeholder="Search source…"
-          className="w-full rounded-lg border border-border px-3 py-1.5 text-sm text-foreground sm:w-40"
+          placeholder="Source…"
         />
-        <input
-          type="search"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search message / metadata…"
-          className="w-full rounded-lg border border-border px-3 py-1.5 text-sm text-foreground placeholder:text-muted-foreground sm:w-56"
-        />
-        {activeFilters ? (
-          <Button
-            type="button"
-            variant="secondary"
-            size="sm"
-            onClick={() => {
-              setLevel("");
-              setSource("");
-              setSearch("");
-            }}
-          >
-            Clear filters
-          </Button>
-        ) : null}
+        <div className="flex items-center gap-2">
+          <Input
+            type="search"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search message…"
+          />
+          {activeFilters ? (
+            <Button
+              type="button"
+              variant="outline"
+              size="md"
+              className="shrink-0"
+              onClick={() => {
+                setLevel("");
+                setSource("");
+                setSearch("");
+              }}
+            >
+              Reset
+            </Button>
+          ) : null}
+        </div>
       </div>
 
       {dialog}
@@ -473,6 +515,16 @@ export default function LogsProxy({ loaderData }: Route.ComponentProps) {
         scrollRef={scrollRef}
         emptyMessage="No proxy logs yet. They appear here as requests are routed through the proxy."
         renderRow={renderRow}
+        columnHeader={
+          <div className="grid grid-cols-[148px_82px_130px_minmax(0,1fr)_96px_68px] items-center gap-3 px-4 py-2">
+            <span>Timestamp</span>
+            <span>Level</span>
+            <span>Source</span>
+            <span>Message / Context</span>
+            <span className="text-right">Latency</span>
+            <span className="text-right">Actions</span>
+          </div>
+        }
       />
     </div>
   );

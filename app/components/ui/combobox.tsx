@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 
 type ComboboxProps = {
   options: string[];
@@ -12,11 +12,15 @@ type ComboboxProps = {
 };
 
 const Dropdown = memo(function Dropdown({
+  listboxId,
+  optionPrefix,
   options,
   highlight,
   open,
   onSelect,
 }: {
+  listboxId: string;
+  optionPrefix: string;
   options: string[];
   highlight: number;
   open: boolean;
@@ -24,21 +28,27 @@ const Dropdown = memo(function Dropdown({
 }) {
   return (
     <ul
+      id={listboxId}
       role="listbox"
-      className={`absolute z-20 mt-1 max-h-48 w-full origin-top overflow-auto rounded-lg border border-glass-border bg-background/80 py-1 text-sm shadow-[0_8px_24px_rgba(0,0,0,0.35),inset_0_1px_0_var(--glass-highlight)] backdrop-blur-md transition-[transform,opacity] duration-100 ${
+      className={`slim-scroll absolute left-0 z-50 mt-1.5 max-h-56 w-full origin-top overflow-auto rounded-xl border border-border-strong bg-surface py-1 text-sm shadow-xl transition-[transform,opacity] duration-100 ${
         open
           ? "scale-y-100 opacity-100"
-          : "pointer-events-none scale-y-90 opacity-0"
+          : "pointer-events-none scale-y-95 opacity-0"
       }`}
     >
       {options.map((opt, i) => (
-        <li key={opt} id={`option-${i}`} role="option" aria-selected={i === highlight}>
+        <li
+          key={opt}
+          id={`${optionPrefix}-${i}`}
+          role="option"
+          aria-selected={i === highlight}
+        >
           <button
             type="button"
             onMouseDown={(e) => e.preventDefault()}
             onClick={() => onSelect(opt)}
-            className={`block w-full px-3 py-1.5 text-left text-foreground hover:bg-glass-hover ${
-              i === highlight ? "bg-glass-hover" : ""
+            className={`block w-full cursor-pointer px-3 py-1.5 text-left text-foreground transition-colors hover:bg-glass-hover ${
+              i === highlight ? "bg-primary/12 text-primary" : ""
             }`}
           >
             {opt}
@@ -59,6 +69,9 @@ export function Combobox({
   required,
   className,
 }: ComboboxProps) {
+  const uid = useId();
+  const listboxId = `${uid}-listbox`;
+  const optionPrefix = `${uid}-opt`;
   const [open, setOpen] = useState(false);
   const [closing, setClosing] = useState(false);
   const [highlight, setHighlight] = useState(0);
@@ -69,7 +82,7 @@ export function Combobox({
 
   const query = value.trim().toLowerCase();
   const filtered = useMemo(
-    () => options.filter((o) => o.toLowerCase().includes(query)).slice(0, 20),
+    () => options.filter((o) => o.toLowerCase().includes(query)).slice(0, 30),
     [options, query],
   );
 
@@ -125,10 +138,14 @@ export function Combobox({
         value={value}
         placeholder={placeholder}
         required={required}
+        autoComplete="off"
         role="combobox"
         aria-expanded={open}
         aria-haspopup="listbox"
-        aria-activedescendant={open && filtered.length > 0 ? `option-${highlight}` : undefined}
+        aria-controls={showDropdown && filtered.length > 0 ? listboxId : undefined}
+        aria-activedescendant={
+          open && filtered.length > 0 ? `${optionPrefix}-${highlight}` : undefined
+        }
         onFocus={openDropdown}
         onChange={(e) => {
           onChange(e.target.value);
@@ -155,10 +172,20 @@ export function Combobox({
             closeDropdown();
           }
         }}
-        className={className}
+        className={
+          className ??
+          "h-9 w-full rounded-lg border border-border bg-surface px-3 text-sm text-foreground transition-colors placeholder:text-muted-foreground/75 hover:border-border-strong focus:border-primary focus:outline-none focus:ring-2 focus:ring-ring/25"
+        }
       />
       {showDropdown && filtered.length > 0 ? (
-        <Dropdown options={filtered} highlight={highlight} open={open} onSelect={select} />
+        <Dropdown
+          listboxId={listboxId}
+          optionPrefix={optionPrefix}
+          options={filtered}
+          highlight={highlight}
+          open={open}
+          onSelect={select}
+        />
       ) : null}
     </div>
   );

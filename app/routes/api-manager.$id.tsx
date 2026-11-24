@@ -34,7 +34,7 @@ import { groupsOfKey } from "../.server/key-groups";
 import { PageHeader } from "../components/ui/page-header";
 import { Card, CardHeader, CardTitle } from "../components/ui/card";
 import { Badge, type BadgeTone } from "../components/ui/badge";
-import { Button } from "../components/ui/button";
+import { Button, buttonClass } from "../components/ui/button";
 import { Input, Label, Checkbox } from "../components/ui/field";
 import { CopyButton } from "../components/ui/copy-button";
 import { EmptyState } from "../components/ui/empty-state";
@@ -42,9 +42,15 @@ import { Table, THead, THeadCell, TRow, TCell } from "../components/ui/table";
 import { UsageBar } from "../components/ui/usage-bar";
 import { useConfirm } from "../components/ui/confirm-dialog";
 import { useToast } from "../components/ui/toast";
+import { requireSession } from "../.server/auth";
 import { getStructuredSuggestions } from "../.server/suggest";
 import type { TagSuggestion } from "../.server/suggest";
 import { TagInput } from "../components/ui/tag-input";
+import { fmtTs as fmtTsSafe } from "../lib/log-format";
+
+export function meta() {
+	return [{ title: "API Key Details | UniRoute" }];
+}
 
 export function loader({ params }: Route.LoaderArgs) {
 	const id = Number(params.id);
@@ -91,14 +97,23 @@ function parseNum(form: FormData, name: string): number | undefined {
 	return Number.isFinite(n) ? n : undefined;
 }
 
-function parseDate(form: FormData, name: string): number | undefined {
+function parseNullableNum(form: FormData, name: string): number | null {
 	const raw = String(form.get(name) ?? "").trim();
-	if (!raw) return undefined;
+	if (!raw) return null;
+	const n = Number(raw);
+	return Number.isFinite(n) ? n : null;
+}
+
+function parseNullableDate(form: FormData, name: string): number | null {
+	const raw = String(form.get(name) ?? "").trim();
+	if (!raw) return null;
 	const t = new Date(raw).getTime();
-	return Number.isFinite(t) ? Math.floor(t / 1000) : undefined;
+	return Number.isFinite(t) ? Math.floor(t / 1000) : null;
 }
 
 export async function action({ request, params }: Route.ActionArgs) {
+	const denied = requireSession(request);
+	if (denied) return denied;
 	const form = await request.formData();
 	const intent = String(form.get("intent"));
 	const id = Number(params.id);
@@ -119,7 +134,7 @@ export async function action({ request, params }: Route.ActionArgs) {
 	}
 	if (intent === "update") {
 		const accessHoursEnabled = form.get("access_enabled") === "1";
-		const accessHours: AccessHoursConfig | undefined =
+		const accessHours: AccessHoursConfig | null =
 			accessHoursEnabled ||
 			form.get("access_timezone") ||
 			form.get("access_days") ||
@@ -134,7 +149,7 @@ export async function action({ request, params }: Route.ActionArgs) {
 							String(form.get("access_start") ?? "").trim() || undefined,
 						end_time: String(form.get("access_end") ?? "").trim() || undefined,
 					}
-				: undefined;
+				: null;
 		const budget: BudgetConfig | undefined = {
 			monthly: parseNum(form, "budget_monthly"),
 			daily: parseNum(form, "budget_daily"),
@@ -156,15 +171,15 @@ export async function action({ request, params }: Route.ActionArgs) {
 			blockedProviders: parseList(form, "blocked_providers"),
 			budget,
 			quota,
-			alertThreshold: parseNum(form, "alert_threshold"),
+			alertThreshold: parseNullableNum(form, "alert_threshold"),
 			autoBlock: form.get("auto_block") === "1",
 			ipWhitelist: parseList(form, "ip_whitelist"),
 			ipBlacklist: parseList(form, "ip_blacklist"),
 			strictIp: form.get("strict_ip") === "1",
 			accessHours,
-			expiresAt: parseDate(form, "expires_at"),
-			rotationIntervalDays: parseNum(form, "rotation_interval_days"),
-			gracePeriodDays: parseNum(form, "grace_period_days"),
+			expiresAt: parseNullableDate(form, "expires_at"),
+			rotationIntervalDays: parseNullableNum(form, "rotation_interval_days"),
+			gracePeriodDays: parseNullableNum(form, "grace_period_days"),
 			webhookUrl: String(form.get("webhook_url") ?? "").trim() || null,
 		});
 		return { notice: { ok: true, message: "API key updated." } };
@@ -187,8 +202,8 @@ const STATUS_LABEL: Record<KeyStatus, string> = {
 };
 
 function fmtTs(ts: number | null | undefined): string {
-	if (!ts) return "—";
-	return new Date(ts * 1000).toLocaleString();
+	if (!ts) return "-";
+	return fmtTsSafe(ts);
 }
 
 function toDateInput(d: Date): string {
@@ -241,6 +256,7 @@ export default function KeyDetail({
 		if (notice === lastNoticeRef.current) return;
 		lastNoticeRef.current = notice;
 		if (notice) {
+			if (notice.ok) setEditing(false);
 			toast({
 				title: notice.ok ? "Done" : "Action failed",
 				description: notice.message,
@@ -256,7 +272,7 @@ export default function KeyDetail({
 
 	const maskedKey = `${key.key_prefix}…${key.key_hash.slice(0, 6)}`;
 	const subtitle = key.description
-		? `${maskedKey} — ${key.description}`
+		? `${maskedKey} · ${key.description}`
 		: maskedKey;
 
 	const handleRotate = async (e: React.FormEvent<HTMLFormElement>) => {
@@ -295,21 +311,13 @@ export default function KeyDetail({
 
 	return (
 		<div>
-			<Link
-				to="/api-manager"
-				prefetch="render"
-				className="mb-4 inline-flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
-			>
-				<ArrowLeft size={14} /> API Manager
-			</Link>
-
 			<PageHeader
 				title={key.name}
 				icon={<KeyRound size={20} />}
 				subtitle={subtitle}
-				actions={
-					<Badge tone={STATUS_TONE[status]}>{STATUS_LABEL[status]}</Badge>
-				}
+				backTo="/api-manager"
+				backLabel="Back to API Keys"
+				badge={<Badge tone={STATUS_TONE[status]} dot>{STATUS_LABEL[status]}</Badge>}
 			/>
 
 			<div className="mb-6 flex flex-wrap items-center gap-2">
@@ -322,7 +330,7 @@ export default function KeyDetail({
 				</Button>
 				<a
 					href={`/api-manager/${key.id}/export`}
-					className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-sm font-medium text-foreground hover:bg-muted"
+					className={buttonClass("outline", "md")}
 				>
 					<Download size={14} /> Download Logs
 				</a>
@@ -356,13 +364,17 @@ export default function KeyDetail({
 			</div>
 
 			{editing ? (
-				<EditKeyForm data={key} options={structuredSuggestions} />
+				<EditKeyForm
+					data={key}
+					options={structuredSuggestions}
+					onCancel={() => setEditing(false)}
+				/>
 			) : null}
 
 			{rotated ? (
 				<div className="mb-4 rounded-lg border border-warning/30 bg-warning/10 p-4 text-sm">
 					<p className="font-semibold text-foreground">
-						New key — copy it now (it won't be shown again):
+						New key (copy it now, it will not be shown again):
 					</p>
 					<div className="mt-2 flex items-center gap-2">
 						<code className="break-all rounded bg-surface-2 px-3 py-2 font-mono text-xs text-foreground">
@@ -413,7 +425,7 @@ export default function KeyDetail({
 							value={
 								month.requests > 0
 									? `$${(month.cost / month.requests).toFixed(6)}`
-									: "—"
+									: "-"
 							}
 						/>
 					</div>
@@ -482,7 +494,7 @@ export default function KeyDetail({
 							value={
 								key.grace_period_days != null
 									? `${key.grace_period_days}d`
-									: "—"
+									: "-"
 							}
 						/>
 						<Row label="Webhook" value={key.webhook_url ?? "none"} />
@@ -505,7 +517,7 @@ export default function KeyDetail({
 						description="No audit events recorded for this key."
 					/>
 				) : (
-					<Table>
+					<Table className="min-w-[680px]">
 						<THead>
 							<tr>
 								<THeadCell>Time</THeadCell>
@@ -514,7 +526,7 @@ export default function KeyDetail({
 								<THeadCell>Provider</THeadCell>
 								<THeadCell>Status</THeadCell>
 								<THeadCell>Tokens</THeadCell>
-								<THeadCell className="pr-0">Cost</THeadCell>
+								<THeadCell>Cost</THeadCell>
 							</tr>
 						</THead>
 						<tbody>
@@ -524,14 +536,14 @@ export default function KeyDetail({
 										{fmtTs(a.created_at)}
 									</TCell>
 									<TCell className="text-foreground">{shortAction(a)}</TCell>
-									<TCell className="text-foreground">{a.model ?? "—"}</TCell>
+									<TCell className="text-foreground">{a.model ?? "-"}</TCell>
 									<TCell className="text-foreground">
-										{a.provider_id ?? "—"}
+										{a.provider_id ?? "-"}
 									</TCell>
-									<TCell className="text-foreground">{a.status ?? "—"}</TCell>
-									<TCell className="text-foreground">{a.tokens ?? "—"}</TCell>
-									<TCell className="pr-0 text-foreground">
-										{a.cost != null ? `$${a.cost.toFixed(6)}` : "—"}
+									<TCell className="text-foreground">{a.status ?? "-"}</TCell>
+									<TCell className="text-foreground">{a.tokens ?? "-"}</TCell>
+									<TCell className="text-foreground">
+										{a.cost != null ? `$${a.cost.toFixed(6)}` : "-"}
 									</TCell>
 								</TRow>
 							))}
@@ -568,31 +580,40 @@ function DailyBar({
 }: {
 	data: Array<{ date: string; requests: number; cost: number }>;
 }) {
+	const max = Math.max(1, ...data.map((x) => x.requests));
 	return (
 		<div className="mt-4">
 			<h3 className="mb-2 text-sm font-semibold text-muted-foreground">
-				Requests — last 30 days
+				Requests (last 30 days)
 			</h3>
 			<svg
-				viewBox="0 0 560 120"
+				viewBox="0 0 560 124"
 				className="w-full"
 				role="img"
 				aria-label="Daily request volume for the last 30 days"
 			>
+				<line
+					x1={0}
+					y1={110}
+					x2={560}
+					y2={110}
+					stroke="currentColor"
+					strokeOpacity={0.14}
+					strokeWidth={1}
+				/>
 				{data.map((d, i) => {
-					const max = Math.max(1, ...data.map((x) => x.requests));
-					const h = (d.requests / max) * 96;
+					const h = d.requests > 0 ? Math.max(4, (d.requests / max) * 96) : 2;
 					return (
 						<g key={d.date}>
 							<rect
-								x={i * 18}
-								y={108 - h}
+								x={i * 18 + 2}
+								y={110 - h}
 								width={12}
 								height={h}
-								rx={2}
-								className="fill-primary"
+								rx={3}
+								className={d.requests > 0 ? "fill-primary" : "fill-muted-foreground/25"}
 							>
-								<title>{`${d.date}: ${d.requests} req $${d.cost.toFixed(4)}`}</title>
+								<title>{`${d.date}: ${d.requests} req · $${d.cost.toFixed(4)}`}</title>
 							</rect>
 						</g>
 					);
@@ -605,9 +626,11 @@ function DailyBar({
 function EditKeyForm({
 	data,
 	options,
+	onCancel,
 }: {
 	data: ClientKey;
 	options: TagSuggestion[];
+	onCancel: () => void;
 }) {
 	const [allowedModels, setAllowedModels] = useState(
 		data.allowed_models?.join(", ") ?? "",
@@ -618,7 +641,7 @@ function EditKeyForm({
 	return (
 		<Form
 			method="post"
-			className="mb-6 grid grid-cols-1 gap-3 rounded-xl border border-border bg-surface p-5 shadow-sm sm:grid-cols-2"
+			className="glass-panel mb-6 grid grid-cols-1 gap-3 p-5 sm:grid-cols-2"
 		>
 			<input type="hidden" name="intent" value="update" />
 			<div>
@@ -908,7 +931,10 @@ function EditKeyForm({
 					Enable access hours
 				</label>
 			</div>
-			<div className="sm:col-span-2 flex justify-end gap-2">
+			<div className="flex justify-end gap-2 border-t border-border pt-3 sm:col-span-2">
+				<Button type="button" variant="outline" onClick={onCancel}>
+					Cancel
+				</Button>
 				<Button type="submit">Save Changes</Button>
 			</div>
 		</Form>

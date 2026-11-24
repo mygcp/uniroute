@@ -1,5 +1,5 @@
 import { memo, type ReactNode } from "react";
-import { Inbox } from "lucide-react";
+import { Inbox, Pause, Play } from "lucide-react";
 import type { LogEvent } from "../hooks/use-realtime-logs";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
@@ -14,19 +14,14 @@ type Props = {
   scrollRef: React.RefObject<HTMLDivElement | null>;
   emptyMessage: string;
   renderRow: (event: LogEvent) => ReactNode;
-  /** Baris request in-flight (loading) yang tampil di atas log. */
   headerRows?: ReactNode;
+  columnHeader?: ReactNode;
 };
 
 function keyOf(log: LogEvent): string {
   return String(log.id ?? log.created_at);
 }
 
-/**
- * Memoized per-row wrapper: during realtime event bursts only rows whose
- * props actually change (new events, selection toggles) re-render.
- * `renderRow` must be referentially stable (useCallback in the page).
- */
 const RowSlot = memo(function RowSlot({
   render,
   log,
@@ -47,47 +42,52 @@ export function LogViewer({
   emptyMessage,
   renderRow,
   headerRows,
+  columnHeader,
 }: Props) {
   return (
     <>
       {!connected ? (
-        <div className="mb-3 rounded-lg border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-warning">
-          Connection to live logs lost — reconnecting…
+        <div
+          role="status"
+          className="mb-3 rounded-xl border border-warning/35 bg-warning/10 px-3.5 py-2 text-xs font-medium text-warning"
+        >
+          Connection to live logs lost. Reconnecting...
         </div>
       ) : null}
 
-      <div className="flex h-[55vh] flex-col rounded-xl border border-border bg-surface shadow-sm sm:h-[calc(100vh-290px)]">
-        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-3 py-2">
-          <div className="flex items-center gap-2 sm:gap-3">
-            <span className="text-sm font-medium text-muted-foreground">
-              {logs.length} event
+      <div className="glass-panel flex h-[62vh] flex-col overflow-hidden sm:h-[calc(100vh-285px)] sm:min-h-[420px]">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border bg-surface-2/50 px-4 py-2.5">
+          <div className="flex items-center gap-2.5">
+            <span className="font-mono text-xs font-medium tabular-nums text-muted-foreground">
+              {logs.length.toLocaleString()} {logs.length === 1 ? "event" : "events"}
             </span>
-            <Badge
-              tone={paused ? "warning" : "success"}
-              className="inline-flex items-center gap-1.5"
-            >
-              <span
-                className={`h-1.5 w-1.5 rounded-full ${paused ? "bg-warning" : "bg-success animate-pulse"}`}
-              />
-              {paused ? "paused" : "live"}
+            <Badge tone={paused ? "warning" : "success"} dot>
+              {paused ? "Paused" : "Live"}
             </Badge>
           </div>
           <Button
             type="button"
-            variant="secondary"
+            variant="outline"
             size="sm"
             onClick={onTogglePause}
-            aria-label={paused ? "Resume" : "Pause"}
+            aria-label={paused ? "Resume live log stream" : "Pause live log stream"}
           >
+            {paused ? <Play size={13} aria-hidden="true" /> : <Pause size={13} aria-hidden="true" />}
             {paused ? "Resume" : "Pause"}
           </Button>
         </div>
 
-        <div ref={scrollRef} className="flex-1 overflow-y-auto px-2 py-1.5 sm:px-3">
+        {columnHeader ? (
+          <div className="hidden border-b border-border bg-surface-2/70 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground lg:block">
+            {columnHeader}
+          </div>
+        ) : null}
+
+        <div ref={scrollRef} className="slim-scroll flex-1 overflow-y-auto">
           {headerRows}
           {logs.length === 0 && !headerRows ? (
             <EmptyState
-              icon={<Inbox size={20} />}
+              icon={<Inbox size={22} />}
               title={type === "request" ? "No request logs" : "No proxy logs"}
               description={emptyMessage}
             />

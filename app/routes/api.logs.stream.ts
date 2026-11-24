@@ -1,7 +1,10 @@
 import type { Route } from "./+types/api.logs.stream";
+import { requireSession } from "../.server/auth";
 import { subscribe } from "../.server/log-stream";
 
 export async function loader({ request }: Route.LoaderArgs) {
+  const denied = requireSession(request);
+  if (denied) return denied;
   const encoder = new TextEncoder();
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {

@@ -1,8 +1,11 @@
 import type { Route } from "./+types/api-manager.$id.export";
+import { requireSession } from "../.server/auth";
 import { getClientKeyById } from "../.server/client-key";
 import { listAudit } from "../.server/key-audit";
 
-export function loader({ params }: Route.LoaderArgs) {
+export function loader({ request, params }: Route.LoaderArgs) {
+  const denied = requireSession(request);
+  if (denied) return denied;
   const id = Number(params.id);
   const key = getClientKeyById(id);
   if (!key) throw new Response("Not found", { status: 404 });

@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useState } from "react";
 import { decodeTheme, THEME_KEY, type Theme } from "../lib/theme";
 
 type ThemeContextValue = {
@@ -19,7 +19,9 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     const stored = decodeTheme(localStorage.getItem(THEME_KEY));
-    setTheme(stored ?? "dark");
+    const resolved = stored ?? "dark";
+    setTheme(resolved);
+    document.documentElement.classList.toggle("light", resolved === "light");
     setMounted(true);
   }, []);
 
@@ -28,9 +30,10 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     document.documentElement.classList.toggle("light", theme === "light");
   }, [theme, mounted]);
 
-  const toggle = () => {
+  const toggle = useCallback(() => {
     setTheme((t) => {
-      const next = t === "dark" ? "light" : "dark";
+      const next: Theme = t === "dark" ? "light" : "dark";
+      document.documentElement.classList.toggle("light", next === "light");
       try {
         localStorage.setItem(THEME_KEY, next);
       } catch {
@@ -38,7 +41,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
       }
       return next;
     });
-  };
+  }, []);
 
   return (
     <ThemeContext.Provider value={{ theme, toggle, mounted }}>

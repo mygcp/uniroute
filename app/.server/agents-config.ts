@@ -43,7 +43,7 @@ export const HARNESS_REGISTRY: Record<HarnessId, HarnessMeta> = {
 		id: "codex",
 		name: "OpenAI Codex CLI",
 		description:
-			"Menambah provider 'uniroute' di ~/.codex/config.toml dan mengarahkan model_provider ke UniRoute.",
+			"Adds the 'uniroute' provider in ~/.codex/config.toml and routes model_provider through UniRoute.",
 		configPath: ".codex/config.toml",
 		format: "toml",
 		docsUrl: "https://developers.openai.com/codex/config-reference",
@@ -52,7 +52,7 @@ export const HARNESS_REGISTRY: Record<HarnessId, HarnessMeta> = {
 		id: "claude-code",
 		name: "Claude Code",
 		description:
-			"Set ANTHROPIC_BASE_URL & ANTHROPIC_AUTH_TOKEN di ~/.claude/settings.json tanpa menghapus key lain.",
+			"Sets ANTHROPIC_BASE_URL & ANTHROPIC_AUTH_TOKEN in ~/.claude/settings.json without removing existing keys.",
 		configPath: path.join(".claude", "settings.json"),
 		format: "json",
 		docsUrl: "https://code.claude.com/docs/en/settings",
@@ -61,7 +61,7 @@ export const HARNESS_REGISTRY: Record<HarnessId, HarnessMeta> = {
 		id: "opencode",
 		name: "OpenCode",
 		description:
-			"Menambah custom provider 'uniroute' di ~/.config/opencode/opencode.json (hormati XDG_CONFIG_HOME).",
+			"Adds the custom 'uniroute' provider in ~/.config/opencode/opencode.json (respects XDG_CONFIG_HOME).",
 		configPath: path.join(".config", "opencode", "opencode.json"),
 		format: "json",
 		docsUrl: "https://opencode.ai/v2/docs/providers",
@@ -384,9 +384,132 @@ export function restoreBackup(
 	const dir = backupDir(id, home);
 	const src = path.join(dir, file);
 	if (!existsSync(src)) throw new ConfigError("Backup tidak ditemukan.");
+	const target = resolveConfigAbsPath(id, home);
 	const safetyBackup = createBackup(id, home);
-	copyFileSync(src, resolveConfigAbsPath(id, home));
+	mkdirSync(path.dirname(target), { recursive: true });
+	copyFileSync(src, target);
 	return { safetyBackup };
+}
+
+/* ------------------------- detect UniRoute status -------------------------- */
+
+export type UniRouteDetection = {
+	configured: boolean;
+	baseUrl: string | null;
+	model: string | null;
+};
+
+function parseTomlQuotedValue(line: string): string | null {
+	const m = line.match(/=\s*"((?:\\.|[^"\\])*)"/);
+	if (!m) return null;
+	return m[1]!.replace(/\\"/g, '"').replace(/\\\\/g, "\\");
+}
+
+/** Deteksi apakah entri UniRoute benar-benar ada di dalam isi file config. */
+export function detectUniRouteConfig(
+	id: HarnessId,
+	raw: string | null,
+): UniRouteDetection {
+	if (!raw || raw.trim() === "") {
+		return { configured: false, baseUrl: null, model: null };
+	}
+
+	if (id === "codex") {
+		const lines = raw.replace(/\r\n/g, "\n").split("\n");
+		let firstSectionIdx = lines.findIndex((l) => /^\s*\[/.test(l));
+		if (firstSectionIdx === -1) firstSectionIdx = lines.length;
+
+		let topProviderIsUniRoute = false;
+		let topModel: string | null = null;
+		for (let i = 0; i < firstSectionIdx; i++) {
+			const t = lines[i]!.trim();
+			if (/^model_provider\s*=\s*"uniroute"\s*$/.test(t)) {
+				topProviderIsUniRoute = true;
+			} else if (/^model\s*=/.test(t)) {
+				topModel = parseTomlQuotedValue(t);
+			}
+		}
+
+		const sectionIdx = lines.findIndex((l) => l.trim() === CODEX_SECTION_HEADER);
+		let baseUrl: string | null = null;
+		if (sectionIdx !== -1) {
+			for (let i = sectionIdx + 1; i < lines.length; i++) {
+				if (/^\s*\[/.test(lines[i]!)) break;
+				const t = lines[i]!.trim();
+				if (/^base_url\s*=/.test(t)) {
+					baseUrl = parseTomlQuotedValue(t);
+					break;
+				}
+			}
+		}
+
+		const configured = topProviderIsUniRoute || sectionIdx !== -1;
+		return {
+			configured,
+			baseUrl,
+			model: topProviderIsUniRoute ? topModel : null,
+		};
+	}
+
+	const meta = parseJsonMeta(raw);
+	if (!meta) return { configured: false, baseUrl: null, model: null };
+
+	if (id === "claude-code") {
+		const env =
+			meta.env && typeof meta.env === "object" && !Array.isArray(meta.env)
+				? (meta.env as Record<string, unknown>)
+				: null;
+		const baseUrl =
+			typeof env?.ANTHROPIC_BASE_URL === "string" && env.ANTHROPIC_BASE_URL.trim()
+				? env.ANTHROPIC_BASE_URL.trim()
+				: null;
+		const authToken =
+			typeof env?.ANTHROPIC_AUTH_TOKEN === "string" &&
+			env.ANTHROPIC_AUTH_TOKEN.trim()
+				? env.ANTHROPIC_AUTH_TOKEN.trim()
+				: null;
+		const model =
+			typeof env?.ANTHROPIC_MODEL === "string" && env.ANTHROPIC_MODEL.trim()
+				? env.ANTHROPIC_MODEL.trim()
+				: null;
+		return {
+			configured: Boolean(baseUrl || authToken),
+			baseUrl,
+			model,
+		};
+	}
+
+	const providers =
+		meta.providers &&
+		typeof meta.providers === "object" &&
+		!Array.isArray(meta.providers)
+			? (meta.providers as Record<string, unknown>)
+			: null;
+	const ur =
+		providers?.uniroute &&
+		typeof providers.uniroute === "object" &&
+		!Array.isArray(providers.uniroute)
+			? (providers.uniroute as Record<string, unknown>)
+			: null;
+	const settings =
+		ur?.settings &&
+		typeof ur.settings === "object" &&
+		!Array.isArray(ur.settings)
+			? (ur.settings as Record<string, unknown>)
+			: null;
+	const baseUrl =
+		typeof settings?.baseURL === "string" && settings.baseURL.trim()
+			? settings.baseURL.trim()
+			: null;
+	const model =
+		typeof meta.model === "string" && meta.model.startsWith("uniroute/")
+			? meta.model.slice("uniroute/".length)
+			: null;
+	return {
+		configured: Boolean(ur || model),
+		baseUrl,
+		model,
+	};
 }
 
 /* ------------------------- remove / reset ke default ----------------------- */
@@ -408,24 +531,31 @@ function stripCodexConfig(existing: string): {
 		"# Backup file lama tersimpan",
 		"# --- added by UniRoute ---",
 	];
-	// Bila UniRoute adalah provider aktif, nilai `model` top-level juga
-	// berasal dari Apply kami → ikut dibersihkan.
-	const hadOurProvider = /^model_provider\s*=\s*"uniroute"\s*$/m.test(existing);
-	let lines = existing.replace(/\r\n/g, "\n").split("\n").filter((l) => {
+	const rawLines = existing.replace(/\r\n/g, "\n").split("\n");
+	let firstSectionIdx = rawLines.findIndex((l) => /^\s*\[/.test(l));
+	if (firstSectionIdx === -1) firstSectionIdx = rawLines.length;
+
+	// Bila UniRoute adalah provider aktif di level top-level, nilai `model`
+	// top-level (sebelum section pertama) juga berasal dari Apply kami.
+	const hadOurProvider = rawLines
+		.slice(0, firstSectionIdx)
+		.some((l) => /^model_provider\s*=\s*"uniroute"\s*$/.test(l.trim()));
+
+	const lines = rawLines.filter((l, idx) => {
 		const t = l.trim();
 		if (OUR_COMMENTS.some((c) => t.startsWith(c))) return false;
-		if (/^model_provider\s*=\s*"uniroute"\s*$/.test(t)) return false;
-		if (hadOurProvider && /^model\s*=\s*"/.test(t)) return false;
+		if (idx < firstSectionIdx) {
+			if (/^model_provider\s*=\s*"uniroute"\s*$/.test(t)) return false;
+			if (hadOurProvider && /^model\s*=\s*"/.test(t)) return false;
+		}
 		return true;
 	});
 
 	// Buang blok section [model_providers.uniroute] (sampai header berikutnya).
-	const sectionIdx = lines.findIndex((l) =>
-		/^\[model_providers\.uniroute\]\s*$/.test(l),
-	);
+	const sectionIdx = lines.findIndex((l) => l.trim() === CODEX_SECTION_HEADER);
 	if (sectionIdx !== -1) {
 		let end = sectionIdx + 1;
-		while (end < lines.length && !/^\s*\[/.test(lines[end])) end++;
+		while (end < lines.length && !/^\s*\[/.test(lines[end]!)) end++;
 		lines.splice(sectionIdx, end - sectionIdx);
 	}
 
@@ -491,7 +621,10 @@ export function removeUniRouteFromConfig(
 	const target = resolveConfigAbsPath(id, home);
 	const existing = readConfig(id, home);
 	if (existing === null || existing.trim() === "") {
-		throw new ConfigError("Nothing to remove — no config file exists.");
+		throw new ConfigError("Nothing to remove: no config file exists.");
+	}
+	if (!detectUniRouteConfig(id, existing).configured) {
+		throw new ConfigError("UniRoute is not configured in this file.");
 	}
 	const safetyBackup = createBackup(id, home);
 
@@ -583,11 +716,16 @@ export function installMcp(
     const safetyBackup = createBackup("codex", home);
     const body = [
       "[mcp_servers.uniroute]",
-      `command = ${tomlEscape(cmd[0] ?? "bun")}`,
-      `args = [${cmd.slice(1).map(tomlEscape).join(", ")}]`,
+      `command = "${tomlEscape(cmd[0] ?? "bun")}"`,
+      `args = [${cmd.slice(1).map((a) => `"${tomlEscape(a)}"`).join(", ")}]`,
     ];
-    const merged = upsertTomlSection(existing.split("\n"), body[0]!, body.slice(1));
-    atomicWrite(target, `${merged.join("\n").replace(/\n{3,}/g, "\n\n")}\n`);
+    const merged = upsertTomlSection(
+      existing.replace(/\r\n/g, "\n").split("\n"),
+      body[0]!,
+      body,
+    );
+    const out = merged.join("\n").replace(/\n{3,}/g, "\n\n").replace(/^\n+/, "");
+    atomicWrite(target, `${out}${out.endsWith("\n") ? "" : "\n"}`);
     return { path: target, safetyBackup, fileDeleted: false };
   }
 
@@ -631,7 +769,14 @@ export function removeMcp(
 
   if (id === "codex") {
     createBackup(id, home);
-    atomicWrite(target, removeTomlSection(raw.split("\n"), "[mcp_servers.uniroute]").join("\n"));
+    const cleaned = removeTomlSection(
+      raw.replace(/\r\n/g, "\n").split("\n"),
+      "[mcp_servers.uniroute]",
+    )
+      .join("\n")
+      .replace(/\n{3,}/g, "\n\n")
+      .replace(/^\n+/, "");
+    atomicWrite(target, cleaned.trim() ? `${cleaned.trimEnd()}\n` : "");
     return { removed: true };
   }
 
@@ -648,7 +793,7 @@ export function removeMcp(
     const servers = (mcp?.servers ?? null) as Record<string, unknown> | null;
     if (servers) {
       delete servers.uniroute;
-      if (Object.keys(servers).length === 0 && mcp) delete obj.mcp;
+      if (Object.keys(servers).length === 0 && mcp) delete mcp.servers;
       if (mcp && Object.keys(mcp).length === 0) delete obj.mcp;
     }
   }
@@ -725,17 +870,29 @@ const HARNESS_BINS: Record<HarnessId, string[]> = {
 	opencode: ["opencode", "opencode2"],
 };
 
-/** Cari executable di PATH (tanpa spawn proses). */
+/** Cari executable di PATH (tanpa spawn proses; mendukung PATHEXT di Windows). */
 function findOnPath(names: string[]): string | null {
 	const dirs = (process.env.PATH ?? "").split(path.delimiter).filter(Boolean);
+	const isWin = process.platform === "win32";
+	const exts = isWin
+		? (process.env.PATHEXT ?? ".EXE;.CMD;.BAT;.COM")
+				.split(";")
+				.filter(Boolean)
+				.map((e) => e.toLowerCase())
+		: [];
 	for (const dir of dirs) {
 		for (const name of names) {
-			const full = path.join(dir, name);
-			try {
-				accessSync(full, fsConstants.X_OK);
-				if (statSync(full).isFile()) return full;
-			} catch {
-				/* not here */
+			const candidates = isWin
+				? [name, ...exts.map((ext) => `${name}${ext}`)]
+				: [name];
+			for (const candidate of candidates) {
+				const full = path.join(dir, candidate);
+				try {
+					accessSync(full, isWin ? fsConstants.F_OK : fsConstants.X_OK);
+					if (statSync(full).isFile()) return full;
+				} catch {
+					/* not here */
+				}
 			}
 		}
 	}
@@ -749,12 +906,16 @@ function detectCli(id: HarnessId): { installed: boolean; bin: string | null } {
 
 const REVEAL_SETTING = "allow_api_key_reveal";
 
+export function isKeyRevealLockedByEnv(): boolean {
+	return process.env.ALLOW_API_KEY_REVEAL === "1";
+}
+
 /**
  * Reveal key diizinkan bila env `ALLOW_API_KEY_REVEAL=1` ATAU diaktifkan
  * lewat toggle web (tabel settings) — pola sama dengan require_api_key.
  */
 export function isKeyRevealAllowed(): boolean {
-	if (process.env.ALLOW_API_KEY_REVEAL === "1") return true;
+	if (isKeyRevealLockedByEnv()) return true;
 	const row = query("SELECT value FROM settings WHERE key = ?").get(
 		REVEAL_SETTING,
 	) as { value: string } | undefined;
@@ -772,6 +933,10 @@ export function setKeyRevealAllowed(enabled: boolean): void {
 export type HarnessStatus = HarnessMeta & {
 	absPath: string;
 	exists: boolean;
+	/** true hanya jika entri konfigurasi UniRoute benar-benar ada di file config. */
+	unirouteConfigured: boolean;
+	unirouteBaseUrl: string | null;
+	unirouteModel: string | null;
 	size: number | null;
 	updatedAt: number | null;
 	backups: BackupInfo[];
@@ -785,16 +950,26 @@ function getStatus(id: HarnessId, home?: string): HarnessStatus {
 	const exists = existsSync(absPath);
 	let size: number | null = null;
 	let updatedAt: number | null = null;
+	let raw: string | null = null;
 	if (exists) {
 		const st = statSync(absPath);
 		size = st.size;
 		updatedAt = st.mtimeMs;
+		try {
+			raw = readFileSync(absPath, "utf8");
+		} catch {
+			raw = null;
+		}
 	}
+	const detected = detectUniRouteConfig(id, raw);
 	const cli = detectCli(id);
 	return {
 		...HARNESS_REGISTRY[id],
 		absPath,
 		exists,
+		unirouteConfigured: detected.configured,
+		unirouteBaseUrl: detected.baseUrl,
+		unirouteModel: detected.model,
 		size,
 		updatedAt,
 		backups: listBackups(id, home),

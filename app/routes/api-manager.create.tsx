@@ -1,7 +1,12 @@
-import { Form } from "react-router";
+import { Form, Link, useNavigation } from "react-router";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { Route } from "./+types/api-manager.create";
 import { KeyRound } from "lucide-react";
+
+export function meta() {
+	return [{ title: "Create API Key | UniRoute" }];
+}
+import { requireSession } from "../.server/auth";
 import {
 	createClientKey,
 	type CreateClientKeyInput,
@@ -15,7 +20,8 @@ import {
 import { listTemplates, type KeyTemplate } from "../.server/key-templates";
 import { PageHeader } from "../components/ui/page-header";
 import { Card } from "../components/ui/card";
-import { Button } from "../components/ui/button";
+import { Button, buttonClass } from "../components/ui/button";
+import { Spinner } from "../components/ui/feedback";
 import { Input, Label, Select, Checkbox } from "../components/ui/field";
 import { CopyButton } from "../components/ui/copy-button";
 import { TagInput } from "../components/ui/tag-input";
@@ -36,6 +42,8 @@ export function loader() {
 }
 
 export async function action({ request }: Route.ActionArgs) {
+	const denied = requireSession(request);
+	if (denied) return denied;
 	const form = await request.formData();
 	const parseList = (name: string): string[] | null => {
 		const raw = String(form.get(name) ?? "").trim();
@@ -151,11 +159,13 @@ export async function action({ request }: Route.ActionArgs) {
 }
 
 function parseListUnchecked(form: FormData, name: string): string[] {
-	const raw = String(form.get(name) ?? "").trim();
-	if (!raw) return [];
-	return raw
-		.split(/[\n,]+/)
-		.map((s) => s.trim())
+	return form
+		.getAll(name)
+		.flatMap((v) =>
+			String(v ?? "")
+				.split(/[\n,]+/)
+				.map((s) => s.trim()),
+		)
 		.filter(Boolean);
 }
 
@@ -182,7 +192,7 @@ export default function CreateKey({
 	const [allowedModels, setAllowedModels] = useState("");
 	const [blockedModels, setBlockedModels] = useState("");
 	const created = actionData as
-		| { newlyCreatedKey?: string; name?: string; error?: string }
+		| { id?: number; newlyCreatedKey?: string; name?: string; error?: string }
 		| undefined;
 
 	useEffect(() => {
@@ -267,7 +277,11 @@ export default function CreateKey({
 		set("allowed_providers", template.allowedProviders?.join(", ") ?? "");
 		set("blocked_providers", template.blockedProviders?.join(", ") ?? "");
 		setBlockedModels(template.blockedModels?.join(", ") ?? "");
+		toast({ title: "Template applied", description: "Form fields have been prefilled.", variant: "info" });
 	};
+
+	const navigation = useNavigation();
+	const submitting = navigation.state !== "idle";
 
 	return (
 		<div className="mx-auto max-w-3xl">
@@ -275,18 +289,34 @@ export default function CreateKey({
 				title="Create New API Key"
 				icon={<KeyRound size={20} />}
 				subtitle="Generate a key with budgets, quotas, and access controls."
+				backTo="/api-manager"
+				backLabel="Back to API Keys"
 			/>
 
 			{created?.newlyCreatedKey ? (
-				<div className="mb-6 rounded-lg border border-warning/30 bg-warning/10 p-4 text-sm">
+				<div className="mb-6 rounded-xl border border-warning/35 bg-warning/10 p-4 text-sm">
 					<p className="font-semibold text-foreground">
-						Key created — copy it now, it won't be shown again.
+						Key created. Copy it now, it will not be shown again.
 					</p>
 					<div className="mt-2 flex items-start gap-2">
-						<code className="break-all rounded bg-surface-2 px-3 py-2 font-mono text-xs text-foreground">
+						<code className="break-all rounded-lg border border-border bg-surface px-3 py-2 font-mono text-xs text-foreground">
 							{created.newlyCreatedKey}
 						</code>
 						<CopyButton text={created.newlyCreatedKey} label="Copy" />
+					</div>
+					<div className="mt-3 flex flex-wrap gap-2">
+						<Link
+							to={`/api-manager/${created.id}`}
+							className={buttonClass("primary", "sm")}
+						>
+							View key details
+						</Link>
+						<Link
+							to="/api-manager"
+							className={buttonClass("outline", "sm")}
+						>
+							Back to API Keys
+						</Link>
 					</div>
 				</div>
 			) : null}
@@ -301,7 +331,7 @@ export default function CreateKey({
 							if (t) applyTemplate(t.config);
 						}}
 					>
-						<option value="">— none —</option>
+						<option value="">None</option>
 						{templates.map((t) => (
 							<option key={t.id} value={t.id}>
 								{t.name}
@@ -562,14 +592,14 @@ export default function CreateKey({
 					</div>
 					<label className="mt-3 flex items-center gap-2 text-sm">
 						<Checkbox name="strict_ip" value="1" />
-						Strict IP — only whitelisted IPs may access
+						Strict IP (only whitelisted IPs may access)
 					</label>
 				</Section>
 
 				<Section title="Time-Based Access">
-					<label className="mb-2 flex items-center gap-2 text-sm">
-						<Checkbox name="access_enabled" value="1" defaultChecked />
-						Enable access hours
+					<label className="mb-3 flex cursor-pointer items-center gap-2 text-sm">
+						<Checkbox name="access_enabled" value="1" />
+						Restrict key to specific access hours
 					</label>
 					<div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
 						<div>
@@ -577,7 +607,7 @@ export default function CreateKey({
 							<Input
 								id="access_timezone"
 								name="access_timezone"
-								placeholder="Europe/London"
+								placeholder="UTC"
 								autoComplete="off"
 							/>
 						</div>
@@ -612,13 +642,17 @@ export default function CreateKey({
 				</Section>
 
 				<div className="flex items-center justify-end gap-3">
-					<a
-						href="/api-manager"
-						className="inline-flex items-center rounded-lg border border-border px-4 py-2 text-sm font-medium text-foreground hover:bg-muted"
+					<Link
+						to="/api-manager"
+						prefetch="intent"
+						className={buttonClass("outline", "md")}
 					>
 						Cancel
-					</a>
-					<Button type="submit">Create API Key</Button>
+					</Link>
+					<Button type="submit" disabled={submitting}>
+						{submitting ? <Spinner size={14} /> : null}
+						{submitting ? "Creating…" : "Create API Key"}
+					</Button>
 				</div>
 			</Form>
 		</div>

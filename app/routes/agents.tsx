@@ -1,7 +1,19 @@
 import { memo, useEffect, useRef, useState } from "react";
-import { useFetcher } from "react-router";
+import { Link, useFetcher } from "react-router";
 import type { Route } from "./+types/agents";
-import { Bot, ExternalLink, FileClock, RotateCcw, Trash2 } from "lucide-react";
+import {
+  ArrowRight,
+  Bot,
+  Cable,
+  ExternalLink,
+  FileCode2,
+  FileClock,
+  KeyRound,
+  RotateCcw,
+  ShieldCheck,
+  Trash2,
+  X,
+} from "lucide-react";
 import {
   HARNESS_REGISTRY,
   buildConfig,
@@ -10,6 +22,7 @@ import {
   installMcp,
   isHarnessId,
   isKeyRevealAllowed,
+  isKeyRevealLockedByEnv,
   isMcpInstalled,
   readBackup,
   readConfig,
@@ -27,15 +40,20 @@ import { getStructuredSuggestions } from "../.server/suggest";
 import { getSessionToken, isValid } from "../.server/auth";
 import { PageHeader } from "../components/ui/page-header";
 import { Card } from "../components/ui/card";
-import { Button } from "../components/ui/button";
+import { Button, buttonClass } from "../components/ui/button";
 import { Badge } from "../components/ui/badge";
 import { Input, Label, Select } from "../components/ui/field";
-import { Combobox } from "../components/combobox";
+import { Table, TCell, THead, THeadCell, TRow } from "../components/ui/table";
+import { Combobox } from "../components/ui/combobox";
 import { useConfirm } from "../components/ui/confirm-dialog";
 import { Toggle } from "../components/ui/toggle";
 import { Spinner } from "../components/ui/feedback";
 import { useToast } from "../components/ui/toast";
 import { fmtTs } from "../lib/log-format";
+
+export function meta() {
+  return [{ title: "AI Agents | UniRoute" }];
+}
 
 /* --------------------------------- loader --------------------------------- */
 
@@ -43,6 +61,7 @@ type KeyOption = { id: number; name: string; prefix: string; revealable: boolean
 
 export function loader() {
   const revealAllowed = isKeyRevealAllowed();
+  const revealLockedByEnv = isKeyRevealLockedByEnv();
   const keys: KeyOption[] = listClientKeys()
     .filter((k) => k.is_active === 1)
     .map((k) => ({
@@ -56,6 +75,7 @@ export function loader() {
     baseUrl: process.env.BASE_URL || "http://localhost:3000",
     keys,
     revealAllowed,
+    revealLockedByEnv,
     modelSuggestions: [...new Set(getStructuredSuggestions().map((s) => s.value))],
     mcp: {
       codex: isMcpInstalled("codex"),
@@ -69,13 +89,14 @@ export function loader() {
 /* --------------------------------- action --------------------------------- */
 
 type KeyResolution =
-  | { ok: true; key: string; created?: { id: number; name: string } }
+  | { ok: true; key: string; created?: { id: number; name: string; key: string } }
   | { ok: false; error: string };
 
 function resolveApiKey(
   form: FormData,
   harnessName: string,
   revealAllowed: boolean,
+  isPreview: boolean,
 ): KeyResolution {
   const mode = String(form.get("key_mode") ?? "new");
   if (mode === "manual") {
@@ -103,12 +124,16 @@ function resolveApiKey(
       return { ok: false, error: "Failed to decrypt the selected key." };
     }
   }
+  // Preview should never mutate SQLite or create stray keys.
+  if (isPreview) {
+    return { ok: true, key: "sk-<new-key-generated-on-apply>" };
+  }
   // default: create a fresh key dedicated to this harness
   const name =
     String(form.get("new_key_name") ?? "").trim() || `${harnessName} (UniRoute)`;
   try {
     const created = createClientKey({ name, prefix: "sk-" });
-    return { ok: true, key: created.key, created: { id: created.id, name } };
+    return { ok: true, key: created.key, created: { id: created.id, name, key: created.key } };
   } catch {
     return { ok: false, error: "Failed to create a new API key." };
   }
@@ -146,15 +171,18 @@ export async function action({ request }: Route.ActionArgs) {
 
   // Global toggle: izinkan memakai key tersimpan (dekripsi) dari halaman ini.
   if (intent === "set-reveal") {
+    if (isKeyRevealLockedByEnv()) {
+      return {
+        ok: false as const,
+        error: "Controlled by ALLOW_API_KEY_REVEAL=1 environment variable.",
+      };
+    }
     setKeyRevealAllowed(form.get("enabled") === "1");
     return { ok: true as const, revealSet: true };
   }
 
   // Registrasi / copot MCP server UniRoute ke config agent.
   if (intent === "mcp-install" || intent === "mcp-remove") {
-    if (!isValid(getSessionToken(request))) {
-      return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
-    }
     const harness = String(form.get("harness") ?? "");
     if (harness !== "codex" && harness !== "claude-code" && harness !== "opencode") {
       return Response.json({ ok: false, error: "unknown harness" }, { status: 400 });
@@ -176,6 +204,7 @@ export async function action({ request }: Route.ActionArgs) {
     intent === "restore" ||
     intent === "delete_backup" ||
     intent === "read_backup" ||
+    intent === "read_current" ||
     intent === "remove"
   ) {
     const harness = String(form.get("harness") ?? "");
@@ -195,6 +224,20 @@ export async function action({ request }: Route.ActionArgs) {
       }
       if (intent === "read_backup") {
         return { ok: true as const, backupContent: readBackup(harness, file), file };
+      }
+      if (intent === "read_current") {
+        const current = readConfig(harness);
+        if (current === null) {
+          return Response.json(
+            { ok: false, error: "No config file exists on disk yet." },
+            { status: 404 },
+          );
+        }
+        return {
+          ok: true as const,
+          currentContent: current,
+          file: HARNESS_REGISTRY[harness].configPath,
+        };
       }
       if (intent === "remove") {
         const result = removeUniRouteFromConfig(harness);
@@ -227,7 +270,7 @@ export async function action({ request }: Route.ActionArgs) {
   const urlError = validateBaseUrl(base_url);
   if (urlError) return { ok: false as const, error: urlError };
 
-  const resolved = resolveApiKey(form, meta.name, isKeyRevealAllowed());
+  const resolved = resolveApiKey(form, meta.name, isKeyRevealAllowed(), intent === "preview");
   if (!resolved.ok) return { ok: false as const, error: resolved.error };
   const apiKey = resolved.key;
   const created = resolved.created ?? null;
@@ -314,33 +357,54 @@ const HarnessCard = memo(function HarnessCard({
   const [keyMode, setKeyMode] = useState<"new" | "existing" | "manual">("new");
   const [authMode, setAuthMode] = useState<"token" | "env">("token");
   const [model, setModel] = useState("");
+  const [activeFeedback, setActiveFeedback] = useState<"main" | "backup" | null>(null);
+  const [viewerClosed, setViewerClosed] = useState(false);
   const mainFetcher = useFetcher<MainResult>();
   const backupFetcher = useFetcher<MainResult>();
   const busy =
     mainFetcher.state !== "idle" || backupFetcher.state !== "idle";
 
-  const data = mainFetcher.data ?? null;
-  const backupData = backupFetcher.data ?? null;
+  const data = activeFeedback === "main" ? (mainFetcher.data ?? null) : null;
+  const backupData = activeFeedback === "backup" ? (backupFetcher.data ?? null) : null;
   const { toast } = useToast();
   const lastMainRef = useRef<MainResult | null>(null);
   const lastBackupRef = useRef<MainResult | null>(null);
   const lastMainIntentRef = useRef<string | null>(null);
 
-  // Remember which intent (preview vs apply) was submitted so failures can
-  // be labeled — formData is only populated while the fetcher is busy.
+  // Remember which fetcher / intent was last submitted so stale banners from
+  // the other fetcher (e.g. Apply vs Remove) never appear side-by-side.
   useEffect(() => {
     const intent = mainFetcher.formData?.get("intent");
-    if (typeof intent === "string" && intent) lastMainIntentRef.current = intent;
+    if (typeof intent === "string" && intent) {
+      lastMainIntentRef.current = intent;
+      setActiveFeedback("main");
+      setViewerClosed(false);
+    }
   }, [mainFetcher.formData]);
 
   useEffect(() => {
-    if (mainFetcher.state !== "idle" || !data) return;
-    if (lastMainRef.current === data) return;
-    lastMainRef.current = data;
-    // Success outcomes already render prominent inline boxes (applied
-    // confirmation, preview <pre>) — only failures (dull inline line) toast.
-    if (data.applied || data.previewed) return;
-    if (data.error) {
+    const intent = backupFetcher.formData?.get("intent");
+    if (typeof intent === "string" && intent) {
+      setActiveFeedback("backup");
+      setViewerClosed(false);
+    }
+  }, [backupFetcher.formData]);
+
+  useEffect(() => {
+    const raw = mainFetcher.data ?? null;
+    if (mainFetcher.state !== "idle" || !raw) return;
+    if (lastMainRef.current === raw) return;
+    lastMainRef.current = raw;
+    if (raw.applied) {
+      toast({
+        title: `${status.name} config applied`,
+        description: String(raw.path),
+        variant: "success",
+      });
+      return;
+    }
+    if (raw.previewed) return;
+    if (raw.error) {
       toast({
         title:
           lastMainIntentRef.current === "apply"
@@ -348,57 +412,69 @@ const HarnessCard = memo(function HarnessCard({
             : lastMainIntentRef.current === "preview"
               ? "Preview failed"
               : "Config action failed",
-        description: String(data.error),
+        description: String(raw.error),
         variant: "error",
       });
     }
-  }, [mainFetcher.state, data, toast]);
+  }, [mainFetcher.state, mainFetcher.data, status.name, toast]);
 
   useEffect(() => {
-    if (backupFetcher.state !== "idle" || !backupData) return;
-    if (lastBackupRef.current === backupData) return;
-    lastBackupRef.current = backupData;
-    // read_backup renders its content inline in <details> — skip it.
-    if (backupData.backupContent) return;
-    if (backupData.restored) {
+    const raw = backupFetcher.data ?? null;
+    if (backupFetcher.state !== "idle" || !raw) return;
+    if (lastBackupRef.current === raw) return;
+    lastBackupRef.current = raw;
+    if (raw.backupContent || raw.currentContent) return;
+    if (raw.restored) {
       toast({
         title: "Backup restored",
-        description: `Restored ${String(backupData.file)}`,
+        description: `Restored ${String(raw.file)}`,
         variant: "success",
       });
-    } else if (backupData.removed) {
+    } else if (raw.removed) {
       toast({
         title: "UniRoute config removed",
-        description: String(backupData.path),
+        description: String(raw.path),
         variant: "success",
       });
-    } else if (backupData.deletedBackup) {
+    } else if (raw.deletedBackup) {
       toast({
         title: "Backup deleted",
-        description: `Deleted ${String(backupData.deletedBackup)}`,
+        description: `Deleted ${String(raw.deletedBackup)}`,
         variant: "success",
       });
-    } else if (backupData.error) {
+    } else if (raw.error) {
       toast({
-        title: "Backup action failed",
-        description: String(backupData.error),
+        title: "Action failed",
+        description: String(raw.error),
         variant: "error",
       });
     }
-  }, [backupFetcher.state, backupData, toast]);
+  }, [backupFetcher.state, backupFetcher.data, toast]);
 
   const usableKeys = keys.filter((k) => k.revealable);
 
   return (
     <Card className="mb-6">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <h2 className="text-sm font-semibold text-foreground">{status.name}</h2>
           <Badge
-            tone={status.exists ? "success" : "neutral"}
+            tone={status.unirouteConfigured ? "success" : "neutral"}
             style="subtle"
+            dot={status.unirouteConfigured}
+            title={
+              status.unirouteConfigured
+                ? "UniRoute provider entries are active in this config file"
+                : status.exists
+                  ? "Config file exists on disk, but does not contain UniRoute entries"
+                  : "Config file has not been created yet"
+            }
           >
-            {status.exists ? "configured" : "not found"}
+            {status.unirouteConfigured
+              ? "UniRoute linked"
+              : status.exists
+                ? "File exists (not linked)"
+                : "No config file"}
           </Badge>
           <Badge
             tone={status.cliInstalled ? "success" : "warning"}
@@ -423,15 +499,31 @@ const HarnessCard = memo(function HarnessCard({
         </a>
       </div>
       <p className="mb-2 text-xs text-muted-foreground">{status.description}</p>
-      <p className="mb-4 font-mono text-xs break-all text-muted-foreground">
+      <p className="mb-3 font-mono text-xs break-all text-muted-foreground">
         {status.absPath}
         {status.exists && status.size != null ? ` · ${fmtBytes(status.size)}` : ""}
         {status.updatedAt ? ` · updated ${fmtTs(status.updatedAt)}` : ""}
       </p>
+      {status.unirouteConfigured && (status.unirouteBaseUrl || status.unirouteModel) ? (
+        <div className="mb-4 flex flex-wrap items-center gap-x-4 gap-y-1 rounded-lg border border-success/30 bg-success/10 px-3 py-2 text-xs">
+          <span className="font-medium text-success">Active UniRoute config</span>
+          {status.unirouteBaseUrl ? (
+            <span className="font-mono text-foreground">
+              endpoint: {status.unirouteBaseUrl}
+            </span>
+          ) : null}
+          {status.unirouteModel ? (
+            <span className="font-mono text-foreground">
+              model: {status.unirouteModel}
+            </span>
+          ) : null}
+        </div>
+      ) : null}
 
       <mainFetcher.Form method="post">
         <input type="hidden" name="intent" value="preview" />
         <input type="hidden" name="harness" value={status.id} />
+        <input type="hidden" name="key_mode" value={keyMode} />
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
           <div>
             <Label htmlFor={`${id}-base-url`}>Gateway base URL</Label>
@@ -450,7 +542,6 @@ const HarnessCard = memo(function HarnessCard({
               onChange={setModel}
               name="model"
               placeholder="e.g. big-pickle / combo:coding"
-              className="h-9 w-full rounded-lg border border-glass-border bg-glass-strong px-3 text-sm text-foreground shadow-[inset_0_1px_0_var(--glass-highlight)] transition-colors placeholder:text-muted-foreground focus:border-primary/40 focus:outline-none focus:ring-2 focus:ring-primary/20"
             />
           </div>
           {id === "codex" ? (
@@ -513,7 +604,7 @@ const HarnessCard = memo(function HarnessCard({
               </Select>
               {!revealAllowed ? (
                 <p className="mt-1 text-xs text-warning">
-                  Reusing stored keys is disabled — flip the “Reuse stored keys” toggle above
+                  Reusing stored keys is disabled. Flip the "Reuse stored keys" toggle above
                   (or set ALLOW_API_KEY_REVEAL=1).
                 </p>
               ) : usableKeys.length === 0 ? (
@@ -557,9 +648,10 @@ const HarnessCard = memo(function HarnessCard({
               void confirm({
                 title: `Apply ${status.name} config?`,
                 description: status.exists
-                  ? `The existing file will be backed up to ~/.uniroute/backups/${status.id}/ first — you can restore it anytime.`
+                  ? `The existing file will be backed up to ~/.uniroute/backups/${status.id}/ first. You can restore it anytime.`
                   : `A new config will be written to ${status.absPath}.`,
-                variant: "danger",
+                confirmLabel: "Apply to disk",
+                variant: "primary",
               }).then((ok) => {
                 if (!ok) return;
                 const fd = new FormData(formEl);
@@ -576,17 +668,38 @@ const HarnessCard = memo(function HarnessCard({
             type="button"
             variant="outline"
             disabled={busy || !status.exists}
-            className="gap-1.5 text-danger"
+            className="gap-1.5"
             title={
               status.exists
+                ? "Inspect the current config file on disk"
+                : "No config file exists on disk yet"
+            }
+            onClick={() => {
+              backupFetcher.submit(
+                { intent: "read_current", harness: status.id },
+                { method: "post" },
+              );
+            }}
+          >
+            <FileCode2 size={14} aria-hidden="true" /> View current file
+          </Button>
+          <Button
+            type="button"
+            variant="danger"
+            disabled={busy || !status.unirouteConfigured}
+            className="gap-1.5"
+            title={
+              status.unirouteConfigured
                 ? "Strip UniRoute entries from this config (keeps your own settings)"
-                : "No config file to clean"
+                : status.exists
+                  ? "UniRoute is not configured in this file"
+                  : "No config file to clean"
             }
             onClick={() => {
               void confirm({
                 title: `Remove UniRoute config from ${status.name}?`,
                 description:
-                  "UniRoute's entries are stripped and your own settings are kept. A safety backup is saved first — if nothing else remains, the file itself is deleted (back to default).",
+                  "UniRoute's entries are stripped and your own settings are kept. A safety backup is saved first; if nothing else remains, the file itself is deleted (back to default).",
                 confirmLabel: "Remove",
                 variant: "danger",
               }).then((ok) => {
@@ -609,7 +722,7 @@ const HarnessCard = memo(function HarnessCard({
 
       {data?.applied ? (
         <div className="mt-3 space-y-1 rounded-lg border border-success/40 bg-success/10 px-3 py-2 text-xs text-foreground">
-          <p className="font-medium text-success">Config written ✓</p>
+          <p className="font-medium text-success">Config written</p>
           <p className="font-mono break-all">{String(data.path)}</p>
           {data.safetyBackup ? (
             <p className="text-muted-foreground">
@@ -637,113 +750,141 @@ const HarnessCard = memo(function HarnessCard({
         </div>
       ) : null}
 
-      {data?.previewed ? (
-        <div className="mt-3">
-          <p className="mb-1 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-            Preview {data.merged ? "(merged into existing)" : "(new file)"}
-          </p>
-          <pre className="max-h-72 overflow-auto rounded-lg bg-muted px-3 py-2 font-mono text-xs text-foreground">
+      {data?.previewed && !viewerClosed ? (
+        <div className="mt-3 rounded-xl border border-border-strong bg-surface-2/40 p-3">
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+              Preview {data.merged ? "(merged into existing)" : "(new file)"}
+            </p>
+            <button
+              type="button"
+              onClick={() => setViewerClosed(true)}
+              aria-label="Close preview"
+              className="rounded-md p-1 text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground"
+            >
+              <X size={13} aria-hidden="true" />
+            </button>
+          </div>
+          <pre className="slim-scroll max-h-72 overflow-auto rounded-lg border border-border bg-surface px-3 py-2 font-mono text-xs text-foreground">
             {String(data.content)}
           </pre>
         </div>
       ) : null}
 
-      {backupData?.backupContent ? (
-        <details className="mt-3">
-          <summary className="cursor-pointer font-mono text-xs text-muted-foreground">
-            {String(backupData.file)}
-          </summary>
-          <pre className="mt-2 max-h-72 overflow-auto rounded-lg bg-muted px-3 py-2 font-mono text-xs text-foreground">
-            {String(backupData.backupContent)}
+      {(backupData?.backupContent || backupData?.currentContent) && !viewerClosed ? (
+        <div className="mt-3 rounded-xl border border-border-strong bg-surface-2/40 p-3">
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <p className="font-mono text-xs font-medium text-foreground">
+              {backupData.currentContent ? "Current file: " : "Backup: "}
+              {String(backupData.file)}
+            </p>
+            <button
+              type="button"
+              onClick={() => setViewerClosed(true)}
+              aria-label="Close file viewer"
+              className="rounded-md p-1 text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground"
+            >
+              <X size={13} aria-hidden="true" />
+            </button>
+          </div>
+          <pre className="slim-scroll max-h-72 overflow-auto rounded-lg border border-border bg-surface px-3 py-2 font-mono text-xs text-foreground">
+            {String(backupData.currentContent ?? backupData.backupContent)}
           </pre>
-        </details>
+        </div>
       ) : null}
 
-      <div className="mt-4 border-t border-border pt-3">
-        <p className="mb-1 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-          <FileClock size={14} /> Backups ({status.backups.length})
-        </p>
-        <p className="mb-2 text-xs text-muted-foreground">
-          Every Apply that overwrites an existing config first saves a timestamped copy to{" "}
-          <span className="font-mono">~/.uniroute/backups/{status.id}/</span>. Use{" "}
-          <span className="font-medium">View</span> to inspect a copy or{" "}
-          <span className="font-medium">Restore</span> to write it back — the current file is
-          backed up first, so restoring is reversible.
-          {status.backups.length === 0
-            ? " No backups yet: they appear after your first Apply over an existing config."
-            : ""}
-        </p>
+      <div className="mt-6 border-t border-border pt-4">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+          <p className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+            <FileClock size={14} aria-hidden="true" /> Config Backups ({status.backups.length})
+          </p>
+          <span className="font-mono text-[11px] text-muted-foreground">
+            ~/.uniroute/backups/{status.id}/
+          </span>
+        </div>
         {status.backups.length === 0 ? (
-          <p className="text-xs text-muted-foreground">
-            Nothing to restore yet for this agent.
+          <p className="rounded-lg border border-border bg-surface-2/35 px-3 py-4 text-center text-xs text-muted-foreground">
+            No backups yet for {status.name}. Backups are created automatically whenever Apply overwrites an existing file.
           </p>
         ) : (
-          <ul className="space-y-1.5">
-            {status.backups.map((b) => (
-              <li
-                key={b.file}
-                className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-border px-2.5 py-1.5 text-xs"
-              >
-                <span className="font-mono text-foreground">{b.file}</span>
-                <span className="text-muted-foreground">
-                  {fmtTs(b.ts)} · {fmtBytes(b.size)}
-                </span>
-                <span className="ml-auto flex gap-1.5">
-                  <button
-                    type="button"
-                    title="View backup content"
-                    onClick={() =>
-                      backupFetcher.submit(
-                        { intent: "read_backup", harness: status.id, file: b.file },
-                        { method: "post" },
-                      )
-                    }
-                    className="rounded border border-border px-1.5 py-0.5 text-muted-foreground hover:bg-muted"
-                  >
-                    View
-                  </button>
-                  <button
-                    type="button"
-                    title="Restore this backup"
-                    onClick={async () => {
-                      const ok = await confirm({
-                        title: "Restore this backup?",
-                        description:
-                          "The current config is backed up first, so restoring is reversible.",
-                      });
-                      if (!ok) return;
-                      backupFetcher.submit(
-                        { intent: "restore", harness: status.id, file: b.file },
-                        { method: "post" },
-                      );
-                    }}
-                    className="inline-flex items-center gap-1 rounded border border-border px-1.5 py-0.5 text-foreground hover:bg-muted"
-                  >
-                    <RotateCcw size={12} /> Restore
-                  </button>
-                  <button
-                    type="button"
-                    title="Delete backup"
-                    onClick={async () => {
-                      const ok = await confirm({
-                        title: "Delete this backup?",
-                        description: "This cannot be undone.",
-                        variant: "danger",
-                      });
-                      if (!ok) return;
-                      backupFetcher.submit(
-                        { intent: "delete_backup", harness: status.id, file: b.file },
-                        { method: "post" },
-                      );
-                    }}
-                    className="rounded border border-border px-1.5 py-0.5 text-danger hover:bg-danger/10"
-                  >
-                    <Trash2 size={12} />
-                  </button>
-                </span>
-              </li>
-            ))}
-          </ul>
+          <div className="overflow-hidden rounded-xl border border-border">
+            <Table className="min-w-[540px]">
+              <THead>
+                <TRow className="hover:bg-transparent">
+                  <THeadCell>Backup File</THeadCell>
+                  <THeadCell>Created</THeadCell>
+                  <THeadCell>Size</THeadCell>
+                  <THeadCell className="text-right">Actions</THeadCell>
+                </TRow>
+              </THead>
+              <tbody>
+                {status.backups.map((b) => (
+                  <TRow key={b.file}>
+                    <TCell className="font-mono text-xs text-foreground">{b.file}</TCell>
+                    <TCell className="font-mono text-xs text-muted-foreground">{fmtTs(b.ts)}</TCell>
+                    <TCell className="font-mono text-xs text-muted-foreground">{fmtBytes(b.size)}</TCell>
+                    <TCell className="text-right">
+                      <div className="inline-flex items-center gap-1.5">
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          onClick={() =>
+                            backupFetcher.submit(
+                              { intent: "read_backup", harness: status.id, file: b.file },
+                              { method: "post" },
+                            )
+                          }
+                        >
+                          View
+                        </Button>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="secondary"
+                          onClick={async () => {
+                            const ok = await confirm({
+                              title: "Restore this backup?",
+                              description:
+                                "The current config is backed up first, so restoring is reversible.",
+                            });
+                            if (!ok) return;
+                            backupFetcher.submit(
+                              { intent: "restore", harness: status.id, file: b.file },
+                              { method: "post" },
+                            );
+                          }}
+                        >
+                          <RotateCcw size={12} aria-hidden="true" /> Restore
+                        </Button>
+                        <Button
+                          type="button"
+                          size="icon"
+                          variant="danger"
+                          title="Delete backup"
+                          aria-label={`Delete backup ${b.file}`}
+                          onClick={async () => {
+                            const ok = await confirm({
+                              title: "Delete this backup?",
+                              description: "This cannot be undone.",
+                              variant: "danger",
+                            });
+                            if (!ok) return;
+                            backupFetcher.submit(
+                              { intent: "delete_backup", harness: status.id, file: b.file },
+                              { method: "post" },
+                            );
+                          }}
+                        >
+                          <Trash2 size={12} aria-hidden="true" />
+                        </Button>
+                      </div>
+                    </TCell>
+                  </TRow>
+                ))}
+              </tbody>
+            </Table>
+          </div>
         )}
       </div>
 
@@ -760,7 +901,7 @@ const HarnessCard = memo(function HarnessCard({
           UniRoute entries removed from{" "}
           <span className="font-mono">{String(backupData.path)}</span>
           {backupData.fileDeleted
-            ? " — nothing else remained, so the file was deleted (back to default)."
+            ? ". Nothing else remained, so the file was deleted (back to default)."
             : "."}
           {backupData.safetyBackup
             ? ` Safety backup: ${String(backupData.safetyBackup)}`
@@ -779,173 +920,176 @@ const HarnessCard = memo(function HarnessCard({
   );
 });
 
-function McpRow({
-  harness,
-  label,
-  installed,
-}: {
-  harness: "codex" | "claude-code" | "opencode";
-  label: string;
-  installed: boolean;
-}) {
-  const fetcher = useFetcher<{
-    ok?: boolean;
-    error?: string;
-    mcpHarness?: string;
-    installed?: boolean;
-  }>();
-  const busy = fetcher.state !== "idle";
-  const isOn = installed;
-  const { toast } = useToast();
-  const lastMcpRef = useRef<typeof fetcher.data>(undefined);
-  useEffect(() => {
-    if (fetcher.state !== "idle" || !fetcher.data) return;
-    if (lastMcpRef.current === fetcher.data) return;
-    lastMcpRef.current = fetcher.data;
-    if (fetcher.data.ok) {
-      toast({
-        title: fetcher.data.installed
-          ? "MCP server registered"
-          : "MCP server removed",
-        description: label,
-        variant: "success",
-      });
-    } else if (fetcher.data.error) {
-      toast({
-        title: "MCP update failed",
-        description: String(fetcher.data.error),
-        variant: "error",
-      });
-    }
-  }, [fetcher.state, fetcher.data, toast, label]);
-  return (
-    <fetcher.Form method="post" className="flex items-center justify-between gap-2 rounded-lg border border-border px-3 py-2">
-      <input type="hidden" name="harness" value={harness} />
-      <input
-        type="hidden"
-        name="intent"
-        value={isOn ? "mcp-remove" : "mcp-install"}
-      />
-      <span className="text-xs font-medium text-foreground">{label}</span>
-      {busy ? (
-        <Spinner size={14} />
-      ) : (
-        <Button type="submit" size="sm" variant={isOn ? "outline" : "secondary"}>
-          {isOn ? "Remove" : "Register"}
-        </Button>
-      )}
-    </fetcher.Form>
-  );
-}
-
 export default function Agents({
   loaderData,
 }: Route.ComponentProps) {
   const { dialog, confirm } = useConfirm();
   const revealFetcher = useFetcher<{ ok?: boolean }>();
   const revealPending = revealFetcher.state !== "idle";
+  const [selectedId, setSelectedId] = useState<HarnessId>(
+    loaderData.harnesses[0]?.id ?? "codex",
+  );
+
+  const selectedHarness =
+    loaderData.harnesses.find((h) => h.id === selectedId) ?? loaderData.harnesses[0];
+  const mcpCount = [
+    loaderData.mcp.codex,
+    loaderData.mcp["claude-code"],
+    loaderData.mcp.opencode,
+  ].filter(Boolean).length;
 
   return (
     <div>
       <PageHeader
         title="AI Agents"
         icon={<Bot size={20} />}
-        subtitle="Point local coding CLIs — Codex, Claude Code, OpenCode — at your UniRoute gateway."
+        subtitle="Connect local coding CLIs (Codex CLI, Claude Code, OpenCode) directly to your UniRoute gateway with automatic config backups."
       />
 
-      <details className="mb-6 rounded-xl border border-border bg-surface/50 px-3 py-2">
-        <summary className="cursor-pointer text-sm font-medium text-foreground">
-          How it works & safety
-        </summary>
-        <ul className="mt-1.5 list-inside list-disc space-y-1 text-xs text-muted-foreground">
-          <li>
-            UniRoute writes the harness config file directly on the server host so the CLI
-            routes requests through your gateway (models, keys, quotas and logs included).
-          </li>
-          <li>
-            Before any overwrite the current file is copied to{" "}
-            <span className="font-mono break-all">~/.uniroute/backups/&lt;agent&gt;/</span> — restore
-            anytime from the backups list below each card.
-          </li>
-          <li>
-            JSON configs are merged, not replaced: unrelated settings are preserved. Files
-            that fail to parse are never overwritten.
-          </li>
-          <li>Writes are atomic (temp file + rename) with 0600 permissions.</li>
-        </ul>
-      </details>
-
-      <Card className="mb-6">
-        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-          <h2 className="shrink-0 text-sm font-semibold text-foreground">MCP Server</h2>
-          <code className="max-w-full truncate rounded bg-muted px-2 py-0.5 font-mono text-xs text-muted-foreground">
-            {loaderData.mcp.command.join(" ")}
-          </code>
-        </div>
-        <p className="mb-3 text-xs text-muted-foreground">
-          Expose UniRoute as an MCP server so coding agents can manage it with
-          natural language — stats, providers, proxies, pools, keys, logs and
-          test completions. Registering writes the entry into each harness
-          config (with automatic backup).
-        </p>
-        <div className="grid gap-2 sm:grid-cols-3">
-          <McpRow harness="codex" label="Codex CLI" installed={loaderData.mcp.codex} />
-          <McpRow harness="claude-code" label="Claude Code" installed={loaderData.mcp["claude-code"]} />
-          <McpRow harness="opencode" label="OpenCode" installed={loaderData.mcp.opencode} />
-        </div>
-      </Card>
-
-      <Card className="mb-6">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="min-w-0 flex-1">
-            <h2 className="mb-1 text-sm font-semibold text-foreground">Stored API keys</h2>
-            <p className="text-xs text-muted-foreground">
-              Allow this page to reuse keys already saved in API Manager — they are picked by
-              name and decrypted server-side, then written straight into the harness config.
-              Keys are never displayed in full on this page.
-            </p>
-            {loaderData.revealAllowed ? (
-              <p className="mt-1 text-xs text-success">
-                Reusing stored keys is enabled — the “Use existing” option can decrypt and
-                apply them.
+      {/* Compact top utilities row */}
+      <div className="mb-6 grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <Card className="flex flex-col justify-between gap-3">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <KeyRound size={15} className="text-primary" aria-hidden="true" />
+                <h2 className="text-sm font-semibold text-foreground">Stored API Keys</h2>
+              </div>
+              <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                Allow reusing encrypted client keys from API Keys when writing agent configs.
               </p>
-            ) : null}
-          </div>
-          <revealFetcher.Form method="post" id="reveal-form" className="shrink-0">
-            <input type="hidden" name="intent" value="set-reveal" />
-            <input
-              type="hidden"
-              name="enabled"
-              value={loaderData.revealAllowed ? "0" : "1"}
-            />
-            <label className="flex items-center gap-2 text-xs font-medium text-foreground">
-              Reuse stored keys
+            </div>
+            <revealFetcher.Form method="post" id="reveal-form" className="shrink-0">
+              <input type="hidden" name="intent" value="set-reveal" />
+              <input
+                type="hidden"
+                name="enabled"
+                value={loaderData.revealAllowed ? "0" : "1"}
+              />
               <Toggle
                 checked={loaderData.revealAllowed}
                 label="Reuse stored keys"
-                disabled={revealPending}
+                disabled={revealPending || loaderData.revealLockedByEnv}
                 onChange={() =>
                   (
                     document.getElementById("reveal-form") as HTMLFormElement | null
                   )?.requestSubmit()
                 }
               />
-            </label>
-          </revealFetcher.Form>
-        </div>
-      </Card>
+            </revealFetcher.Form>
+          </div>
+          <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border/70 pt-2.5 text-xs">
+            <span className={loaderData.revealAllowed ? "font-medium text-success" : "text-muted-foreground"}>
+              {loaderData.revealLockedByEnv
+                ? "Locked on by ALLOW_API_KEY_REVEAL=1"
+                : loaderData.revealAllowed
+                  ? "Reuse enabled for existing keys"
+                  : "Disabled (create new or paste key)"}
+            </span>
+            <Link
+              to="/api-manager"
+              prefetch="intent"
+              className="inline-flex items-center gap-1 font-medium text-primary hover:underline"
+            >
+              Manage keys <ArrowRight size={12} aria-hidden="true" />
+            </Link>
+          </div>
+        </Card>
 
-      {loaderData.harnesses.map((h) => (
+        <Card className="flex flex-col justify-between gap-3">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <Cable size={15} className="text-primary" aria-hidden="true" />
+                <h2 className="text-sm font-semibold text-foreground">MCP Server Integration</h2>
+              </div>
+              <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                Let coding agents inspect logs, providers, and keys via Model Context Protocol.
+              </p>
+            </div>
+            <Badge tone={mcpCount > 0 ? "success" : "neutral"} dot>
+              {mcpCount} / 3 registered
+            </Badge>
+          </div>
+          <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border/70 pt-2.5 text-xs">
+            <div className="flex items-center gap-1.5 text-muted-foreground">
+              <ShieldCheck size={13} aria-hidden="true" />
+              <span>Atomic writes + backups in ~/.uniroute/backups/</span>
+            </div>
+            <Link
+              to="/mcp"
+              prefetch="intent"
+              className={buttonClass("outline", "sm")}
+            >
+              Open MCP Server
+            </Link>
+          </div>
+        </Card>
+      </div>
+
+      {/* Agent Selector Tabs / Cards */}
+      <div className="mb-4">
+        <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+          Select Coding Agent to Configure
+        </p>
+        <div className="grid grid-cols-1 gap-3 lg:grid-cols-3" role="tablist" aria-label="Coding agents">
+          {loaderData.harnesses.map((h) => {
+            const active = h.id === selectedHarness?.id;
+            const mcpOn = loaderData.mcp[h.id];
+            return (
+              <button
+                key={h.id}
+                type="button"
+                role="tab"
+                aria-selected={active}
+                onClick={() => setSelectedId(h.id)}
+                className={`rounded-xl border p-4 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 ${
+                  active
+                    ? "border-primary bg-primary/10"
+                    : "border-border bg-surface hover:border-border-strong"
+                }`}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-sm font-semibold text-foreground">{h.name}</span>
+                  <Badge
+                    tone={h.unirouteConfigured ? "success" : "neutral"}
+                    dot={h.unirouteConfigured}
+                  >
+                    {h.unirouteConfigured
+                      ? "UniRoute linked"
+                      : h.exists
+                        ? "Not linked"
+                        : "No file"}
+                  </Badge>
+                </div>
+                <p className="mt-1.5 truncate font-mono text-[11px] text-muted-foreground">
+                  {h.configPath}
+                </p>
+                <div className="mt-2.5 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+                  <span>{h.cliInstalled ? "CLI ready" : "CLI missing"}</span>
+                  <span>·</span>
+                  <span>{h.backups.length} {h.backups.length === 1 ? "backup" : "backups"}</span>
+                  <span>·</span>
+                  <span>MCP: {mcpOn ? "on" : "off"}</span>
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Focused Configurator Workbench for the selected agent */}
+      {selectedHarness ? (
         <HarnessCard
-          key={h.id}
-          status={h}
+          key={selectedHarness.id}
+          status={selectedHarness}
           defaultBaseUrl={loaderData.baseUrl}
           keys={loaderData.keys}
           revealAllowed={loaderData.revealAllowed}
           modelSuggestions={loaderData.modelSuggestions}
           confirm={confirm}
         />
-      ))}
+      ) : null}
 
       {dialog}
     </div>

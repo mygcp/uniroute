@@ -28,6 +28,17 @@ export function getSessionToken(request: Request): string | null {
   return match ? match[1] : null;
 }
 
+/**
+ * Guard untuk route action dan resource loader yang berjalan tanpa root loader.
+ * Kembalikan Response 401 jika sesi tidak valid, atau null bila terautentikasi.
+ */
+export function requireSession(request: Request): Response | null {
+  if (!isValid(getSessionToken(request))) {
+    return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
+  }
+  return null;
+}
+
 export function setSessionCookie(response: Response, token: string): void {
   const secure = process.env.NODE_ENV === "production" ? "; Secure" : "";
   response.headers.set(

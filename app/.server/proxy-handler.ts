@@ -14,7 +14,7 @@ import {
 	type ClientKey,
 } from "./client-key";
 import { getRoutingPoolId, listApiKeys } from "./credential";
-import { compress, isEnabled } from "./compressor";
+import { compressCanonicalRequest } from "./compressor";
 import { executeJson, executeStreaming, type ProxyUsedInfo } from "./executor";
 import { checkAllowlist } from "./guard";
 import { resolveCombo } from "./combo";
@@ -299,34 +299,7 @@ export async function handleProxy(
 			);
 		}
 
-		const compression = isEnabled();
-		if (
-			(compression.rtk || compression.caveman) &&
-			canonical.messages.length > 0
-		) {
-			const last = canonical.messages[canonical.messages.length - 1];
-			const text = messageText(last);
-			if (text !== null) {
-				const { output, usedFallback, durationMs } = await compress(text);
-				if (usedFallback) {
-					recordProxyLog({
-						level: "info",
-						source: "compressor",
-						message: "fallback to original prompt",
-						metadata: { durationMs },
-					});
-				}
-				if (typeof last.content === "string") {
-					last.content = output;
-				} else if (
-					Array.isArray(last.content) &&
-					last.content.length === 1 &&
-					last.content[0].type === "text"
-				) {
-					last.content[0].text = output;
-				}
-			}
-		}
+		await compressCanonicalRequest(canonical);
 
 		let effectiveModel = canonical.model;
 		let ruleApplied: string | null = null;

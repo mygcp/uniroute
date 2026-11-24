@@ -1,10 +1,10 @@
 import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { useFetcher } from "react-router";
-import { Globe, Lock, Unlock, Zap } from "lucide-react";
+import { ChevronDown, ChevronRight, Globe, Lock, ScrollText, Trash2, Unlock, Zap } from "lucide-react";
 import type { Route } from "./+types/logs._index";
 import { query } from "../.server/db";
 import { getPrice } from "../.server/pricing";
-import { Combobox } from "../components/combobox";
+import { Combobox } from "../components/ui/combobox";
 import {
   useRealtimeLogs,
   type LogEvent,
@@ -14,6 +14,8 @@ import { Spinner } from "../components/ui/feedback";
 import { useConfirm } from "../components/ui/confirm-dialog";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
+import { Input, Select } from "../components/ui/field";
+import { PageHeader } from "../components/ui/page-header";
 import { LogViewer } from "../components/log-viewer";
 import {
   costOf,
@@ -38,7 +40,7 @@ const REQUEST_COLS = `
   op.name AS proxy_name, op.host AS proxy_host, op.port AS proxy_port`;
 
 export function meta() {
-  return [{ title: "Request Logs — UniRoute" }];
+  return [{ title: "Request Logs | UniRoute" }];
 }
 
 export function loader() {
@@ -242,136 +244,173 @@ const Row = memo(function Row({
         }`
       : "direct connection";
 
+  const costText = fmtUsd(costOf(event, prices));
+  const durationText =
+    event.duration_ms != null ? `${fmtNum(Number(event.duration_ms))}ms` : "-";
+
   return (
     <div
-      onClick={() => onSelect(key)}
-      className={`min-w-0 cursor-pointer overflow-hidden border-b border-border px-2 py-1.5 text-sm transition-colors hover:bg-muted ${
-        selected ? "bg-primary/10" : ""
+      className={`border-b border-border/70 text-sm transition-colors last:border-b-0 ${
+        selected ? "bg-primary/8" : "hover:bg-glass-hover"
       }`}
     >
-      <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-        <span className="w-full shrink-0 text-xs text-muted-foreground sm:w-24">
-          {fmtTs(event.created_at)}
-        </span>
-        <Badge tone={STATUS_TONE[String(event.status)] ?? "neutral"}>
-          {String(event.status)}
-        </Badge>
-        <span
-          className="min-w-0 max-w-full truncate font-medium text-foreground sm:max-w-[220px]"
-          title={printable(event.model)}
-        >
-          {String(event.model ?? "-")}
-        </span>
-        <span
-          className="min-w-0 max-w-full truncate text-xs text-muted-foreground sm:max-w-[140px]"
-          title={printable(event.provider_id)}
-        >
-          {String(event.provider_id ?? "-")}
-        </span>
-        {event.strategy_used ? (
-          <Badge
-            tone="primary"
-            title={`strategy: ${String(event.strategy_used)}`}
-            className="max-w-full"
-          >
-            <span className="max-w-[160px] truncate">
-              {String(event.strategy_used)}
+      <div className="flex flex-col gap-2 px-4 py-2.5 lg:grid lg:grid-cols-[148px_86px_minmax(0,1.5fr)_minmax(0,1fr)_104px_124px_68px] lg:items-center lg:gap-3">
+        {/* Time */}
+        <div className="flex items-center justify-between gap-2 lg:block">
+          <span className="font-mono text-xs tabular-nums text-muted-foreground">
+            {fmtTs(event.created_at)}
+          </span>
+          <div className="flex items-center gap-1 lg:hidden">
+            <Badge tone={STATUS_TONE[String(event.status)] ?? "neutral"}>
+              {String(event.status)}
+            </Badge>
+          </div>
+        </div>
+
+        {/* Status (desktop) */}
+        <div className="hidden lg:block">
+          <Badge tone={STATUS_TONE[String(event.status)] ?? "neutral"}>
+            {String(event.status)}
+          </Badge>
+        </div>
+
+        {/* Model & Provider */}
+        <div className="min-w-0">
+          <div className="flex min-w-0 items-center gap-1.5">
+            <span
+              className="truncate font-mono text-xs font-semibold text-foreground"
+              title={printable(event.model)}
+            >
+              {String(event.model ?? "-")}
             </span>
-          </Badge>
-        ) : null}
-        {event.rule_applied ? (
-          <Badge
-            tone="info"
-            title={`rule applied: ${String(event.rule_applied)}`}
-            className="max-w-full"
-          >
-            <span className="max-w-[160px] truncate">
-              rule: {String(event.rule_applied)}
+          </div>
+          <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
+            <span className="truncate" title={printable(event.provider_id)}>
+              {String(event.provider_id ?? "-")}
             </span>
-          </Badge>
-        ) : null}
-        {event.endpoint ? (
-          <Badge tone="neutral" title={`endpoint: ${String(event.endpoint)}`}>
-            {String(event.endpoint)}
-          </Badge>
-        ) : null}
-        {tls ? (
-          <Badge tone="neutral" title={`upstream connection: ${tls}`}>
-            {tls === "https" ? <Lock size={12} /> : <Unlock size={12} />}
-            {tls}
-          </Badge>
-        ) : null}
-        {event.via_proxy === 1 ? (
-          <Badge tone="primary" title={proxyTitle} className="max-w-full">
-            <Globe size={12} />
-            <span className="max-w-[140px] truncate">{proxyShort}</span>
-          </Badge>
-        ) : (
-          <Badge tone="neutral" title={proxyTitle}>
-            direct
-          </Badge>
-        )}
-        {tokensShort ? (
-          <Badge tone="neutral" title={tokenTitle}>
-            <span className="font-mono">{tokensShort} tok</span>
-          </Badge>
-        ) : null}
-        {cached != null && cached > 0 ? (
-          <Badge
-            tone="success"
-            title={`cached tokens: ${fmtNum(cached)} (subset of prompt)`}
+            {event.endpoint ? (
+              <span className="truncate font-mono text-muted-foreground/80">
+                · {String(event.endpoint)}
+              </span>
+            ) : null}
+            {keyLabelText ? (
+              <span className="truncate rounded border border-border bg-surface-2 px-1.5 py-0.25 text-[10px]">
+                {keyLabelText}
+              </span>
+            ) : null}
+          </div>
+        </div>
+
+        {/* Routing / Transport */}
+        <div className="flex flex-wrap items-center gap-1.5">
+          {event.strategy_used ? (
+            <Badge
+              tone="primary"
+              title={`strategy: ${String(event.strategy_used)}`}
+              className="max-w-full"
+            >
+              <span className="max-w-[130px] truncate">
+                {String(event.strategy_used)}
+              </span>
+            </Badge>
+          ) : null}
+          {event.rule_applied ? (
+            <Badge
+              tone="info"
+              title={`rule applied: ${String(event.rule_applied)}`}
+              className="max-w-full"
+            >
+              <span className="max-w-[110px] truncate">
+                {String(event.rule_applied)}
+              </span>
+            </Badge>
+          ) : null}
+          {event.via_proxy === 1 ? (
+            <Badge tone="primary" title={proxyTitle} className="max-w-full">
+              <Globe size={11} aria-hidden="true" />
+              <span className="max-w-[110px] truncate">{proxyShort}</span>
+            </Badge>
+          ) : (
+            <Badge tone="neutral" title={proxyTitle}>
+              {tls === "https" ? (
+                <Lock size={11} aria-hidden="true" />
+              ) : tls === "http" ? (
+                <Unlock size={11} aria-hidden="true" />
+              ) : null}
+              direct
+            </Badge>
+          )}
+        </div>
+
+        {/* Tokens */}
+        <div className="flex items-center justify-between gap-2 text-xs lg:block lg:text-right">
+          <span className="text-[11px] text-muted-foreground lg:hidden">Tokens</span>
+          <div className="font-mono tabular-nums text-foreground" title={tokenTitle}>
+            {tokensShort || "-"}
+            {cached != null && cached > 0 ? (
+              <span
+                className="ml-1 inline-flex items-center gap-0.5 text-[11px] text-success"
+                title={`cached tokens: ${fmtNum(cached)}`}
+              >
+                <Zap size={10} aria-hidden="true" />
+                {fmtNum(cached)}
+              </span>
+            ) : null}
+          </div>
+        </div>
+
+        {/* Latency & Cost */}
+        <div className="flex items-center justify-between gap-2 text-xs lg:block lg:text-right">
+          <span className="text-[11px] text-muted-foreground lg:hidden">Latency / Cost</span>
+          <div>
+            <span className="font-mono tabular-nums text-foreground">{durationText}</span>
+            <span className="ml-1.5 font-mono text-[11px] tabular-nums text-muted-foreground">
+              {costText}
+            </span>
+          </div>
+        </div>
+
+        {/* Actions */}
+        <div className="flex items-center justify-end gap-1">
+          <button
+            type="button"
+            title={selected ? "Close details" : "Inspect log"}
+            aria-label={selected ? "Close log details" : "Inspect log details"}
+            aria-expanded={selected}
+            onClick={() => onSelect(key)}
+            className="grid h-7 w-7 place-items-center rounded-md border border-border bg-surface text-muted-foreground transition-colors hover:border-border-strong hover:bg-surface-2 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
           >
-            <Zap size={12} />
-            <span className="font-mono">{fmtNum(cached)} cached</span>
-          </Badge>
-        ) : null}
-        {keyLabelText ? (
-          <Badge
-            tone="neutral"
-            title={`API key: ${keyLabelText}${
-              event.api_key_id != null ? ` (#${event.api_key_id})` : ""
-            }`}
-            className="max-w-full"
+            {selected ? (
+              <ChevronDown size={14} aria-hidden="true" />
+            ) : (
+              <ChevronRight size={14} aria-hidden="true" />
+            )}
+          </button>
+          <button
+            type="button"
+            title="Delete log"
+            aria-label="Delete log"
+            onClick={() => onDelete(Number(event.id))}
+            className="grid h-7 w-7 place-items-center rounded-md border border-border bg-surface text-danger transition-colors hover:border-danger/50 hover:bg-danger/12 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
           >
-            <span className="max-w-[140px] truncate">{keyLabelText}</span>
-          </Badge>
-        ) : null}
-        <span className="ml-auto shrink-0 text-xs text-muted-foreground">
-          {event.duration_ms != null
-            ? `${fmtNum(Number(event.duration_ms))}ms · ${fmtUsd(costOf(event, prices))}`
-            : ""}
-        </span>
-        <button
-          type="button"
-          title={selected ? "Close details" : "Inspect"}
-          onClick={(e) => {
-            e.stopPropagation();
-            onSelect(key);
-          }}
-          className="rounded border border-border px-1.5 text-xs text-muted-foreground hover:bg-muted"
-        >
-          {selected ? "▾" : "▸"}
-        </button>
-        <button
-          type="button"
-          title="Delete"
-          aria-label="Delete"
-          onClick={(e) => {
-            e.stopPropagation();
-            onDelete(Number(event.id));
-          }}
-          className="rounded border border-border px-1.5 text-xs text-danger hover:bg-danger/10"
-        >
-          ✕
-        </button>
+            <Trash2 size={13} aria-hidden="true" />
+          </button>
+        </div>
       </div>
+
       {event.error_message ? (
-        <div className="mt-1 truncate text-xs text-danger" title={String(event.error_message)}>
+        <div
+          className="mx-4 mb-2 truncate rounded-md border border-danger/25 bg-danger/8 px-2.5 py-1 font-mono text-xs text-danger"
+          title={String(event.error_message)}
+        >
           {String(event.error_message)}
         </div>
       ) : null}
+
       {selected ? (
-        <Detail event={event} prices={prices} keyLabels={keyLabels} />
+        <div className="border-t border-border/60 bg-surface-2/40 px-4 py-3">
+          <Detail event={event} prices={prices} keyLabels={keyLabels} />
+        </div>
       ) : null}
     </div>
   );
@@ -492,14 +531,22 @@ export default function Logs({ loaderData }: Route.ComponentProps) {
       toast({ title: "Delete failed", variant: "error" });
     } else {
       remove(pendingDelete.id, pendingDelete.type);
+      toast({ title: "Log entry deleted", variant: "success" });
     }
-  }, [deleteFetcher.state, deleteFetcher.data, pendingDelete]);
+  }, [deleteFetcher.state, deleteFetcher.data, pendingDelete, remove, toast]);
 
+  const lastClearRef = useRef<unknown>(null);
   useEffect(() => {
-    if (clearFetcher.state === "idle" && clearFetcher.data) {
-      reset([]);
+    if (clearFetcher.state !== "idle" || !clearFetcher.data) return;
+    if (lastClearRef.current === clearFetcher.data) return;
+    lastClearRef.current = clearFetcher.data;
+    if (clearFetcher.data.ok !== true) {
+      toast({ title: "Failed to clear request logs", variant: "error" });
+      return;
     }
-  }, [clearFetcher.state, clearFetcher.data]);
+    reset([]);
+    toast({ title: "Request logs cleared", variant: "success" });
+  }, [clearFetcher.state, clearFetcher.data, reset, toast]);
 
   const activeFilters = Boolean(
     model || provider || status || source || search || transport,
@@ -521,81 +568,91 @@ export default function Logs({ loaderData }: Route.ComponentProps) {
 
   return (
     <div>
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <h1 className="text-xl font-bold text-foreground">Request Logs</h1>
-        <div className="flex items-center gap-2">
-          <span className="text-sm text-muted-foreground">{filtered.length} shown</span>
-          <Button type="button" variant="danger" size="sm" onClick={handleClear}>
-            Clear
-          </Button>
-        </div>
-      </div>
+      <PageHeader
+        title="Request Logs"
+        icon={<ScrollText size={20} />}
+        subtitle="Live stream of gateway requests, token counts, costs, and routing decisions."
+        actions={
+          <>
+            <span className="text-xs font-medium tabular-nums text-muted-foreground">
+              {filtered.length.toLocaleString()} shown
+            </span>
+            <Button
+              type="button"
+              variant="danger"
+              size="sm"
+              disabled={logs.length === 0 || clearFetcher.state !== "idle"}
+              onClick={handleClear}
+            >
+              {clearFetcher.state !== "idle" ? <Spinner size={13} /> : <Trash2 size={13} />}
+              Clear logs
+            </Button>
+          </>
+        }
+      />
 
-      <div className="mb-3 flex flex-wrap items-center gap-2">
+      <div className="mb-4 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-6">
         <Combobox
           options={options.model}
           value={model}
           onChange={setModel}
-          placeholder="Search model…"
-          className="w-full rounded-lg border border-border px-3 py-1.5 text-sm text-foreground sm:w-40"
+          placeholder="Model…"
         />
         <Combobox
           options={options.provider}
           value={provider}
           onChange={setProvider}
-          placeholder="Search provider…"
-          className="w-full rounded-lg border border-border px-3 py-1.5 text-sm text-foreground sm:w-40"
+          placeholder="Provider…"
         />
         <Combobox
           options={OPTIONS.statuses}
           value={status}
           onChange={setStatus}
-          placeholder="Status"
-          className="w-full rounded-lg border border-border px-3 py-1.5 text-sm text-foreground sm:w-32"
+          placeholder="Status…"
         />
         <Combobox
           options={options.source}
           value={source}
           onChange={setSource}
-          placeholder="Source (direct / combo)…"
-          className="w-full rounded-lg border border-border px-3 py-1.5 text-sm text-foreground sm:w-44"
+          placeholder="Source…"
         />
-        <select
+        <Select
           value={transport}
           onChange={(e) =>
             setTransport(e.target.value as "" | "proxy" | "direct")
           }
-          className="h-9 rounded-lg border border-border px-2 text-sm text-foreground"
-          title="Transport"
+          aria-label="Filter by transport"
         >
           <option value="">Transport: all</option>
           <option value="proxy">Proxy</option>
           <option value="direct">Direct</option>
-        </select>
-        <input
-          type="search"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search errors / rules…"
-          className="w-full rounded-lg border border-border px-3 py-1.5 text-sm text-foreground placeholder:text-muted-foreground sm:w-48"
-        />
-        {activeFilters ? (
-          <Button
-            type="button"
-            variant="secondary"
-            size="sm"
-            onClick={() => {
-              setModel("");
-              setProvider("");
-              setStatus("");
-              setSource("");
-              setSearch("");
-              setTransport("");
-            }}
-          >
-            Clear filters
-          </Button>
-        ) : null}
+        </Select>
+        <div className="flex items-center gap-2">
+          <Input
+            type="search"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search errors..."
+          />
+          {activeFilters ? (
+            <Button
+              type="button"
+              variant="outline"
+              size="md"
+              className="shrink-0"
+              onClick={() => {
+                setModel("");
+                setProvider("");
+                setStatus("");
+                setSource("");
+                setSearch("");
+                setTransport("");
+              }}
+            >
+              Reset
+            </Button>
+          ) : null}
+        </div>
       </div>
 
       {dialog}
@@ -609,44 +666,50 @@ export default function Logs({ loaderData }: Route.ComponentProps) {
         scrollRef={scrollRef}
         emptyMessage="No matching request logs yet. Route a request through the proxy to see it appear live."
         renderRow={renderRow}
+        columnHeader={
+          <div className="grid grid-cols-[148px_86px_minmax(0,1.5fr)_minmax(0,1fr)_104px_124px_68px] items-center gap-3 px-4 py-2">
+            <span>Timestamp</span>
+            <span>Status</span>
+            <span>Model / Provider</span>
+            <span>Routing</span>
+            <span className="text-right">Tokens</span>
+            <span className="text-right">Latency / Cost</span>
+            <span className="text-right">Actions</span>
+          </div>
+        }
         headerRows={
           inflight.length > 0 ? (
             <>
               {inflight.map((r) => (
                 <div
                   key={r.reqId}
-                  className="min-w-0 overflow-hidden border-b border-border px-2 py-1.5 text-sm"
+                  className="border-b border-border/70 bg-warning/5 px-4 py-2.5 text-sm"
                 >
-                  <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-                    <span className="w-full shrink-0 text-xs text-muted-foreground sm:w-24">
+                  <div className="flex flex-col gap-2 lg:grid lg:grid-cols-[148px_86px_minmax(0,1.5fr)_minmax(0,1fr)_104px_124px_68px] lg:items-center lg:gap-3">
+                    <span className="font-mono text-xs tabular-nums text-muted-foreground">
                       {fmtTs(r.started_at)}
                     </span>
-                    <Badge tone="warning">
-                      <Spinner size={12} />
-                      running
-                    </Badge>
-                    <span
-                      className="min-w-0 max-w-full truncate font-medium text-foreground sm:max-w-[220px]"
-                      title={r.model}
-                    >
-                      {r.model || "-"}
-                    </span>
-                    <span className="min-w-0 max-w-full truncate text-xs text-muted-foreground sm:max-w-[140px]">
-                      {r.provider_id}
-                    </span>
-                    <Badge tone="neutral">
-                      {r.endpoint ?? "chat"}
-                    </Badge>
-                    {r.client_ip ? (
-                      <span className="min-w-0 max-w-full truncate font-mono text-xs text-muted-foreground">
-                        {r.client_ip}
+                    <div>
+                      <Badge tone="warning">
+                        <Spinner size={11} />
+                        running
+                      </Badge>
+                    </div>
+                    <div className="min-w-0">
+                      <span className="block truncate font-mono text-xs font-semibold text-foreground" title={r.model}>
+                        {r.model || "-"}
                       </span>
-                    ) : null}
-                    {r.api_key_id != null ? (
-                      <span className="shrink-0 font-mono text-xs text-muted-foreground">
-                        key #{r.api_key_id}
+                      <span className="block truncate text-[11px] text-muted-foreground">
+                        {r.provider_id} · {r.endpoint ?? "chat"}
                       </span>
-                    ) : null}
+                    </div>
+                    <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+                      {r.client_ip ? <span className="font-mono">{r.client_ip}</span> : null}
+                      {r.api_key_id != null ? <span className="font-mono">key #{r.api_key_id}</span> : null}
+                    </div>
+                    <span className="font-mono text-xs text-muted-foreground lg:text-right">...</span>
+                    <span className="font-mono text-xs text-muted-foreground lg:text-right">in flight</span>
+                    <span />
                   </div>
                 </div>
               ))}

@@ -5,7 +5,7 @@ import { Outlet } from "react-router";
  * (logs._index), proxy logs at `/logs/proxy` (logs.proxy).
  */
 export function meta() {
-  return [{ title: "Monitoring — UniRoute" }];
+  return [{ title: "Monitoring | UniRoute" }];
 }
 
 export default function LogsLayout() {

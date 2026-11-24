@@ -4,6 +4,7 @@ import path from "node:path";
 import { closeDb } from "./app/.server/db";
 import { flushLogs } from "./app/.server/logger";
 import { startWebhookDeliverer, stopWebhookDeliverer } from "./app/.server/webhook";
+import { ensureMcpHttpFromSettings, killMcpHttpProcess } from "./app/.server/mcp-runtime";
 // @ts-expect-error — build artifact generated at build time
 import * as build from "./build/server/index.js";
 
@@ -60,6 +61,8 @@ export function startServer(opts: StartOpts = {}) {
 
   startWebhookDeliverer();
 
+  ensureMcpHttpFromSettings();
+
   let shuttingDown = false;
 
   function shutdown(signal: string) {
@@ -75,6 +78,7 @@ export function startServer(opts: StartOpts = {}) {
 
     Promise.resolve()
       .then(() => stopWebhookDeliverer())
+      .then(() => killMcpHttpProcess())
       .then(() => server.stop(true))
       .then(() => flushLogs())
       .then(() => closeDb())

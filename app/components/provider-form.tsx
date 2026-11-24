@@ -1,8 +1,9 @@
-import { Form } from "react-router";
+import { Form, Link, useNavigation } from "react-router";
 import type { ProviderTemplate } from "./provider-templates";
 import { Card } from "./ui/card";
-import { Button } from "./ui/button";
+import { Button, buttonClass } from "./ui/button";
 import { Checkbox, Input, Label, Select } from "./ui/field";
+import { Spinner } from "./ui/feedback";
 
 type Props = {
   provider?: {
@@ -17,33 +18,62 @@ type Props = {
   };
   template?: ProviderTemplate | null;
   providers: string[];
+  onCancel?: () => void;
 };
 
-export function ProviderForm({ provider, template }: Props) {
+function suggestUniqueId(base: string, existing: string[]): string {
+  if (!base || base === "custom") return "";
+  const set = new Set(existing);
+  if (!set.has(base)) return base;
+  let n = 2;
+  while (set.has(`${base}-${n}`)) n++;
+  return `${base}-${n}`;
+}
+
+export function ProviderForm({ provider, template, providers, onCancel }: Props) {
   const isEdit = !!provider;
   const t = template ?? null;
+  const navigation = useNavigation();
+  const submitting = navigation.state !== "idle";
+
+  const defaultId = isEdit
+    ? provider!.id
+    : suggestUniqueId(t?.id ?? "", providers);
+  const defaultName = isEdit
+    ? provider!.name
+    : t && t.id !== "custom"
+      ? t.name
+      : "";
+  const defaultBaseUrl = isEdit
+    ? provider!.base_url
+    : t && t.id !== "custom"
+      ? t.base_url
+      : "";
+
   return (
     <Card>
       <Form method="post">
         <input type="hidden" name="intent" value={isEdit ? "update" : "create"} />
         {isEdit ? <input type="hidden" name="id" value={provider!.id} /> : null}
-        {!isEdit && t ? <input type="hidden" name="template_id" value={t.id} /> : null}
+        {!isEdit && t && t.id !== "custom" ? (
+          <input type="hidden" name="template_id" value={t.id} />
+        ) : null}
         {t ? (
-          <p className="mb-4 text-xs text-muted-foreground">
-            Template: <span className="font-medium text-foreground">{t.name}</span> — edit the
-            fields below if needed before saving.
+          <p className="mb-4 rounded-lg border border-border bg-surface-2/60 px-3 py-2 text-xs text-muted-foreground">
+            Template: <span className="font-semibold text-foreground">{t.name}</span>. Review or customize the fields below before saving.
           </p>
         ) : null}
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <div>
-            <Label htmlFor="pid">ID / Name</Label>
+            <Label htmlFor="pid">Provider ID</Label>
             <Input
               id="pid"
               name="id"
-              defaultValue={t?.id ?? provider?.id ?? ""}
+              defaultValue={defaultId}
               required
-              placeholder="openai"
+              placeholder="e.g. openai, my-vllm"
               disabled={isEdit}
+              className="font-mono"
             />
           </div>
           <div>
@@ -51,8 +81,9 @@ export function ProviderForm({ provider, template }: Props) {
             <Input
               id="pname"
               name="name"
-              defaultValue={t?.name ?? provider?.name ?? ""}
+              defaultValue={defaultName}
               required
+              placeholder="e.g. OpenAI Production"
             />
           </div>
           <div>
@@ -60,8 +91,10 @@ export function ProviderForm({ provider, template }: Props) {
             <Input
               id="pbase"
               name="base_url"
-              defaultValue={t?.base_url ?? provider?.base_url ?? ""}
+              defaultValue={defaultBaseUrl}
               required
+              placeholder="https://api.openai.com/v1"
+              className="font-mono"
             />
           </div>
           <div>
@@ -71,9 +104,9 @@ export function ProviderForm({ provider, template }: Props) {
               name="auth_type"
               defaultValue={t?.auth_type ?? provider?.auth_type ?? "bearer"}
             >
-              <option value="none">none</option>
-              <option value="bearer">bearer</option>
-              <option value="apikey">apikey</option>
+              <option value="bearer">Bearer token</option>
+              <option value="apikey">API key header</option>
+              <option value="none">No auth</option>
             </Select>
           </div>
           <div>
@@ -96,26 +129,25 @@ export function ProviderForm({ provider, template }: Props) {
               min={0}
             />
           </div>
-          <div>
-            <Label htmlFor="pprefix">Prefix (opsional)</Label>
+          <div className="sm:col-span-2">
+            <Label htmlFor="pprefix">Model Prefix (optional)</Label>
             <Input
               id="pprefix"
               name="prefix"
               defaultValue={provider?.prefix?.replace(/\/+$/g, "") ?? ""}
-              placeholder="openai — kosong = tanpa prefix"
+              placeholder="e.g. openai (leave blank for no prefix)"
               pattern="[a-zA-Z0-9._\-]{1,32}"
-              title='Prefix cukup nama saja tanpa "/" (contoh: openai)'
+              title='Enter prefix name only without "/" (e.g. openai)'
+              className="font-mono"
             />
-            <p className="mt-1 text-xs text-muted-foreground">
-              Prefix virtual, hanya di UniRoute. Cukup nama saja —{" "}
-              <span className="font-mono">/</span> otomatis sebagai pemisah, model
-              tampil sebagai <span className="font-mono">prefix/nama_model</span>{" "}
-              (mis. <span className="font-mono">openai/gpt-4o</span>). Bila nama
-              model bawaan sudah mengandung <span className="font-mono">/</span>{" "}
-              (mis. <span className="font-mono">oc/muse1.3</span>) tidak masalah —
-              tinggal ditempel jadi{" "}
-              <span className="font-mono">oc/oc/muse1.3</span>. Kosongkan untuk
-              tanpa prefix.
+            <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">
+              Virtual UniRoute namespace. Enter the name only;{" "}
+              <code className="rounded bg-surface-2 px-1 py-0.5 font-mono text-[11px]">/</code>{" "}
+              is added automatically so models appear as{" "}
+              <code className="rounded bg-surface-2 px-1 py-0.5 font-mono text-[11px]">
+                prefix/model-name
+              </code>
+              . Leave blank to expose upstream model names directly.
             </p>
           </div>
         </div>
@@ -124,21 +156,25 @@ export function ProviderForm({ provider, template }: Props) {
             id="pactive"
             name="is_active"
             value="1"
-            defaultChecked={provider ? Boolean(provider.is_active) : false}
+            defaultChecked={provider ? Boolean(provider.is_active) : true}
           />
-          <Label htmlFor="pactive" className="mb-0">
-            Active
+          <Label htmlFor="pactive" className="mb-0 cursor-pointer text-sm text-foreground">
+            Active (accept traffic immediately)
           </Label>
         </div>
-        <div className="mt-4 flex gap-2">
-          <Button type="submit">{isEdit ? "Save Changes" : "Create Provider"}</Button>
-          {isEdit || t ? (
-            <a
-              href="/providers"
-              className="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-border px-4 text-sm font-medium text-foreground transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
-            >
+        <div className="mt-5 flex flex-wrap gap-2 border-t border-border pt-4">
+          <Button type="submit" disabled={submitting}>
+            {submitting ? <Spinner size={14} /> : null}
+            {isEdit ? "Save Changes" : "Create Provider"}
+          </Button>
+          {onCancel ? (
+            <Button type="button" variant="outline" onClick={onCancel}>
               Cancel
-            </a>
+            </Button>
+          ) : isEdit || t ? (
+            <Link to="/providers" className={buttonClass("outline", "md")}>
+              Cancel
+            </Link>
           ) : null}
         </div>
       </Form>

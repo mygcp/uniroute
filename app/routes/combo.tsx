@@ -1,12 +1,20 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { Form, useActionData } from "react-router";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { Form, useActionData, useSubmit } from "react-router";
 import type { Route } from "./+types/combo";
+
+export function meta() {
+	return [{ title: "Model Combos | UniRoute" }];
+}
 import {
-	Link2,
-	Plus,
-	Trash2,
-	Pencil,
+	ArrowDown,
+	ArrowUp,
 	GitBranch,
+	Layers,
+	Link2,
+	Pencil,
+	Plus,
+	Shield,
+	Trash2,
 	UserRound,
 	X,
 } from "lucide-react";
@@ -19,15 +27,16 @@ import {
 	validateComboInput,
 	type ComboStep,
 } from "../.server/combo";
-import { Combobox } from "../components/ui/combobox";
 import { PageHeader } from "../components/ui/page-header";
 import { Card } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
+import { CopyButton } from "../components/ui/copy-button";
 import { Input, Label, Select, Textarea } from "../components/ui/field";
 import { EmptyState } from "../components/ui/empty-state";
 import { useConfirm } from "../components/ui/confirm-dialog";
 import { useToast } from "../components/ui/toast";
+import { requireSession } from "../.server/auth";
 import { query } from "../.server/db";
 
 type ProviderOption = { id: string; name: string };
@@ -81,6 +90,8 @@ function resolveAccountIds(providerId: string, raw: string | null): number[] {
 }
 
 export async function action({ request }: Route.ActionArgs) {
+	const denied = requireSession(request);
+	if (denied) return denied;
 	const form = await request.formData();
 	const section = String(form.get("section"));
 
@@ -154,9 +165,6 @@ export async function action({ request }: Route.ActionArgs) {
 	return null;
 }
 
-const comboInputClass =
-	"w-full rounded-lg border border-glass-border bg-glass-strong px-3 py-1.5 text-sm text-foreground backdrop-blur-sm shadow-[inset_0_1px_0_var(--glass-highlight)] transition-colors placeholder:text-muted-foreground focus:border-primary/40 focus:outline-none focus:ring-2 focus:ring-primary/20 disabled:opacity-50";
-
 function modelsForProvider(
 	modelRows: ModelOption[],
 	providerId: string,
@@ -198,12 +206,14 @@ function draftFromStep(
 
 function StepEditor({
 	prefix,
+	strategy,
 	providers,
 	modelRows,
 	accounts,
 	initialSteps,
 }: {
 	prefix: string;
+	strategy: "priority" | "pipeline";
 	providers: ProviderOption[];
 	modelRows: ModelOption[];
 	accounts: AccountOption[];
@@ -214,8 +224,14 @@ function StepEditor({
 			initialSteps && initialSteps.length > 0 ? initialSteps : [undefined];
 		return base.map((s) => draftFromStep(s, accounts));
 	});
+	const [openPrompts, setOpenPrompts] = useState<Record<number, boolean>>(() => {
+		const map: Record<number, boolean> = {};
+		(initialSteps ?? []).forEach((s, idx) => {
+			if (s.prompt?.trim()) map[idx] = true;
+		});
+		return map;
+	});
 
-	// All models used across steps (prevents duplicates between steps).
 	const taken = useMemo(() => {
 		const set = new Set<string>();
 		for (const s of steps) for (const m of s.models) set.add(m);
@@ -234,150 +250,254 @@ function StepEditor({
 			{ provider: "", models: [], accountText: "", prompt: "" },
 		]);
 	};
+
 	const removeStep = (i: number) => {
 		setSteps((prev) =>
 			prev.length <= 1 ? prev : prev.filter((_, idx) => idx !== i),
 		);
 	};
 
+	const moveStep = (i: number, dir: -1 | 1) => {
+		const target = i + dir;
+		setSteps((prev) => {
+			if (target < 0 || target >= prev.length) return prev;
+			const next = [...prev];
+			const [item] = next.splice(i, 1);
+			next.splice(target, 0, item);
+			return next;
+		});
+	};
+
+	const stepNoun = strategy === "pipeline" ? "Stage" : "Fallback Tier";
+	const connectorLabel =
+		strategy === "pipeline" ? "Passes output to next stage" : "On failure / rate limit, fall back to";
+
 	return (
-		<div className="space-y-3">
+		<div className="space-y-2">
 			<div className="flex flex-wrap items-center justify-between gap-2">
-				<h3 className="text-sm font-medium text-muted-foreground">
-					Models in combo ({steps.length})
-				</h3>
-				<Button variant="outline" size="sm" onClick={addStep}>
-					<Plus size={12} /> Step
+				<div>
+					<h3 className="text-sm font-semibold text-foreground">
+						Routing Steps ({steps.length})
+					</h3>
+					<p className="text-xs text-muted-foreground">
+						{strategy === "pipeline"
+							? "Stages run top to bottom. Each stage receives the previous output."
+							: "Requests try Tier 1 first, then automatically fall back in order."}
+					</p>
+				</div>
+				<Button type="button" variant="outline" size="sm" onClick={addStep}>
+					<Plus size={13} aria-hidden="true" />
+					Add {stepNoun}
 				</Button>
 			</div>
 
-			{steps.map((s, i) => {
-				const providerIds = providers.map((p) => p.id);
-				const providerOpt = providers.find(
-					(p) => p.id === s.provider || p.name === s.provider,
-				);
-				const providerId = providerOpt?.id ?? "";
-				const availableModels = modelsForProvider(modelRows, providerId).filter(
-					(m) => !taken.has(m),
-				);
-				const accountOpts = accountsForProvider(accounts, providerId);
-				return (
-					<Card key={i} padded={false} className="overflow-hidden">
-						<div className="flex flex-wrap items-center justify-between gap-2 border-b border-border bg-muted/30 px-3 py-2">
-							<span className="flex min-w-0 flex-wrap items-center gap-2">
-								<span className="flex h-5 w-5 items-center justify-center rounded-full bg-primary/15 text-xs font-semibold text-primary">
-									{i + 1}
-								</span>
-								<span className="text-sm font-semibold text-foreground">
-									Step {i + 1}
-								</span>
-								{providerOpt ? (
-									<Badge tone="info" style="subtle">
-										{providerOpt.name || providerOpt.id}
-									</Badge>
-								) : (
-									<Badge tone="warning" style="subtle">
-										no provider
-									</Badge>
-								)}
-							</span>
-							<div className="flex items-center gap-1">
-								<Badge tone="neutral" style="subtle">
-									{s.models.length} {s.models.length === 1 ? "model" : "models"}
-								</Badge>
-								<Button
-									size="sm"
-									variant="danger"
-									className="gap-1 px-2 text-xs"
-									onClick={() => removeStep(i)}
-									title="Delete this step"
-									aria-label="Delete this step"
-								>
-									<Trash2 size={12} /> Delete
-								</Button>
-							</div>
-						</div>
+			<div className="space-y-0">
+				{steps.map((s, i) => {
+					const providerOpt = providers.find(
+						(p) => p.id === s.provider || p.name === s.provider,
+					);
+					const providerId = providerOpt?.id ?? "";
+					const availableModels = modelsForProvider(modelRows, providerId).filter(
+						(m) => !taken.has(m),
+					);
+					const accountOpts = accountsForProvider(accounts, providerId);
+					const showPrompt =
+						strategy === "pipeline" || Boolean(openPrompts[i]) || Boolean(s.prompt.trim());
 
-						<div className="space-y-3 p-3 sm:p-4">
-						<div>
-							<Label htmlFor={`${prefix}_provider_${i}`}>
-								Provider (search)
-							</Label>
-							<Combobox
-								id={`${prefix}_provider_${i}`}
-								name={`${prefix}_provider_${i}`}
-								options={providerIds}
-								value={s.provider}
-								onChange={(v) =>
-									updateStep(i, { provider: v, models: [], accountText: "" })
-								}
-								placeholder="Type a provider name…"
-								className={comboInputClass}
-							/>
-						</div>
-						<div className="grid gap-3 md:grid-cols-2">
-							<div>
-								<Label htmlFor={`${prefix}_models_${i}`}>
-									Models (search, multi-select)
-								</Label>
-								<ModelAdder
-									id={`${prefix}_models_${i}`}
-									options={availableModels}
-									selected={s.models}
-									disabled={!providerId}
-									onAdd={(m) => updateStep(i, { models: [...s.models, m] })}
-									onRemove={(m) =>
-										updateStep(i, { models: s.models.filter((x) => x !== m) })
-									}
-								/>
-								{!providerId ? (
-									<p className="mt-1 text-xs text-warning">
-										Select a provider first.
-									</p>
-								) : null}
+					return (
+						<div key={i}>
+							<div className="rounded-xl border border-border bg-surface">
+								<div className="flex flex-wrap items-center justify-between gap-2 rounded-t-[11px] border-b border-border bg-surface-2/60 px-3.5 py-2">
+									<span className="flex min-w-0 flex-wrap items-center gap-2">
+										<span className="grid h-5 w-5 shrink-0 place-items-center rounded-md bg-primary/15 font-mono text-xs font-semibold text-primary">
+											{i + 1}
+										</span>
+										<span className="text-xs font-semibold text-foreground">
+											{stepNoun} {i + 1}
+										</span>
+										{providerOpt ? (
+											<Badge tone="info" style="subtle">
+												{providerOpt.name || providerOpt.id}
+											</Badge>
+										) : (
+											<Badge tone="warning" style="subtle">
+												Select provider
+											</Badge>
+										)}
+										{s.models.length > 0 ? (
+											<Badge tone="neutral" style="subtle">
+												{s.models.length} {s.models.length === 1 ? "model" : "models"}
+											</Badge>
+										) : null}
+									</span>
+									<div className="flex items-center gap-1">
+										<Button
+											type="button"
+											size="icon"
+											variant="ghost"
+											disabled={i === 0}
+											onClick={() => moveStep(i, -1)}
+											title="Move step up"
+											aria-label={`Move step ${i + 1} up`}
+										>
+											<ArrowUp size={13} aria-hidden="true" />
+										</Button>
+										<Button
+											type="button"
+											size="icon"
+											variant="ghost"
+											disabled={i === steps.length - 1}
+											onClick={() => moveStep(i, 1)}
+											title="Move step down"
+											aria-label={`Move step ${i + 1} down`}
+										>
+											<ArrowDown size={13} aria-hidden="true" />
+										</Button>
+										<Button
+											type="button"
+											size="icon"
+											variant="danger"
+											disabled={steps.length <= 1}
+											onClick={() => removeStep(i)}
+											title={
+												steps.length <= 1
+													? "At least one step is required"
+													: "Remove this step"
+											}
+											aria-label={`Remove step ${i + 1}`}
+										>
+											<Trash2 size={13} aria-hidden="true" />
+										</Button>
+									</div>
+								</div>
+
+								<div className="space-y-3 p-3.5">
+									<div className="grid gap-3 lg:grid-cols-3">
+										<div className="min-w-0">
+											<Label htmlFor={`${prefix}_provider_${i}`}>Provider</Label>
+											<Select
+												id={`${prefix}_provider_${i}`}
+												name={`${prefix}_provider_${i}`}
+												value={providerId}
+												onChange={(e) =>
+													updateStep(i, {
+														provider: e.target.value,
+														models: [],
+														accountText: "",
+													})
+												}
+											>
+												<option value="">Choose a provider...</option>
+												{providers.map((p) => {
+													const cnt = modelsForProvider(modelRows, p.id).length;
+													return (
+														<option key={p.id} value={p.id}>
+															{p.name || p.id} ({cnt}m)
+														</option>
+													);
+												})}
+											</Select>
+										</div>
+
+										<div className="min-w-0">
+											<Label htmlFor={`${prefix}_models_${i}`}>
+												Models (multi-select)
+											</Label>
+											<ModelAdder
+												id={`${prefix}_models_${i}`}
+												options={availableModels}
+												selected={s.models}
+												disabled={!providerId}
+												onAdd={(m) => updateStep(i, { models: [...s.models, m] })}
+												onRemove={(m) =>
+													updateStep(i, {
+														models: s.models.filter((x) => x !== m),
+													})
+												}
+											/>
+											{!providerId ? (
+												<p className="mt-1 text-[11px] text-muted-foreground">
+													Pick a provider first to choose models.
+												</p>
+											) : null}
+										</div>
+
+										<div className="min-w-0">
+											<Label htmlFor={`${prefix}_account_${i}`}>
+												API Key Account (optional)
+											</Label>
+											<KeyAdder
+												id={`${prefix}_account_${i}`}
+												name={`${prefix}_account_${i}`}
+												options={accountOpts.map((a) => a.label || `#${a.id}`)}
+												value={s.accountText}
+												onChange={(v) => updateStep(i, { accountText: v })}
+												disabled={!providerId}
+											/>
+											<p className="mt-1 text-[11px] text-muted-foreground">
+												{accountOpts.length === 0 && providerId
+													? "No keys configured on this provider yet."
+													: "Leave blank to rotate across all active keys."}
+											</p>
+										</div>
+									</div>
+
+									{showPrompt ? (
+										<div>
+											<Label htmlFor={`${prefix}_prompt_${i}`}>
+												Stage instructions (optional)
+											</Label>
+											<Textarea
+												id={`${prefix}_prompt_${i}`}
+												name={`${prefix}_prompt_${i}`}
+												rows={2}
+												value={s.prompt}
+												onChange={(e) => updateStep(i, { prompt: e.target.value })}
+												placeholder={
+													strategy === "pipeline"
+														? "System prompt / transform instructions for this stage..."
+														: "Optional system prompt override when this tier runs..."
+												}
+											/>
+										</div>
+									) : (
+										<div className="pt-0.5">
+											<input type="hidden" name={`${prefix}_prompt_${i}`} value="" />
+											<button
+												type="button"
+												onClick={() =>
+													setOpenPrompts((prev) => ({ ...prev, [i]: true }))
+												}
+												className="text-xs font-medium text-muted-foreground transition-colors hover:text-primary"
+											>
+												+ Add custom instructions for this tier
+											</button>
+										</div>
+									)}
+								</div>
 							</div>
 
-							<div>
-								<Label htmlFor={`${prefix}_account_${i}`}>
-									<UserRound size={12} className="mr-1 inline" /> Account
-									(multi)
-								</Label>
-								<KeyAdder
-									id={`${prefix}_account_${i}`}
-									name={`${prefix}_account_${i}`}
-									options={accountOpts.map((a) => a.label || `#${a.id}`)}
-									value={s.accountText}
-									onChange={(v) => updateStep(i, { accountText: v })}
-									disabled={!providerId}
-								/>
-								{accountOpts.length === 0 && providerId ? (
-									<p className="mt-1 text-xs text-warning">
-										This provider has no accounts yet.
-									</p>
-								) : null}
-							</div>
+							{i < steps.length - 1 ? (
+								<div className="flex items-center gap-2 py-2 pl-5">
+									<div className="h-5 w-px bg-border-strong" />
+									<span className="rounded-md border border-border bg-surface-2 px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
+										{connectorLabel}
+									</span>
+								</div>
+							) : null}
 						</div>
+					);
+				})}
+			</div>
 
-						<div>
-							<Label htmlFor={`${prefix}_prompt_${i}`}>
-								Step instructions (optional)
-							</Label>
-							<Textarea
-								id={`${prefix}_prompt_${i}`}
-								name={`${prefix}_prompt_${i}`}
-								rows={2}
-								value={s.prompt}
-								onChange={(e) => updateStep(i, { prompt: e.target.value })}
-								placeholder="Custom instructions for this step…"
-							/>
-						</div>
-						</div>
-					</Card>
-				);
-			})}
+			<div className="pt-2">
+				<Button type="button" variant="secondary" size="sm" onClick={addStep}>
+					<Plus size={13} aria-hidden="true" />
+					Add another {stepNoun.toLowerCase()}
+				</Button>
+			</div>
 
 			<input type="hidden" name="step_count" value={steps.length} />
-			{/* Model ids are submitted as hidden inputs so form.getAll() works. */}
 			{steps.map((s, i) =>
 				s.models.map((m) => (
 					<input
@@ -417,6 +537,7 @@ function ModelAdder({
 	const closeTimerRef = useRef<number | null>(null);
 
 	const q = text.trim().toLowerCase();
+	const uid = useId();
 	const filtered = options.filter(
 		(o) => !selected.includes(o) && o.toLowerCase().includes(q),
 	);
@@ -469,7 +590,7 @@ function ModelAdder({
 
 	return (
 		<div ref={rootRef} className="relative">
-			<div className="flex w-full flex-wrap items-center gap-1 rounded-lg border border-glass-border bg-glass-strong px-2 py-1.5 text-sm text-foreground backdrop-blur-sm shadow-[inset_0_1px_0_var(--glass-highlight)] transition-colors focus-within:border-primary/40 focus-within:ring-2 focus-within:ring-primary/20">
+			<div className="flex min-h-9 w-full flex-wrap items-center gap-1 rounded-lg border border-border bg-surface px-2 py-1 text-sm text-foreground transition-colors hover:border-border-strong focus-within:border-primary focus-within:ring-2 focus-within:ring-ring/25">
 				{selected.map((m) => (
 					<span
 						key={m}
@@ -495,18 +616,14 @@ function ModelAdder({
 					aria-autocomplete="list"
 					aria-activedescendant={
 						open && filtered.length > 0
-							? `model-option-${highlight}`
+							? `${uid}-model-option-${highlight}`
 							: undefined
 					}
-					placeholder={selected.length === 0 ? "Type a model name…" : ""}
+					placeholder={selected.length === 0 ? "Search models..." : ""}
 					onFocus={openDropdown}
 					onChange={(e) => {
 						setText(e.target.value);
-						if (e.target.value) {
-							openDropdown();
-						} else {
-							closeDropdown();
-						}
+						openDropdown();
 						setHighlight(0);
 					}}
 					onKeyDown={(e) => {
@@ -544,16 +661,16 @@ function ModelAdder({
 			{open && filtered.length > 0 ? (
 				<ul
 					role="listbox"
-					className={`absolute z-20 mt-1 max-h-48 w-full origin-top overflow-auto rounded-lg border border-glass-border bg-background/80 py-1 text-sm shadow-[0_8px_24px_rgba(0,0,0,0.35),inset_0_1px_0_var(--glass-highlight)] backdrop-blur-md transition-[transform,opacity] duration-100 ${
+					className={`slim-scroll absolute left-0 z-50 mt-1.5 max-h-52 w-full origin-top overflow-auto rounded-xl border border-border-strong bg-surface py-1 text-sm shadow-xl transition-[transform,opacity] duration-100 ${
 						closing
-							? "pointer-events-none scale-y-90 opacity-0"
+							? "pointer-events-none scale-y-95 opacity-0"
 							: "scale-y-100 opacity-100"
 					}`}
 				>
 					{filtered.map((opt, i) => (
 						<li
 							key={opt}
-							id={`model-option-${i}`}
+							id={`${uid}-model-option-${i}`}
 							role="option"
 							aria-selected={i === highlight}
 						>
@@ -607,6 +724,7 @@ function KeyAdder({
 		.map((t) => t.trim())
 		.filter((t) => t.length > 0 && t.toLowerCase() !== "dynamic");
 
+	const uid = useId();
 	const q = query.trim().toLowerCase();
 	const filtered = options.filter(
 		(o) => !parts.includes(o) && o.toLowerCase().includes(q),
@@ -660,11 +778,11 @@ function KeyAdder({
 
 	return (
 		<div ref={rootRef} className="relative">
-			<div className="flex w-full flex-wrap items-center gap-1 rounded-lg border border-glass-border bg-glass-strong px-2 py-1.5 text-sm text-foreground backdrop-blur-sm shadow-[inset_0_1px_0_var(--glass-highlight)] transition-colors focus-within:border-primary/40 focus-within:ring-2 focus-within:ring-primary/20">
+			<div className="flex min-h-9 w-full flex-wrap items-center gap-1 rounded-lg border border-border bg-surface px-2 py-1 text-sm text-foreground transition-colors hover:border-border-strong focus-within:border-primary focus-within:ring-2 focus-within:ring-ring/25">
 				{parts.map((p) => (
 					<span
 						key={p}
-						className="inline-flex shrink-0 items-center gap-1 rounded-md border border-glass-border bg-glass px-2 py-0.5 text-xs font-medium text-foreground"
+						className="inline-flex shrink-0 items-center gap-1 rounded-md border border-border bg-surface-2 px-2 py-0.5 text-xs font-medium text-foreground"
 					>
 						<span className="max-w-40 truncate">{p}</span>
 						<button
@@ -685,19 +803,15 @@ function KeyAdder({
 					aria-haspopup="listbox"
 					aria-autocomplete="list"
 					aria-activedescendant={
-						open && filtered.length > 0 ? `key-option-${highlight}` : undefined
+						open && filtered.length > 0 ? `${uid}-key-option-${highlight}` : undefined
 					}
 					placeholder={
-						parts.length === 0 ? "Type an account, then press Enter…" : ""
+						parts.length === 0 ? "All active keys" : ""
 					}
 					onFocus={openDropdown}
 					onChange={(e) => {
 						setQuery(e.target.value);
-						if (e.target.value) {
-							openDropdown();
-						} else {
-							closeDropdown();
-						}
+						openDropdown();
 						setHighlight(0);
 					}}
 					onKeyDown={(e) => {
@@ -735,16 +849,16 @@ function KeyAdder({
 			{open && filtered.length > 0 ? (
 				<ul
 					role="listbox"
-					className={`absolute z-20 mt-1 max-h-48 w-full origin-top overflow-auto rounded-lg border border-glass-border bg-background/80 py-1 text-sm shadow-[0_8px_24px_rgba(0,0,0,0.35),inset_0_1px_0_var(--glass-highlight)] backdrop-blur-md transition-[transform,opacity] duration-100 ${
+					className={`slim-scroll absolute left-0 z-50 mt-1.5 max-h-52 w-full origin-top overflow-auto rounded-xl border border-border-strong bg-surface py-1 text-sm shadow-xl transition-[transform,opacity] duration-100 ${
 						closing
-							? "pointer-events-none scale-y-90 opacity-0"
+							? "pointer-events-none scale-y-95 opacity-0"
 							: "scale-y-100 opacity-100"
 					}`}
 				>
 					{filtered.map((opt, i) => (
 						<li
 							key={opt}
-							id={`key-option-${i}`}
+							id={`${uid}-key-option-${i}`}
 							role="option"
 							aria-selected={i === highlight}
 						>
@@ -769,22 +883,193 @@ function KeyAdder({
 		</div>
 	);
 }
+function ComboForm({
+	mode,
+	combo,
+	initialPoolId,
+	providers,
+	modelRows,
+	accounts,
+	pools,
+	onCancel,
+}: {
+	mode: "create" | "update";
+	combo?: {
+		id: number;
+		name: string;
+		strategy: string;
+		steps: ComboStep[];
+	};
+	initialPoolId?: number | null;
+	providers: ProviderOption[];
+	modelRows: ModelOption[];
+	accounts: AccountOption[];
+	pools: PoolOption[];
+	onCancel: () => void;
+}) {
+	const [name, setName] = useState(combo?.name ?? "");
+	const [strategy, setStrategy] = useState<"priority" | "pipeline">(
+		combo?.strategy === "pipeline" ? "pipeline" : "priority",
+	);
+	const cleanPreview = name.trim() || "my-combo";
+
+	return (
+		<Form method="post" className="space-y-5">
+			<input type="hidden" name="section" value={mode} />
+			{combo ? <input type="hidden" name="id" value={combo.id} /> : null}
+			<input type="hidden" name="strategy" value={strategy} />
+
+			{/* Section 1: Name & Proxy Pool */}
+			<div className="grid gap-4 md:grid-cols-2">
+				<div>
+					<Label htmlFor={`${mode}-combo-name`}>Combo Name</Label>
+					<Input
+						id={`${mode}-combo-name`}
+						name="name"
+						required
+						value={name}
+						onChange={(e) => setName(e.target.value)}
+						placeholder="e.g. coding-fallback"
+						className="font-mono"
+					/>
+					<p className="mt-1.5 text-xs text-muted-foreground">
+						Clients call this combo with model{" "}
+						<code className="rounded border border-border bg-surface-2 px-1.5 py-0.5 font-mono text-[11px] text-foreground">
+							combo:{cleanPreview}
+						</code>
+					</p>
+				</div>
+				<div>
+					<Label htmlFor={`${mode}-combo-pool`}>Outbound Proxy Pool (optional)</Label>
+					<Select
+						id={`${mode}-combo-pool`}
+						name="proxy_pool_id"
+						defaultValue={initialPoolId != null ? String(initialPoolId) : ""}
+					>
+						<option value="">Default (use provider or global pool)</option>
+						{pools.map((p) => (
+							<option key={p.id} value={String(p.id)}>
+								{p.name}
+							</option>
+						))}
+					</Select>
+					<p className="mt-1.5 text-xs text-muted-foreground">
+						Used only when neither client key nor account has a dedicated pool.
+					</p>
+				</div>
+			</div>
+
+			{/* Section 2: Unambiguous Strategy Selector */}
+			<div>
+				<p className="mb-2 text-xs font-medium text-muted-foreground">
+					Execution Mode
+				</p>
+				<div className="grid gap-3 sm:grid-cols-2" role="radiogroup" aria-label="Execution mode">
+					<button
+						type="button"
+						role="radio"
+						aria-checked={strategy === "priority"}
+						onClick={() => setStrategy("priority")}
+						className={`flex items-start gap-3 rounded-xl border p-3.5 text-left transition-colors ${
+							strategy === "priority"
+								? "border-primary bg-primary/10"
+								: "border-border bg-surface-2/40 hover:border-border-strong"
+						}`}
+					>
+						<span
+							className={`mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-lg border ${
+								strategy === "priority"
+									? "border-primary/40 bg-primary/15 text-primary"
+									: "border-border bg-surface text-muted-foreground"
+							}`}
+						>
+							<Shield size={15} aria-hidden="true" />
+						</span>
+						<div className="min-w-0">
+							<p className="text-sm font-semibold text-foreground">
+								Priority Fallback
+							</p>
+							<p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
+								Try Tier 1 first. Automatically fall back to Tier 2, 3, etc. on error or rate limit.
+							</p>
+						</div>
+					</button>
+
+					<button
+						type="button"
+						role="radio"
+						aria-checked={strategy === "pipeline"}
+						onClick={() => setStrategy("pipeline")}
+						className={`flex items-start gap-3 rounded-xl border p-3.5 text-left transition-colors ${
+							strategy === "pipeline"
+								? "border-primary bg-primary/10"
+								: "border-border bg-surface-2/40 hover:border-border-strong"
+						}`}
+					>
+						<span
+							className={`mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-lg border ${
+								strategy === "pipeline"
+									? "border-primary/40 bg-primary/15 text-primary"
+									: "border-border bg-surface text-muted-foreground"
+							}`}
+						>
+							<Layers size={15} aria-hidden="true" />
+						</span>
+						<div className="min-w-0">
+							<p className="text-sm font-semibold text-foreground">
+								Sequential Pipeline
+							</p>
+							<p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
+								Run Stage 1, then feed its output into Stage 2 in sequence (e.g. draft then refine).
+							</p>
+						</div>
+					</button>
+				</div>
+			</div>
+
+			{/* Section 3: Visual Step Builder */}
+			<StepEditor
+				prefix="step"
+				strategy={strategy}
+				initialSteps={combo?.steps}
+				providers={providers}
+				modelRows={modelRows}
+				accounts={accounts}
+			/>
+
+			<div className="flex flex-wrap items-center justify-end gap-2 border-t border-border pt-4">
+				<Button type="button" variant="outline" onClick={onCancel}>
+					Cancel
+				</Button>
+				<Button type="submit" variant="primary">
+					{mode === "create" ? "Create Combo" : "Save Changes"}
+				</Button>
+			</div>
+		</Form>
+	);
+}
+
 export default function Combo({ loaderData }: Route.ComponentProps) {
 	const { combos, providers, modelRows, accounts, pools } = loaderData;
 	const msg = useActionData<ActionMsg>();
+	const submit = useSubmit();
 	const { toast } = useToast();
+	const [editingId, setEditingId] = useState<number | null>(null);
+	const [showAdd, setShowAdd] = useState(false);
 	const lastMsgRef = useRef<ActionMsg | null>(null);
 	useEffect(() => {
 		if (!msg || lastMsgRef.current === msg) return;
 		lastMsgRef.current = msg;
-		// create/update outcomes already render prominent inline saved/error
-		// boxes above — only the (previously silent) delete needs a toast.
 		if (msg.deleted) {
 			toast({ title: msg.deleted, variant: "success" });
+		} else if (msg.saved) {
+			setShowAdd(false);
+			setEditingId(null);
+			toast({ title: msg.saved, variant: "success" });
+		} else if (msg.error) {
+			toast({ title: "Save combo failed", description: msg.error, variant: "error" });
 		}
 	}, [msg, toast]);
-	const [editingId, setEditingId] = useState<number | null>(null);
-	const [showAdd, setShowAdd] = useState(false);
 	const { dialog, confirm } = useConfirm();
 	const poolName = (id: number | null | undefined): string | null => {
 		if (id == null) return null;
@@ -801,338 +1086,225 @@ export default function Combo({ loaderData }: Route.ComponentProps) {
 		return Number.isFinite(n) && n > 0 ? Math.trunc(n) : null;
 	};
 
-	const renderEditForm = (c: (typeof combos)[number]) => {
-		return (
-			<div className="mt-4 rounded-lg border border-primary/30 bg-primary/5 p-4">
-				<h3 className="mb-3 text-sm font-semibold text-foreground">
-					Edit <code className="font-mono">combo:{c.name}</code>
-				</h3>
-				<Form method="post" className="space-y-4">
-					<input type="hidden" name="section" value="update" />
-					<input type="hidden" name="id" value={c.id} />
-					<div className="grid gap-4 md:grid-cols-2">
-						<div>
-							<Label htmlFor="edit-name">Combo Name</Label>
-							<Input
-								id="edit-name"
-								name="name"
-								required
-								defaultValue={c.name}
-							/>
-						</div>
-						<div>
-							<Label htmlFor={`edit-strategy-${c.id}`}>Rotation Method</Label>
-							<Select
-								id={`edit-strategy-${c.id}`}
-								name="strategy"
-								defaultValue={c.strategy}
-							>
-								<option value="priority">Priority (fallback chain)</option>
-								<option value="pipeline">Pipeline (sequential chaining)</option>
-							</Select>
-						</div>
-					</div>
-
-					<div>
-						<Label htmlFor={`edit-pool-${c.id}`}>Proxy pool (optional)</Label>
-						<Select
-							id={`edit-pool-${c.id}`}
-							name="proxy_pool_id"
-							defaultValue={
-								comboPoolIdOf(c) != null ? String(comboPoolIdOf(c)) : ""
-							}
-						>
-							<option value="">No combo pool (use provider / global)</option>
-							{pools.map((p) => (
-								<option key={p.id} value={String(p.id)}>
-									{p.name}
-								</option>
-							))}
-						</Select>
-						<p className="mt-1 text-xs text-muted-foreground">
-							Precedence: client key → account → combo → provider →
-							global → direct. The combo pool applies only when no
-							client-key or account pool is set.
-						</p>
-					</div>
-
-					<StepEditor
-						prefix="step"
-						initialSteps={c.steps}
-						providers={providers}
-						modelRows={modelRows}
-						accounts={accounts}
-					/>
-
-					<div className="flex gap-2">
-						<Button type="submit" className="items-center gap-1">
-							Save Changes
-						</Button>
-						<Button
-							type="button"
-							variant="outline"
-							onClick={() => setEditingId(null)}
-						>
-							Cancel
-						</Button>
-					</div>
-				</Form>
-			</div>
-		);
-	};
-
 	return (
 		<div>
 			<PageHeader
-				title="Combo"
+				title="Model Combos"
 				icon={<GitBranch size={20} />}
-				subtitle="Combine multiple models into a single synthetic model."
+				subtitle="Bundle models behind combo:<name> for automatic fallback or sequential pipelines."
+				actions={
+					<Button
+						type="button"
+						variant={showAdd ? "outline" : "primary"}
+						onClick={() => {
+							setEditingId(null);
+							setShowAdd((s) => !s);
+						}}
+					>
+						{showAdd ? <X size={15} aria-hidden="true" /> : <Plus size={15} aria-hidden="true" />}
+						{showAdd ? "Close Form" : "New Combo"}
+					</Button>
+				}
 			/>
 
-			{msg?.saved ? (
-				<p className="mb-4 rounded-lg border border-success/30 bg-success/10 p-4 text-sm text-success">
-					{msg.saved}
-				</p>
-			) : null}
 			{msg?.error ? (
-				<p className="mb-4 rounded-lg border border-danger/30 bg-danger/10 p-4 text-sm text-danger">
-					{msg.error}
-				</p>
-			) : null}
-
-			<details className="mb-6 max-w-2xl rounded-lg border border-border bg-surface/50 px-3 py-2">
-				<summary className="cursor-pointer text-sm font-medium text-foreground">
-					What are combos?
-				</summary>
-				<p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">
-					Combos combine several models into one synthetic model reached via{" "}
-					<code className="font-mono">combo:&lt;name&gt;</code>. Each step: pick a
-					provider → pick 1+ of that provider's models → set accounts.{" "}
-					<strong>Priority</strong> = automatic fallback;{" "}
-					<strong>Pipeline</strong> = each step's output is forwarded to
-					the next step.
-				</p>
-			</details>
-
-			<div className="mb-6 flex flex-wrap items-center justify-between gap-2">
-				<h2 className="text-lg font-semibold text-foreground">
-					All Combos ({combos.length})
-				</h2>
-				<Button
-					onClick={() => setShowAdd((s) => !s)}
-					className="items-center gap-1"
+				<div
+					role="alert"
+					className="mb-4 rounded-xl border border-danger/35 bg-danger/10 px-4 py-3 text-sm text-danger"
 				>
-					{showAdd ? <X size={16} /> : <Plus size={16} />}{" "}
-					{showAdd ? "Close Form" : "Add Combo"}
-				</Button>
-			</div>
+					{msg.error}
+				</div>
+			) : null}
 
 			{showAdd ? (
-				<Card className="mb-8">
-					<h2 className="mb-3 text-lg font-semibold text-foreground">
-						Add Combo
-					</h2>
-					<Form method="post" className="space-y-4">
-						<input type="hidden" name="section" value="create" />
-						<div className="grid gap-4 md:grid-cols-2">
-							<div>
-								<Label htmlFor="add-name">Combo Name</Label>
-								<Input
-									id="add-name"
-									name="name"
-									required
-									placeholder="coding-fallback"
-								/>
-								<p className="mt-1 text-xs text-muted-foreground">
-									Called via model{" "}
-									<code className="font-mono">combo:coding-fallback</code>
-								</p>
-							</div>
-							<div>
-								<Label htmlFor="add-strategy">Rotation Method</Label>
-								<Select
-									id="add-strategy"
-									name="strategy"
-									defaultValue="priority"
-								>
-									<option value="priority">Priority (fallback chain)</option>
-									<option value="pipeline">
-										Pipeline (sequential chaining)
-									</option>
-								</Select>
-								<p className="mt-1 text-xs text-muted-foreground">
-									Choose the rotation method between the steps/models in the
-									combo.
-								</p>
-							</div>
-						</div>
-
+				<Card className="mb-6">
+					<div className="mb-4 flex items-center justify-between gap-2 border-b border-border pb-3">
 						<div>
-							<Label htmlFor="add-pool">Proxy pool (optional)</Label>
-							<Select id="add-pool" name="proxy_pool_id" defaultValue="">
-								<option value="">No combo pool (use provider / global)</option>
-								{pools.map((p) => (
-									<option key={p.id} value={String(p.id)}>
-										{p.name}
-									</option>
-								))}
-							</Select>
-							<p className="mt-1 text-xs text-muted-foreground">
-								Precedence: client key → account → combo → provider →
-								global → direct. The combo pool applies only when no
-								client-key or account pool is set.
+							<h2 className="text-base font-semibold text-foreground">
+								Create Model Combo
+							</h2>
+							<p className="text-xs text-muted-foreground">
+								Define a synthetic model name, choose an execution mode, and order your steps.
 							</p>
 						</div>
-
-						<StepEditor
-							prefix="step"
-							providers={providers}
-							modelRows={modelRows}
-							accounts={accounts}
-						/>
-
-						<div className="flex items-center justify-end gap-2">
-							<Button type="submit" className="items-center gap-1">
-								<Plus size={14} /> Save Combo
-							</Button>
-						</div>
-					</Form>
+					</div>
+					<ComboForm
+						mode="create"
+						providers={providers}
+						modelRows={modelRows}
+						accounts={accounts}
+						pools={pools}
+						onCancel={() => setShowAdd(false)}
+					/>
 				</Card>
 			) : null}
 
-			{combos.length === 0 ? (
-				<Card padded={false}>
+			{combos.length === 0 && !showAdd ? (
+				<Card>
 					<EmptyState
-						icon={<Link2 size={24} />}
-						title="No combos yet"
-						description='Create one with "Add Combo".'
+						icon={<Link2 size={22} />}
+						title="No model combos yet"
+						description="Create a Priority Fallback chain to survive provider rate limits, or a Sequential Pipeline to chain multiple models together."
+						action={
+							<Button type="button" onClick={() => setShowAdd(true)}>
+								<Plus size={14} aria-hidden="true" />
+								Create your first combo
+							</Button>
+						}
 					/>
 				</Card>
-			) : (
+			) : combos.length > 0 ? (
 				<div className="space-y-4">
-					{combos.map((c) => (
-						<Card key={c.id}>
-							<div className="flex flex-wrap items-center justify-between gap-3">
-								<div className="flex flex-wrap items-center gap-3">
-									<span className="text-base font-semibold text-foreground">
-										<code className="font-mono">combo:{c.name}</code>
-									</span>
-									<Badge
-										tone={c.strategy === "pipeline" ? "primary" : "info"}
-										style="subtle"
-									>
-										{c.strategy === "pipeline" ? "pipeline" : "priority"}
-									</Badge>
-									<Badge tone="neutral" style="subtle">
-										{c.steps.reduce((n, s) => n + s.modelIds.length, 0)}{" "}
-										{c.steps.reduce((n, s) => n + s.modelIds.length, 0) === 1
-											? "model"
-											: "models"}
-									</Badge>
-									{comboPoolIdOf(c) != null ? (
-										<Badge tone="neutral" style="subtle">
-											proxy: {poolName(comboPoolIdOf(c))}
+					{combos.map((c) => {
+						const isPipeline = c.strategy === "pipeline";
+						const modelCount = c.steps.reduce((n, s) => n + s.modelIds.length, 0);
+						const poolId = comboPoolIdOf(c);
+						const isEditing = editingId === c.id;
+						const modelTag = `combo:${c.name}`;
+
+						return (
+							<Card key={c.id} padded={false} className="overflow-visible">
+								<div className="flex flex-wrap items-center justify-between gap-3 border-b border-border bg-surface-2/40 px-4 py-3.5 sm:px-5">
+									<div className="flex min-w-0 flex-wrap items-center gap-2.5">
+										<code className="rounded-md border border-border bg-surface px-2.5 py-1 font-mono text-sm font-semibold text-foreground">
+											{modelTag}
+										</code>
+										<CopyButton text={modelTag} label={`Copy ${modelTag}`} />
+										<Badge tone={isPipeline ? "primary" : "info"}>
+											{isPipeline ? "Sequential pipeline" : "Priority fallback"}
 										</Badge>
-									) : null}
-								</div>
-								<div className="flex gap-2">
-									<Button
-										size="sm"
-										variant="outline"
-										className="gap-1"
-										onClick={() =>
-											setEditingId(editingId === c.id ? null : c.id)
-										}
-									>
-										{editingId === c.id ? (
-											<>
-												<X size={12} /> Close
-											</>
-										) : (
-											<>
-												<Pencil size={12} /> Edit
-											</>
-										)}
-									</Button>
-									<Form
-										method="post"
-										onSubmit={async (e) => {
-											if (
-												!(await confirm({
+										<Badge tone="neutral">
+											{c.steps.length} {c.steps.length === 1 ? "step" : "steps"} · {modelCount}{" "}
+											{modelCount === 1 ? "model" : "models"}
+										</Badge>
+										{poolId != null ? (
+											<Badge tone="neutral">proxy: {poolName(poolId)}</Badge>
+										) : null}
+									</div>
+
+									<div className="flex shrink-0 items-center gap-2">
+										<Button
+											type="button"
+											size="sm"
+											variant="outline"
+											onClick={() => {
+												setShowAdd(false);
+												setEditingId(isEditing ? null : c.id);
+											}}
+										>
+											{isEditing ? (
+												<>
+													<X size={13} aria-hidden="true" /> Close
+												</>
+											) : (
+												<>
+													<Pencil size={13} aria-hidden="true" /> Edit
+												</>
+											)}
+										</Button>
+										<Form
+											method="post"
+											onSubmit={(e) => {
+												e.preventDefault();
+												const form = e.currentTarget;
+												void confirm({
 													title: "Delete combo?",
-													description: `combo:${c.name} will be permanently removed.`,
+													description: `${modelTag} will be permanently removed.`,
 													confirmLabel: "Delete",
 													variant: "danger",
-												}))
-											)
-												e.preventDefault();
-										}}
-									>
-										<input type="hidden" name="section" value="delete" />
-										<input type="hidden" name="id" value={c.id} />
-										<Button
-											type="submit"
-											size="sm"
-											variant="danger"
-											className="gap-1"
+												}).then((ok) => {
+													if (ok) submit(form);
+												});
+											}}
 										>
-											<Trash2 size={12} /> Delete
-										</Button>
-									</Form>
+											<input type="hidden" name="section" value="delete" />
+											<input type="hidden" name="id" value={c.id} />
+											<Button type="submit" size="sm" variant="danger">
+												<Trash2 size={13} aria-hidden="true" /> Delete
+											</Button>
+										</Form>
+									</div>
 								</div>
-							</div>
 
-							<div className="mt-3 space-y-2">
-								{c.steps.map((s, i) => {
-									const accs = accountsForProvider(
-										accounts,
-										s.providerId ?? "",
-									);
-									return (
-										<div
-											key={s.id}
-											className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-surface-2/50 px-3 py-2 text-xs text-muted-foreground"
-										>
-											<span className="font-semibold text-foreground">
-												{i + 1}.
-											</span>
-											<Badge tone="info" style="subtle">
-												{s.providerId || "any"}
-											</Badge>
-											<code className="font-mono break-all">{s.modelIds.join(", ")}</code>
-											<span className="flex items-center gap-1">
-												<UserRound size={12} />
-												{s.accountIds.length === 0
-													? "dynamic"
-													: s.accountIds
-															.map(
-																(aid) =>
-																	accs.find((a) => a.id === aid)?.label ??
-																	`#${aid}`,
-															)
-															.join(", ")}
-											</span>
-											{s.prompt ? (
-												<span
-													className="max-w-full truncate italic"
-													title={s.prompt}
-												>
-													&ldquo;{s.prompt}&rdquo;
-												</span>
-											) : null}
-											{i < c.steps.length - 1 ? (
-												<span>{c.strategy === "pipeline" ? "→" : "|"}</span>
-											) : null}
+								<div className="p-4 sm:p-5">
+									{isEditing ? (
+										<ComboForm
+											mode="update"
+											combo={c}
+											initialPoolId={poolId}
+											providers={providers}
+											modelRows={modelRows}
+											accounts={accounts}
+											pools={pools}
+											onCancel={() => setEditingId(null)}
+										/>
+									) : (
+										<div className="space-y-0">
+											{c.steps.map((s, i) => {
+												const accs = accountsForProvider(
+													accounts,
+													s.providerId ?? "",
+												);
+												const accountLabel =
+													s.accountIds.length === 0
+														? "All active keys"
+														: s.accountIds
+																.map(
+																	(aid) =>
+																		accs.find((a) => a.id === aid)?.label ??
+																		`#${aid}`,
+																)
+																.join(", ");
+
+												return (
+													<div key={s.id}>
+														<div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border border-border bg-surface-2/35 px-3.5 py-2.5 text-xs">
+															<span className="grid h-5 w-5 shrink-0 place-items-center rounded bg-primary/15 font-mono text-[11px] font-semibold text-primary">
+																{i + 1}
+															</span>
+															<Badge tone="info">{s.providerId || "any"}</Badge>
+															<div className="flex flex-wrap items-center gap-1.5">
+																{s.modelIds.map((mid) => (
+																	<code
+																		key={mid}
+																		className="rounded border border-border bg-surface px-2 py-0.5 font-mono text-xs text-foreground"
+																	>
+																		{mid}
+																	</code>
+																))}
+															</div>
+															<span className="ml-auto flex items-center gap-1.5 text-muted-foreground">
+																<UserRound size={12} aria-hidden="true" />
+																<span>{accountLabel}</span>
+															</span>
+															{s.prompt ? (
+																<p
+																	className="w-full border-t border-border/50 pt-1.5 text-xs italic text-muted-foreground"
+																	title={s.prompt}
+																>
+																	&ldquo;{s.prompt}&rdquo;
+																</p>
+															) : null}
+														</div>
+														{i < c.steps.length - 1 ? (
+															<div className="flex items-center gap-2 py-1.5 pl-6">
+																<div className="h-4 w-px bg-border-strong" />
+																<span className="text-[11px] font-medium text-muted-foreground">
+																	{isPipeline ? "feeds into stage" : "fallback to tier"} {i + 2}
+																</span>
+															</div>
+														) : null}
+													</div>
+												);
+											})}
 										</div>
-									);
-								})}
-							</div>
-
-							{editingId === c.id ? renderEditForm(c) : null}
-						</Card>
-					))}
+									)}
+								</div>
+							</Card>
+						);
+					})}
 				</div>
-			)}
+			) : null}
 
 			{dialog}
 		</div>

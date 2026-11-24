@@ -180,8 +180,10 @@ function initSchema(): void {
   id INTEGER PRIMARY KEY CHECK (id = 1),
   rtk_enabled INTEGER NOT NULL DEFAULT 0,
   caveman_enabled INTEGER NOT NULL DEFAULT 0,
-  rtk_binary_path TEXT DEFAULT './bin/rtk',
-  caveman_binary_path TEXT DEFAULT './bin/caveman',
+  rtk_binary_path TEXT DEFAULT '',
+  caveman_binary_path TEXT DEFAULT '',
+  rtk_filter TEXT NOT NULL DEFAULT 'auto',
+  caveman_type TEXT NOT NULL DEFAULT 'auto',
   updated_at INTEGER DEFAULT (unixepoch())
 );`);
 
@@ -451,6 +453,41 @@ CREATE INDEX IF NOT EXISTS idx_audit_key ON key_audit_logs (key_id, created_at);
 	ensureColumn("proxy_logs", "endpoint", "endpoint TEXT");
 	ensureColumn("providers", "prefix", "prefix TEXT");
 	ensureColumn("models", "display_name", "display_name TEXT");
+	ensureColumn(
+		"compression_settings",
+		"rtk_filter",
+		"rtk_filter TEXT NOT NULL DEFAULT 'auto'",
+	);
+	ensureColumn(
+		"compression_settings",
+		"caveman_type",
+		"caveman_type TEXT NOT NULL DEFAULT 'auto'",
+	);
+	ensureColumn(
+		"compression_settings",
+		"caveman_voice",
+		"caveman_voice TEXT NOT NULL DEFAULT 'off'",
+	);
+	ensureColumn(
+		"compression_settings",
+		"scope",
+		"scope TEXT NOT NULL DEFAULT 'tool_and_last'",
+	);
+	ensureColumn(
+		"compression_settings",
+		"min_chars",
+		"min_chars INTEGER NOT NULL DEFAULT 400",
+	);
+	ensureColumn(
+		"compression_settings",
+		"timeout_ms",
+		"timeout_ms INTEGER NOT NULL DEFAULT 5000",
+	);
+	ensureColumn(
+		"compression_settings",
+		"never_worse",
+		"never_worse INTEGER NOT NULL DEFAULT 1",
+	);
 	// Migrasi prefix legacy ("openai/" -> "openai"): prefix kini nama saja,
 	// "/" otomatis sebagai separator. Bersihkan sekaligus NULL-kan yang kosong.
 	try {
@@ -704,7 +741,7 @@ export function seed() {
 
 	query(
 		`INSERT INTO compression_settings (id, rtk_enabled, caveman_enabled)
-     VALUES (1, 1, 0)
+     VALUES (1, 0, 0)
      ON CONFLICT(id) DO NOTHING`,
 	).run();
 

@@ -1,7 +1,7 @@
 # AI Agents & MCP
 
-The **Tools → AI Agents** page connects coding agent CLIs to the gateway. The
-**Tools → MCP Server** page (`/mcp`) shows connection commands for every
+The **AI Agents** page connects coding agent CLIs to the gateway. The
+**MCP Server** page (`/mcp`) shows connection commands for every
 transport and the full tool list.
 
 ## 1. Harness config (chat)
@@ -32,7 +32,17 @@ through natural language.
 | Mode | Command | Notes |
 | --- | --- | --- |
 | stdio | `bun app/.server/mcp-server.ts` | Agent spawns this process |
-| HTTP | `bun app/.server/mcp-server.ts --http 3007` | `POST /mcp`, optional `Authorization: Bearer $UNIROUTE_MCP_TOKEN` |
+| HTTP (standalone) | `bun app/.server/mcp-server.ts --http 3007` | `POST /mcp`, optional `Authorization: Bearer $UNIROUTE_MCP_TOKEN` |
+| Remote HTTP (built in) | none, toggle on the MCP page | `POST /api/mcp` on the main server port |
+
+### Remote HTTP endpoint
+
+For agents that run on another machine, enable the built-in endpoint on the
+**MCP Server** page. The on/off state is stored in SQLite. When on, the page
+generates a `umcp_...` bearer token (rotate, reveal and require-auth toggles
+included), shows ready-to-copy registration commands, and has a **Test
+endpoint** button. Expose the gateway port (or put it behind a reverse proxy
+with TLS) so the remote agent can reach `<BASE_URL>/api/mcp`.
 
 ### Quick registration
 

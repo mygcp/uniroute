@@ -7,13 +7,14 @@ import {
   useRef,
   useState,
 } from "react";
-import { CheckCircle2, Info, X, XCircle } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Info, X, XCircle } from "lucide-react";
+
+type ToastVariant = "success" | "error" | "warning" | "info";
 
 type ToastInput = {
   title: string;
   description?: string;
-  variant?: "success" | "error" | "info";
-  /** Auto-close dalam ms (default 4500, error 6500). */
+  variant?: ToastVariant;
   durationMs?: number;
 };
 
@@ -23,16 +24,44 @@ const ToastContext = createContext<{ toast: (t: ToastInput) => void }>({
   toast: () => {},
 });
 
-const ICONS = {
-  success: <CheckCircle2 size={16} className="text-success" />,
-  error: <XCircle size={16} className="text-danger" />,
-  info: <Info size={16} className="text-info" />,
+const VARIANT_STYLES: Record<
+  ToastVariant,
+  {
+    icon: React.ReactNode;
+    iconBox: string;
+    borderAccent: string;
+    progressBar: string;
+  }
+> = {
+  success: {
+    icon: <CheckCircle2 size={15} aria-hidden="true" />,
+    iconBox: "border-success/30 bg-success/12 text-success",
+    borderAccent: "border-l-success",
+    progressBar: "bg-success",
+  },
+  error: {
+    icon: <XCircle size={15} aria-hidden="true" />,
+    iconBox: "border-danger/30 bg-danger/12 text-danger",
+    borderAccent: "border-l-danger",
+    progressBar: "bg-danger",
+  },
+  warning: {
+    icon: <AlertTriangle size={15} aria-hidden="true" />,
+    iconBox: "border-warning/30 bg-warning/12 text-warning",
+    borderAccent: "border-l-warning",
+    progressBar: "bg-warning",
+  },
+  info: {
+    icon: <Info size={15} aria-hidden="true" />,
+    iconBox: "border-info/30 bg-info/12 text-info",
+    borderAccent: "border-l-info",
+    progressBar: "bg-info",
+  },
 };
 
 const DEFAULT_LIFETIME_MS = 4500;
 const ERROR_LIFETIME_MS = 6500;
 const EXIT_MS = 250;
-/** Maksimal item yang disimpan — wadah bisa di-scroll bila lebih dari ~3. */
 const MAX_ITEMS = 6;
 
 function lifetimeOf(t: ToastInput): number {
@@ -104,64 +133,54 @@ function ToastCard({
     schedule(remainingRef.current);
   };
 
+  const variant = item.variant ?? "info";
+  const style = VARIANT_STYLES[variant];
+
   return (
     <div
-      role="status"
+      role={variant === "error" ? "alert" : "status"}
       onMouseEnter={onEnter}
       onMouseLeave={onLeave}
-      className={`pointer-events-auto relative flex items-start gap-2.5 overflow-hidden rounded-lg border border-glass-border bg-background/80 p-3 pr-2 text-sm text-foreground shadow-[0_8px_24px_rgba(0,0,0,0.35),inset_0_1px_0_var(--glass-highlight)] backdrop-blur-md ${
+      className={`pointer-events-auto relative flex items-start gap-3 overflow-hidden rounded-xl border border-border-strong border-l-[3px] ${style.borderAccent} bg-surface p-3.5 pb-4 text-sm text-foreground shadow-xl ${
         leaving || item.leaving ? "animate-toast-out" : "animate-toast-in"
       }`}
     >
-      <span className="mt-0.5 shrink-0">{ICONS[item.variant ?? "info"]}</span>
-      <div className="min-w-0 flex-1">
-        <p className="pr-1 text-sm font-medium">{item.title}</p>
+      <span
+        className={`mt-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-lg border ${style.iconBox}`}
+      >
+        {style.icon}
+      </span>
+      <div className="min-w-0 flex-1 pt-0.5">
+        <p className="pr-1 text-sm font-semibold leading-snug text-foreground">
+          {item.title}
+        </p>
         {item.description ? (
-          <p className="mt-0.5 text-xs break-words text-muted-foreground">
+          <p className="mt-1 break-words text-xs leading-relaxed text-muted-foreground">
             {item.description}
           </p>
         ) : null}
       </div>
-      {/* Tombol X manual + ring countdown yang melingkari */}
       <button
         type="button"
         onClick={closeManual}
         aria-label="Dismiss notification"
         title="Dismiss"
-        className="relative grid h-8 w-8 shrink-0 place-items-center rounded-full text-muted-foreground transition-colors hover:bg-glass-hover hover:text-foreground"
+        className="grid h-7 w-7 shrink-0 cursor-pointer place-items-center rounded-lg text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
       >
-        <svg
-          viewBox="0 0 28 28"
-          className="absolute inset-0 h-full w-full -rotate-90"
-          aria-hidden="true"
-        >
-          <circle
-            cx="14"
-            cy="14"
-            r="11"
-            fill="none"
-            stroke="currentColor"
-            strokeOpacity="0.2"
-            strokeWidth="2"
-          />
-          <circle
-            cx="14"
-            cy="14"
-            r="11"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            pathLength={100}
-            className="animate-toast-ring"
-            style={{
-              animationDuration: `${lifetime}ms`,
-              animationPlayState: paused || leaving ? "paused" : "running",
-            }}
-          />
-        </svg>
-        <X size={14} />
+        <X size={14} aria-hidden="true" />
       </button>
+      <span
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-x-0 bottom-0 h-[2px] bg-surface-2"
+      >
+        <span
+          className={`animate-toast-progress block h-full ${style.progressBar} opacity-80`}
+          style={{
+            animationDuration: `${lifetime}ms`,
+            animationPlayState: paused || leaving ? "paused" : "running",
+          }}
+        />
+      </span>
     </div>
   );
 }
@@ -189,9 +208,11 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
   return (
     <ToastContext.Provider value={value}>
       {children}
-      {/* Android-toast-like: full-width bottom bar di mobile, pojok kanan di desktop.
-          Maks ~3 terlihat, selebihnya scroll selama timer/manual belum selesai. */}
-      <div className="pointer-events-none fixed right-3 bottom-3 left-3 z-[100] flex max-h-[46vh] flex-col gap-2 overflow-y-auto sm:right-4 sm:bottom-4 sm:left-auto sm:w-[380px]">
+      <div
+        aria-live="polite"
+        aria-atomic="false"
+        className="pointer-events-none fixed right-3 bottom-3 left-3 z-[100] flex max-h-[46vh] flex-col gap-2 overflow-x-hidden overflow-y-auto sm:right-4 sm:bottom-4 sm:left-auto sm:w-[380px]"
+      >
         {items.map((t) => (
           <ToastCard
             key={t.id}

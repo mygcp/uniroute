@@ -15,6 +15,7 @@ export type BulkFilter = {
 
 export type BulkAction =
   | "activate"
+  | "reactivate"
   | "suspend"
   | "delete"
   | "rotate"
@@ -60,6 +61,7 @@ export function applyBulk(
     try {
       switch (action) {
         case "activate":
+        case "reactivate":
           reactivateKey(key.id);
           break;
         case "suspend":

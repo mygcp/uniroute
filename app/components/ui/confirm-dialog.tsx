@@ -1,4 +1,5 @@
-import { useRef, useState, useEffect, useCallback } from "react";
+import { useRef, useState, useEffect, useCallback, useId } from "react";
+import { AlertTriangle, HelpCircle, X } from "lucide-react";
 import { Button } from "./button";
 
 type ConfirmOptions = {
@@ -14,9 +15,16 @@ type Pending = { opts: ConfirmOptions; resolve: (v: boolean) => void };
 export function useConfirm() {
   const [pending, setPending] = useState<Pending | null>(null);
   const dialogRef = useRef<HTMLDialogElement>(null);
+  const pendingRef = useRef<Pending | null>(null);
+  const titleId = useId();
+  const descId = useId();
+  pendingRef.current = pending;
 
   const confirm = useCallback((opts: ConfirmOptions) => {
     return new Promise<boolean>((resolve) => {
+      if (pendingRef.current) {
+        pendingRef.current.resolve(false);
+      }
       setPending({ opts, resolve });
     });
   }, []);
@@ -31,10 +39,14 @@ export function useConfirm() {
     setPending(null);
   };
 
+  const isDanger = pending?.opts.variant === "danger";
+
   const dialog = pending ? (
     <dialog
       ref={dialogRef}
-      className="dialog-pop m-auto w-[min(92vw,420px)] rounded-xl border border-glass-border bg-background/80 p-5 text-foreground shadow-[0_24px_48px_rgba(0,0,0,0.45),inset_0_1px_0_var(--glass-highlight)] backdrop-blur-xl backdrop:bg-black/60 backdrop:backdrop-blur-sm"
+      aria-labelledby={titleId}
+      aria-describedby={pending.opts.description ? descId : undefined}
+      className="dialog-pop m-auto w-[min(92vw,440px)] overflow-hidden rounded-2xl border border-border-strong bg-surface p-0 text-foreground shadow-2xl backdrop:bg-black/65 backdrop:backdrop-blur-[2px]"
       onCancel={(e) => {
         e.preventDefault();
         close(false);
@@ -43,16 +55,48 @@ export function useConfirm() {
         if (e.target === dialogRef.current) close(false);
       }}
     >
-      <h3 className="text-base font-semibold">{pending.opts.title}</h3>
-      {pending.opts.description ? (
-        <p className="mt-1.5 text-sm text-muted-foreground">{pending.opts.description}</p>
-      ) : null}
-      <div className="mt-5 flex justify-end gap-2">
-        <Button variant="ghost" onClick={() => close(false)}>
+      <div className="flex items-start gap-3.5 p-5">
+        <div
+          className={`grid h-10 w-10 shrink-0 place-items-center rounded-xl border ${
+            isDanger
+              ? "border-danger/30 bg-danger/12 text-danger"
+              : "border-primary/30 bg-primary/12 text-primary"
+          }`}
+        >
+          {isDanger ? (
+            <AlertTriangle size={18} aria-hidden="true" />
+          ) : (
+            <HelpCircle size={18} aria-hidden="true" />
+          )}
+        </div>
+        <div className="min-w-0 flex-1 pt-0.5">
+          <h3 id={titleId} className="text-base font-semibold leading-snug text-foreground">
+            {pending.opts.title}
+          </h3>
+          {pending.opts.description ? (
+            <p id={descId} className="mt-1.5 text-sm leading-relaxed text-muted-foreground">
+              {pending.opts.description}
+            </p>
+          ) : null}
+        </div>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          onClick={() => close(false)}
+          aria-label="Close dialog"
+          className="-mt-1 -mr-1 h-7 w-7 shrink-0"
+        >
+          <X size={15} aria-hidden="true" />
+        </Button>
+      </div>
+      <div className="flex items-center justify-end gap-2 border-t border-border bg-surface-2/40 px-5 py-3">
+        <Button variant="outline" size="sm" onClick={() => close(false)}>
           {pending.opts.cancelLabel ?? "Cancel"}
         </Button>
         <Button
-          variant={pending.opts.variant === "danger" ? "danger" : "primary"}
+          variant={isDanger ? "danger-solid" : "primary"}
+          size="sm"
           onClick={() => close(true)}
         >
           {pending.opts.confirmLabel ?? "Confirm"}

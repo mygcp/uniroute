@@ -6,21 +6,26 @@ type Props = {
   onSubmit?: () => void;
   disabled?: boolean;
   placeholder?: string;
-  /** Tinggi maksimum sebelum scroll (px). */
   maxHeight?: number;
+  embedded?: boolean;
+  id?: string;
+  ariaLabel?: string;
 };
 
 /**
- * Textarea auto-grow: tinggi mengikuti isi sampai `maxHeight`, lalu scroll.
- * Enter = kirim, Shift+Enter = baris baru.
+ * Auto-growing message input: expands up to `maxHeight`, then scrolls.
+ * Enter sends, Shift+Enter inserts a new line.
  */
 export function MessageInput({
   value,
   onChange,
   onSubmit,
   disabled,
-  placeholder = "Message…",
-  maxHeight = 160,
+  placeholder = "Message...",
+  maxHeight = 180,
+  embedded = false,
+  id,
+  ariaLabel = "Chat message",
 }: Props) {
   const ref = useRef<HTMLTextAreaElement>(null);
 
@@ -34,7 +39,9 @@ export function MessageInput({
   return (
     <textarea
       ref={ref}
-      rows={1}
+      id={id}
+      aria-label={ariaLabel}
+      rows={embedded ? 2 : 1}
       value={value}
       disabled={disabled}
       onChange={(e) => onChange(e.target.value)}
@@ -45,7 +52,11 @@ export function MessageInput({
         }
       }}
       placeholder={placeholder}
-      className="w-full resize-none rounded-lg border border-glass-border bg-glass-strong px-3 py-2 text-sm text-foreground shadow-[inset_0_1px_0_var(--glass-highlight)] transition-colors placeholder:text-muted-foreground focus:border-primary/40 focus:outline-none focus:ring-2 focus:ring-primary/20 disabled:opacity-50"
+      className={
+        embedded
+          ? "slim-scroll block w-full resize-none bg-transparent px-3.5 pt-3 pb-1.5 text-sm leading-relaxed text-foreground placeholder:text-muted-foreground/75 focus:outline-none disabled:opacity-50"
+          : "slim-scroll w-full resize-none rounded-lg border border-border bg-surface px-3 py-2 text-sm text-foreground transition-colors placeholder:text-muted-foreground/75 focus:border-primary focus:outline-none focus:ring-2 focus:ring-ring/25 disabled:opacity-50"
+      }
       style={{ overflowY: "auto" }}
     />
   );

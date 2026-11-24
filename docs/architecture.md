@@ -15,6 +15,7 @@ client ──POST /v1/chat/completions──▶ handleProxy
               1. authorize              │ session cookie / Bearer client key
               2. guard + routing rule   │ allowlist, rewrite, fallback
               3. concurrency/quota      │ per client key
+                 compression (if on)    │ RTK / Caveman, see compression.md
               4. pick provider          │ balancer strategy + pinned
               5. translate request      │ openai-chat ⇄ anthropic ⇄ gemini
               6. egress                 │ client-key pool → account pool →
@@ -67,6 +68,8 @@ Hot indexes are created automatically for the most-used filter/group columns
 | `.server/usage.ts`, `stats.ts` | Usage analytics |
 | `.server/agents-config.ts` | Agent harness configs (backup/restore/MCP registration) |
 | `app/.server/mcp-server.ts` | MCP stdio/HTTP server (49 tools) |
+| `.server/mcp-http.ts` + `routes/api.mcp.ts` | Built-in remote MCP endpoint (`/api/mcp`) with on/off toggle and bearer token |
+| `.server/compressor.ts` + `compressor-tools.ts` | Global request compression; downloads and runs external RTK / Caveman binaries |
 
 ## Realtime
 

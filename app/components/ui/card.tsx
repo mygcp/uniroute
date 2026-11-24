@@ -2,25 +2,48 @@ import type { HTMLAttributes } from "react";
 
 export function Card({
   padded = true,
+  interactive = false,
   className = "",
   ...rest
-}: HTMLAttributes<HTMLDivElement> & { padded?: boolean }) {
+}: HTMLAttributes<HTMLDivElement> & {
+  padded?: boolean;
+  interactive?: boolean;
+}) {
   return (
     <div
       className={[
-        "glass-panel transition hover:-translate-y-0.5 hover:border-primary/30 hover:bg-glass-hover",
+        "glass-panel",
+        interactive ? "glass-panel-interactive" : "",
         padded ? "p-4 sm:p-5" : "",
         className,
-      ].join(" ")}
+      ]
+        .filter(Boolean)
+        .join(" ")}
       {...rest}
     />
   );
 }
 
-export function CardHeader({ className = "", ...rest }: HTMLAttributes<HTMLDivElement>) {
-  return <div className={["mb-4 flex items-center justify-between gap-3", className].join(" ")} {...rest} />;
+export function CardHeader({
+  className = "",
+  ...rest
+}: HTMLAttributes<HTMLDivElement>) {
+  return (
+    <div
+      className={["mb-4 flex items-center justify-between gap-3", className].join(" ")}
+      {...rest}
+    />
+  );
 }
 
-export function CardTitle({ className = "", ...rest }: HTMLAttributes<HTMLHeadingElement>) {
-  return <h2 className={["text-sm font-semibold text-foreground", className].join(" ")} {...rest} />;
+export function CardTitle({
+  className = "",
+  ...rest
+}: HTMLAttributes<HTMLHeadingElement>) {
+  return (
+    <h2
+      className={["text-sm font-semibold text-foreground", className].join(" ")}
+      {...rest}
+    />
+  );
 }
