@@ -38,6 +38,7 @@ import { createClientKey, listClientKeys } from "../.server/client-key";
 import { decryptKey } from "../.server/key-crypto";
 import { getStructuredSuggestions } from "../.server/suggest";
 import { getSessionToken, isValid } from "../.server/auth";
+import { resolveGatewayOrigin } from "../.server/tunnel";
 import { PageHeader } from "../components/ui/page-header";
 import { Card } from "../components/ui/card";
 import { Button, buttonClass } from "../components/ui/button";
@@ -59,7 +60,7 @@ export function meta() {
 
 type KeyOption = { id: number; name: string; prefix: string; revealable: boolean };
 
-export function loader() {
+export function loader({ request }: Route.LoaderArgs) {
   const revealAllowed = isKeyRevealAllowed();
   const revealLockedByEnv = isKeyRevealLockedByEnv();
   const keys: KeyOption[] = listClientKeys()
@@ -72,7 +73,7 @@ export function loader() {
     }));
   return {
     harnesses: statusAll(),
-    baseUrl: process.env.BASE_URL || "http://localhost:3000",
+    baseUrl: resolveGatewayOrigin(request),
     keys,
     revealAllowed,
     revealLockedByEnv,

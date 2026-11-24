@@ -16,7 +16,8 @@ MCP server that lets coding agents manage the gateway through tool calls.
 - Per-provider chat playground with streaming, thinking/reasoning display, markdown rendering, and sessions saved to SQLite.
 - Media passthrough: `/v1/images/generations`, `/v1/audio/speech`, `/v1/audio/transcriptions`; vision and audio inputs are translated per provider.
 - Global prompt compression with external [RTK](https://github.com/rtk-ai/rtk) and [Caveman Engine](https://github.com/JuliusBrussee/caveman); the binaries are not bundled and are downloaded on demand (SHA-256 verified, no GitHub API or auth).
-- MCP server exposing 49 tools, registrable from the dashboard into Claude Code, Codex, and OpenCode. A built-in remote HTTP endpoint (`/api/mcp`, bearer token) can be switched on for agents on other machines.
+- Public tunneling & custom domains with external `cloudflared`, `ngrok`, `frpc`, and `bore` binaries downloaded on demand, including auto-start on boot and auto-reconnect.
+- MCP server exposing 52 tools, registrable from the dashboard into Claude Code, Codex, and OpenCode. A built-in remote HTTP endpoint (`/api/mcp`, bearer token) can be switched on for agents on other machines.
 
 ## Quick start
 
@@ -132,6 +133,7 @@ bun cli/uni.ts start --daemon
 | [AI Agents & MCP](docs/ai-agents.md) | Harness config, MCP server (stdio, HTTP, remote), tool list |
 | [Model Combos](docs/combos.md) | Priority fallback and sequential pipeline combos |
 | [Compression](docs/compression.md) | RTK and Caveman Engine setup, global pipeline, options |
+| [Tunneling](docs/tunneling.md) | External cloudflared, ngrok, frpc, bore tunnels, auto-tunneling, custom domains |
 | [Performance](docs/performance.md) | Measured baseline, hot-path invariants, benchmarks |
 | [Development](docs/development.md) | Scripts, testing, code conventions |
 

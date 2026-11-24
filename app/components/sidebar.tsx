@@ -13,6 +13,7 @@ import {
   Network,
   Bot,
   Cable,
+  Globe,
   X,
 } from "lucide-react";
 import { Button } from "./ui/button";
@@ -27,6 +28,7 @@ const CORE_ITEMS = [
 ];
 
 const TOOLS_ITEMS = [
+  { to: "/tunnels", label: "Tunneling", icon: Globe },
   { to: "/mcp", label: "MCP Server", icon: Cable },
   { to: "/agents", label: "AI Agents", icon: Bot },
 ];
@@ -95,7 +97,7 @@ function Brand({ onNavigate }: { onNavigate?: () => void }) {
             UniRoute
           </span>
           <span className="rounded border border-border bg-surface-2 px-1.5 py-0.5 font-mono text-[10px] font-medium text-muted-foreground">
-            v1.0
+            v1.1
           </span>
         </div>
         <p className="text-[11px] text-muted-foreground">

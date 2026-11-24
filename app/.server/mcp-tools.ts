@@ -52,6 +52,15 @@ import {
   syncProviderModels,
   upsertProviderModel,
 } from "./provider-models";
+import {
+  getPublicTunnelSettings,
+  getTunnelSettings,
+  getTunnelStatus,
+  startTunnel,
+  stopTunnel,
+} from "./tunnel";
+import { getAllTunnelToolsStatus } from "./tunnel-tools";
+import { VALID_TUNNEL_PROVIDERS, type TunnelProviderId } from "../lib/tunnel-options";
 
 /**
  * MCP tools UniRoute — dipakai mcp-server.ts (stdio). Semua akses langsung
@@ -584,6 +593,32 @@ export const TOOLS: ToolDef[] = [
       type: "object",
       properties: { limit: { type: "integer" } },
     },
+  },
+  {
+    name: "tunnel_status",
+    description:
+      "Get live tunnel runtime status, public URL, non-secret settings, and external binary availability.",
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
+    name: "start_tunnel",
+    description:
+      "Start the configured public tunnel (cloudflared, ngrok, frpc, or bore).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        provider: {
+          type: "string",
+          enum: ["cloudflared", "ngrok", "frpc", "bore"],
+          description: "Optional provider override for this run.",
+        },
+      },
+    },
+  },
+  {
+    name: "stop_tunnel",
+    description: "Stop the currently running public tunnel.",
+    inputSchema: { type: "object", properties: {} },
   },
 ];
 
@@ -1314,6 +1349,42 @@ const HANDLERS: Record<string, ToolHandler> = {
       return { ok: true, cleared: { proxy: true } };
     }
     return { ok: false, error: "scope must be request, proxy or all" };
+  },
+
+  tunnel_status() {
+    const raw = getTunnelSettings();
+    const binaries = getAllTunnelToolsStatus({
+      cloudflared: raw.cloudflared_binary_path,
+      ngrok: raw.ngrok_binary_path,
+      frpc: raw.frpc_binary_path,
+      bore: raw.bore_binary_path,
+    });
+    return {
+      runtime: getTunnelStatus(),
+      settings: getPublicTunnelSettings(raw),
+      binaries,
+    };
+  },
+
+  async start_tunnel(args) {
+    const rawProvider = str(args.provider);
+    if (
+      rawProvider &&
+      !VALID_TUNNEL_PROVIDERS.has(rawProvider as TunnelProviderId)
+    ) {
+      return {
+        ok: false,
+        error: "provider must be cloudflared, ngrok, frpc, or bore",
+      };
+    }
+    return startTunnel({
+      provider: rawProvider ? (rawProvider as TunnelProviderId) : undefined,
+      waitMs: 5000,
+    });
+  },
+
+  stop_tunnel() {
+    return stopTunnel();
   },
 };
 

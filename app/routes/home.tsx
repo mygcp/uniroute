@@ -1,31 +1,43 @@
-import { Link } from "react-router";
+import { useEffect, useRef, useState } from "react";
+import { Link, useFetcher } from "react-router";
 import {
   Activity,
   ArrowRight,
   Bot,
   CheckCircle2,
   Clock,
+  Globe,
   Home as HomeIcon,
   KeySquare,
   Link2,
   Plug,
   Plus,
   ScrollText,
+  Square,
   TrendingUp,
 } from "lucide-react";
 import type { Route } from "./+types/home";
+import { requireSession } from "../.server/auth";
 import {
   getStats,
   getUsageLast7Days,
   getUsageWeekSummary,
 } from "../.server/stats";
 import { query } from "../.server/db";
+import {
+  getTunnelStatus,
+  resolveGatewayOrigin,
+  stopTunnel,
+} from "../.server/tunnel";
+import type { TunnelRuntimeStatus } from "../lib/tunnel-options";
 import { StatCard } from "../components/ui/stat-card";
 import { PageHeader } from "../components/ui/page-header";
 import { Card, CardHeader, CardTitle } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
-import { buttonClass } from "../components/ui/button";
+import { Button, buttonClass } from "../components/ui/button";
 import { CopyButton } from "../components/ui/copy-button";
+import { Spinner } from "../components/ui/feedback";
+import { useToast } from "../components/ui/toast";
 import { UsageChart } from "../components/usage-chart";
 import { fmtTs } from "../lib/log-format";
 
@@ -51,7 +63,12 @@ type ProviderSummary = {
 };
 
 export function loader({ request }: Route.LoaderArgs) {
-  const origin = process.env.BASE_URL?.replace(/\/+$/, "") || new URL(request.url).origin;
+  const origin = resolveGatewayOrigin(request);
+  const tunnelStatus = getTunnelStatus();
+  const active =
+    tunnelStatus.status === "running" ||
+    tunnelStatus.status === "starting" ||
+    tunnelStatus.status === "reconnecting";
   const recent = query(
     `SELECT id, model, provider_id, status, duration_ms, created_at
        FROM request_logs
@@ -80,11 +97,87 @@ export function loader({ request }: Route.LoaderArgs) {
     providers,
     activeKeys: Number(keyCountRow?.c ?? 0),
     gatewayUrl: `${origin}/v1`,
+    tunnel: {
+      active,
+      status: tunnelStatus.status,
+      provider: tunnelStatus.provider,
+      publicUrl: tunnelStatus.publicUrl,
+    },
   };
 }
 
+export async function action({ request }: Route.ActionArgs) {
+  const denied = requireSession(request);
+  if (denied) return denied;
+
+  const form = await request.formData();
+  if (String(form.get("intent") ?? "") === "stop_tunnel") {
+    stopTunnel();
+    return { ok: true, stopped: true };
+  }
+  return Response.json({ ok: false, error: "Unknown intent." }, { status: 400 });
+}
+
 export default function Home({ loaderData }: Route.ComponentProps) {
-  const { stats, usage, week, recent, providers, activeKeys, gatewayUrl } = loaderData;
+  const { stats, usage, week, recent, providers, activeKeys, gatewayUrl, tunnel } =
+    loaderData;
+  const tunnelFetcher = useFetcher<{ ok: boolean; stopped?: boolean }>();
+  const { toast } = useToast();
+  const lastStopRef = useRef<unknown>(undefined);
+
+  const [liveTunnel, setLiveTunnel] = useState(tunnel);
+  const [liveGatewayUrl, setLiveGatewayUrl] = useState(gatewayUrl);
+
+  useEffect(() => {
+    setLiveTunnel(tunnel);
+  }, [tunnel]);
+
+  useEffect(() => {
+    setLiveGatewayUrl(gatewayUrl);
+  }, [gatewayUrl]);
+
+  useEffect(() => {
+    if (
+      tunnelFetcher.state !== "idle" ||
+      !tunnelFetcher.data ||
+      lastStopRef.current === tunnelFetcher.data
+    ) {
+      return;
+    }
+    lastStopRef.current = tunnelFetcher.data;
+    if (tunnelFetcher.data.stopped) {
+      toast({ title: "Tunnel stopped", variant: "success" });
+    }
+  }, [tunnelFetcher.state, tunnelFetcher.data, toast]);
+
+  useEffect(() => {
+    if (!liveTunnel.active || liveTunnel.publicUrl) return;
+    const iv = setInterval(async () => {
+      try {
+        const res = await fetch("/api/tunnel/status");
+        if (!res.ok) return;
+        const next = (await res.json()) as TunnelRuntimeStatus;
+        const nextActive =
+          next.status === "running" ||
+          next.status === "starting" ||
+          next.status === "reconnecting";
+        setLiveTunnel({
+          active: nextActive,
+          status: next.status,
+          provider: next.provider,
+          publicUrl: next.publicUrl,
+        });
+        if (next.publicUrl) {
+          setLiveGatewayUrl(`${next.publicUrl.replace(/\/+$/, "")}/v1`);
+        }
+      } catch {
+        // Ignore transient status poll error.
+      }
+    }, 2500);
+    return () => clearInterval(iv);
+  }, [liveTunnel.active, liveTunnel.publicUrl]);
+
+  const stoppingTunnel = tunnelFetcher.state !== "idle";
   const latency =
     stats.avgLatency >= 1000
       ? { value: (stats.avgLatency / 1000).toFixed(1), suffix: "s" }
@@ -99,12 +192,41 @@ export default function Home({ loaderData }: Route.ComponentProps) {
         actions={
           <>
             <div className="flex items-center gap-1.5 rounded-lg border border-border bg-surface px-2.5 py-1 text-xs">
-              <span className="text-muted-foreground">Endpoint</span>
+              {liveTunnel.active ? (
+                <Link
+                  to="/tunnels"
+                  title={`Active ${liveTunnel.provider} tunnel (${liveTunnel.status})`}
+                  className="inline-flex items-center gap-1.5 text-success hover:underline"
+                >
+                  <span className="h-2 w-2 rounded-full bg-success" aria-hidden="true" />
+                  Tunnel
+                </Link>
+              ) : (
+                <span className="text-muted-foreground">Endpoint</span>
+              )}
               <code className="max-w-[190px] truncate font-mono text-foreground sm:max-w-none">
-                {gatewayUrl}
+                {liveGatewayUrl}
               </code>
-              <CopyButton text={gatewayUrl} label="Copy gateway endpoint" />
+              <CopyButton text={liveGatewayUrl} label="Copy gateway endpoint" />
             </div>
+            {liveTunnel.active ? (
+              <tunnelFetcher.Form method="post">
+                <input type="hidden" name="intent" value="stop_tunnel" />
+                <Button
+                  type="submit"
+                  size="sm"
+                  variant="danger"
+                  disabled={stoppingTunnel}
+                >
+                  {stoppingTunnel ? (
+                    <Spinner size={13} />
+                  ) : (
+                    <Square size={13} aria-hidden="true" />
+                  )}
+                  Stop Tunnel
+                </Button>
+              </tunnelFetcher.Form>
+            ) : null}
             <Link to="/api-manager/create" className={buttonClass("primary", "sm")}>
               <Plus size={14} />
               New API Key
@@ -178,7 +300,7 @@ export default function Home({ loaderData }: Route.ComponentProps) {
               <p className="py-6 text-center text-sm text-muted-foreground">
                 No requests logged yet. Send a request to{" "}
                 <code className="rounded bg-surface-2 px-1.5 py-0.5 font-mono text-xs">
-                  {gatewayUrl}/chat/completions
+                  {liveGatewayUrl}/chat/completions
                 </code>{" "}
                 to see traffic here.
               </p>
@@ -226,6 +348,7 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                 { to: "/providers", label: "Configure Providers", desc: "Add models & upstream keys", icon: Plug },
                 { to: "/api-manager/create", label: "Issue Client API Key", desc: "Scoped key with budgets", icon: KeySquare },
                 { to: "/combo", label: "Model Combos", desc: "Failover & fallback chains", icon: Link2 },
+                { to: "/tunnels", label: "Public Tunneling", desc: "cloudflared, ngrok, frpc, custom domain", icon: Globe },
                 { to: "/agents", label: "Connect AI Agents", desc: "Claude Code, Codex, OpenCode", icon: Bot },
                 { to: "/logs", label: "Inspect Live Traffic", desc: "Realtime request stream", icon: ScrollText },
                 { to: "/analytics/usage", label: "Token & Cost Breakdown", desc: "Usage by provider & model", icon: TrendingUp },

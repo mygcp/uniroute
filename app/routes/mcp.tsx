@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useFetcher, useLoaderData } from "react-router";
+import { Link, useFetcher, useLoaderData } from "react-router";
 import type { Route } from "./+types/mcp";
 import {
   Cable,
@@ -92,6 +92,9 @@ const CATEGORY_BY_TOOL: Record<string, string> = {
   set_compression: "Other",
   test_compression: "Other",
   clear_logs: "Other",
+  tunnel_status: "Tunneling",
+  start_tunnel: "Tunneling",
+  stop_tunnel: "Tunneling",
 };
 
 const CATEGORY_ORDER = [
@@ -99,6 +102,7 @@ const CATEGORY_ORDER = [
   "Providers & models",
   "Proxy engine",
   "Client keys",
+  "Tunneling",
   "Other",
 ];
 
@@ -107,17 +111,19 @@ export async function loader({ request }: Route.LoaderArgs) {
     { HARNESS_REGISTRY, defaultMcpCommand, isMcpInstalled },
     { TOOLS },
     { getRemoteMcpStatus },
+    { getActiveTunnelUrl, resolveGatewayOrigin },
   ] = await Promise.all([
     import("../.server/agents-config"),
     import("../.server/mcp-tools"),
     import("../.server/mcp-http"),
+    import("../.server/tunnel"),
   ]);
   const command = defaultMcpCommand();
   const cmdStr = command
     .map((part) => (/\s/.test(part) ? `"${part.replace(/"/g, '\\"')}"` : part))
     .join(" ");
-  const origin =
-    process.env.BASE_URL?.replace(/\/+$/, "") || new URL(request.url).origin;
+  const tunnelUrl = getActiveTunnelUrl();
+  const origin = resolveGatewayOrigin(request);
   const remoteEndpoint = `${origin}/api/mcp`;
   const remote = getRemoteMcpStatus();
 
@@ -130,6 +136,7 @@ export async function loader({ request }: Route.LoaderArgs) {
 
   return {
     cmdStr,
+    tunnelUrl,
     remoteEndpoint,
     remote,
     tools,
@@ -572,7 +579,21 @@ export default function McpPage() {
               <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                 Remote Endpoint URL
               </span>
-              <Badge tone="info">POST / GET</Badge>
+              <div className="flex items-center gap-1.5">
+                {data.tunnelUrl ? (
+                  <Link to="/tunnels">
+                    <Badge tone="success">Via Tunnel</Badge>
+                  </Link>
+                ) : (
+                  <Link
+                    to="/tunnels"
+                    className="text-[11px] font-medium text-primary hover:underline"
+                  >
+                    Expose via Tunnel
+                  </Link>
+                )}
+                <Badge tone="info">POST / GET</Badge>
+              </div>
             </div>
             <div className="flex items-center justify-between gap-2 rounded-lg border border-border bg-surface px-3 py-2">
               <code className="truncate font-mono text-xs text-foreground">

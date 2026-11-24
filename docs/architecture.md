@@ -67,9 +67,10 @@ Hot indexes are created automatically for the most-used filter/group columns
 | `.server/logger.ts` + `log-stream.ts` | Batched inserts + realtime SSE broadcast |
 | `.server/usage.ts`, `stats.ts` | Usage analytics |
 | `.server/agents-config.ts` | Agent harness configs (backup/restore/MCP registration) |
-| `app/.server/mcp-server.ts` | MCP stdio/HTTP server (49 tools) |
+| `app/.server/mcp-server.ts` | MCP stdio/HTTP server (52 tools) |
 | `.server/mcp-http.ts` + `routes/api.mcp.ts` | Built-in remote MCP endpoint (`/api/mcp`) with on/off toggle and bearer token |
 | `.server/compressor.ts` + `compressor-tools.ts` | Global request compression; downloads and runs external RTK / Caveman binaries |
+| `.server/tunnel.ts` + `tunnel-tools.ts` | Auto-tunneling & custom domain runtime; downloads and runs cloudflared / ngrok / frpc / bore |
 
 ## Realtime
 

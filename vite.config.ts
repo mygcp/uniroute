@@ -7,4 +7,8 @@ export default defineConfig({
   resolve: {
     tsconfigPaths: true,
   },
+  server: {
+    // Allow public tunnel host headers (*.trycloudflare.com, ngrok, custom domains).
+    allowedHosts: true,
+  },
 });

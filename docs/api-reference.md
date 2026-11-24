@@ -66,6 +66,7 @@ Routing uses the `model` field; it must be registered under a provider.
 | `/api-manager` (+ create/$id) | Client API keys |
 | `/combo` | Model combos ([guide](combos.md)) |
 | `/compression` | RTK and Caveman Engine setup, global compression ([guide](compression.md)) |
+| `/tunnels` | Tunneling, auto-tunneling, custom domain setup ([guide](tunneling.md)) |
 | `/proxies` (+create) | Proxy engine |
 | `/mcp` | MCP server page: remote endpoint toggle, bearer token, registration commands |
 | `/logs`, `/logs/proxy` | Realtime request & proxy logs |

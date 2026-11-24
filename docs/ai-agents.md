@@ -68,7 +68,7 @@ args = ["/path/to/uniroute/app/.server/mcp-server.ts"]
 Or press **Register** on the MCP Server card (writes the config with an
 automatic backup, same as harness config).
 
-### Tool list (49)
+### Tool list (52)
 
 **Monitoring** — `gateway_stats`, `usage_summary`, `recent_requests`,
 `recent_proxy_logs`, `recent_webhooks`, `compression_settings`
@@ -88,6 +88,8 @@ automatic backup, same as harness config).
 **Client keys** — `list_client_keys`, `create_client_key` (plaintext shown once),
 `toggle_client_key`, `get_client_key`, `set_key_budget`,
 `rotate_client_key`
+
+**Tunneling** - `tunnel_status`, `start_tunnel`, `stop_tunnel`
 
 **Other** — `chat_completion` (test a model through full routing),
 `set_compression`, `test_compression`, `clear_logs`

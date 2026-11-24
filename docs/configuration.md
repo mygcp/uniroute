@@ -30,15 +30,18 @@ All configuration is done through environment variables (`.env` file).
 | `UNIROUTE_MCP_TOKEN` | Optional bearer token for the MCP HTTP transport (`bun app/.server/mcp-server.ts --http`). |
 | `UNIROUTE_MCP_PORT` | MCP HTTP port when `--http` is given without a value (default `3007`). |
 
-## Compression tools
+## External tools & tunnels
 
 | Variable | Purpose |
 | --- | --- |
-| `UNIROUTE_TOOLS_DIR` | Where RTK and Caveman Engine binaries are downloaded (default `~/.uniroute/bin`). |
-| `UNIROUTE_RTK_VERSION` / `UNIROUTE_CAVEMAN_VERSION` | Pin a release instead of the latest. |
-| `UNIROUTE_RTK_DOWNLOAD_URL` / `UNIROUTE_CAVEMAN_DOWNLOAD_URL` | Download from a mirror. |
+| `UNIROUTE_TOOLS_DIR` | Where RTK, Caveman Engine, and tunnel binaries (`cloudflared`, `ngrok`, `frpc`, `bore`) are downloaded (default `~/.uniroute/bin`). |
+| `UNIROUTE_TUNNELS_DIR` | Where generated `frpc.toml` files are stored (default `~/.uniroute/tunnels`). |
+| `UNIROUTE_RTK_VERSION` / `UNIROUTE_CAVEMAN_VERSION` | Pin compression tool releases instead of latest. |
+| `UNIROUTE_RTK_DOWNLOAD_URL` / `UNIROUTE_CAVEMAN_DOWNLOAD_URL` | Download compression binaries from a mirror. |
+| `UNIROUTE_CLOUDFLARED_VERSION` / `UNIROUTE_FRPC_VERSION` / `UNIROUTE_BORE_VERSION` | Pin tunnel binary releases instead of latest. |
+| `UNIROUTE_CLOUDFLARED_DOWNLOAD_URL` / `UNIROUTE_NGROK_DOWNLOAD_URL` / `UNIROUTE_FRPC_DOWNLOAD_URL` / `UNIROUTE_BORE_DOWNLOAD_URL` | Download tunnel binaries from a mirror. |
 
-See [Compression](compression.md).
+See [Compression](compression.md) and [Tunneling](tunneling.md).
 
 ## Harness config backups
 
