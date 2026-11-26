@@ -1,4 +1,4 @@
-import type { CanonicalMessage, CanonicalRequest } from "./canonical";
+import { sanitizeExtra, type CanonicalMessage, type CanonicalRequest } from "./canonical";
 
 function toContentPart(part: CanonicalMessage["content"]): unknown {
   if (typeof part === "string") return part;
@@ -51,5 +51,5 @@ export function build(c: CanonicalRequest): Record<string, unknown> {
   if (c.stop !== undefined) body.stop = c.stop;
   if (c.tools !== undefined && c.tools.length > 0) body.tools = c.tools;
   if (c.tool_choice !== undefined) body.tool_choice = c.tool_choice;
-  return { ...body, ...c.extra };
+  return { ...sanitizeExtra(c.extra), ...body };
 }

@@ -1,3 +1,4 @@
+import { exec } from "./db";
 import { listClientKeys, updateClientKey, type ClientKey } from "./client-key";
 import {
   deleteKey,
@@ -55,46 +56,53 @@ export function applyBulk(
       ? listClientKeys().filter((k) => ids.includes(k.id))
       : listClientKeys().filter((k) => matchesFilter(k, filter));
   const result: BulkResult = { done: 0, failed: 0 };
-  const errors: string[] = [];
-
-  for (const key of keys) {
-    try {
-      switch (action) {
-        case "activate":
-        case "reactivate":
-          reactivateKey(key.id);
-          break;
-        case "suspend":
-          suspendKey(key.id);
-          break;
-        case "delete":
-          deleteKey(key.id);
-          break;
-        case "rotate": {
-          const rotated = rotateKey(key.id);
-          result.rotated ??= [];
-          result.rotated.push(rotated);
-          break;
-        }
-        case "extend_expiry":
-          updateClientKey(key.id, { expiresAt: data.expiresAt ?? key.expires_at });
-          break;
-        case "set_budget":
-          updateClientKey(key.id, {
-            budget: data.budget ?? key.budget,
-          });
-          break;
-      }
-      result.done += 1;
-    } catch {
-      result.failed += 1;
-    }
-  }
 
   if (action === "export") {
     result.exported = keys;
+    return result;
   }
-  void errors;
+
+  exec("BEGIN");
+  try {
+    for (const key of keys) {
+      try {
+        switch (action) {
+          case "activate":
+          case "reactivate":
+            reactivateKey(key.id);
+            break;
+          case "suspend":
+            suspendKey(key.id);
+            break;
+          case "delete":
+            deleteKey(key.id);
+            break;
+          case "rotate": {
+            const rotated = rotateKey(key.id);
+            result.rotated ??= [];
+            result.rotated.push(rotated);
+            break;
+          }
+          case "extend_expiry":
+            updateClientKey(key.id, { expiresAt: data.expiresAt ?? key.expires_at });
+            break;
+          case "set_budget":
+            updateClientKey(key.id, {
+              budget: data.budget ?? key.budget,
+            });
+            break;
+        }
+        result.done += 1;
+      } catch {
+        result.failed += 1;
+      }
+    }
+    exec("COMMIT");
+  } catch (err) {
+    exec("ROLLBACK");
+    throw err;
+  }
+
   return result;
 }
 
@@ -129,8 +137,9 @@ export function exportKeysCsv(keys: ClientKey[]): string {
 }
 
 function CSV(v: string | number | null | undefined): string {
-  const s = v == null ? "" : String(v);
-  return `"${s.replace(/"/g, '""')}"`;
+  const raw = v == null ? "" : String(v);
+  const safe = /^[=+\-@\t\r]/.test(raw) ? `'${raw}` : raw;
+  return `"${safe.replace(/"/g, '""')}"`;
 }
 
 function csvStatus(k: ClientKey): string {

@@ -1,5 +1,6 @@
-import { query } from "./db";
-import { encryptKey, decryptKey } from "./key-crypto";
+import { exec, getTableVersion, onBeforeRead, onDbReset, onShutdownFlush, query } from "./db";
+import { encryptKey, decryptKey, hasApiKeySecret } from "./key-crypto";
+import { getCachedSetting, setCachedSetting, deleteCachedSetting } from "./settings-cache";
 
 export type ProxyType = "http-connect" | "socks5";
 
@@ -10,7 +11,6 @@ export interface ProxyConfig {
 	host: string;
 	port: number;
 	username: string | null;
-	/** Decrypted password (only exposed by getProxy when explicitly requested). */
 	password: string | null;
 	password_enc: string | null;
 	is_active: boolean;
@@ -110,6 +110,97 @@ interface AssignmentRow {
 	created_at: number;
 }
 
+type ProxyResultQueued = {
+	id: number;
+	ok: boolean;
+	latencyMs: number;
+	error: string | null;
+	nowMs: number;
+	nowSec: number;
+};
+
+let proxyVer = -1;
+let poolVer = -1;
+let assignVer = -1;
+
+let cachedProxies: ProxyConfig[] = [];
+let cachedProxiesById = new Map<number, ProxyConfig>();
+let cachedPools: ProxyPool[] = [];
+let cachedPoolsById = new Map<number, ProxyPool>();
+let cachedAssignments: ProxyAssignment[] = [];
+let cachedPoolByProvider = new Map<string, ProxyPool>();
+let cachedPoolByKey = new Map<number, ProxyPool>();
+
+const pendingStats = new Map<number, { okDelta: number; failDelta: number; lastOkAt: number | null; lastLatencyMs: number; lastError: string | null; lastUsedAt: number; updatedAt: number }>();
+let statsTimer: ReturnType<typeof setTimeout> | null = null;
+
+export function flushProxyStats(): void {
+	if (statsTimer) {
+		clearTimeout(statsTimer);
+		statsTimer = null;
+	}
+	if (pendingStats.size === 0) return;
+	const entries = [...pendingStats.entries()];
+	pendingStats.clear();
+
+	exec("BEGIN");
+	try {
+		const stmtOk = query(
+			`UPDATE outbound_proxies
+			 SET success_count = success_count + ?, fail_count = fail_count + ?,
+			     last_ok_at = COALESCE(?, last_ok_at), last_latency_ms = ?, last_error = NULL,
+			     last_used_at = ?, updated_at = ?
+			 WHERE id = ?`,
+		);
+		const stmtErr = query(
+			`UPDATE outbound_proxies
+			 SET success_count = success_count + ?, fail_count = fail_count + ?,
+			     last_ok_at = COALESCE(?, last_ok_at), last_latency_ms = ?, last_error = ?,
+			     last_used_at = ?, updated_at = ?
+			 WHERE id = ?`,
+		);
+		for (const [id, st] of entries) {
+			if (st.lastError === null) {
+				stmtOk.run(st.okDelta, st.failDelta, st.lastOkAt, st.lastLatencyMs, st.lastUsedAt, st.updatedAt, id);
+			} else {
+				stmtErr.run(st.okDelta, st.failDelta, st.lastOkAt, st.lastLatencyMs, st.lastError, st.lastUsedAt, st.updatedAt, id);
+			}
+		}
+		exec("COMMIT");
+	} catch (err) {
+		exec("ROLLBACK");
+		throw err;
+	}
+}
+
+onBeforeRead("outbound_proxies", flushProxyStats);
+onShutdownFlush(flushProxyStats);
+onDbReset(() => {
+	proxyVer = -1;
+	poolVer = -1;
+	assignVer = -1;
+	cachedProxies = [];
+	cachedProxiesById.clear();
+	cachedPools = [];
+	cachedPoolsById.clear();
+	cachedAssignments = [];
+	cachedPoolByProvider.clear();
+	cachedPoolByKey.clear();
+	pendingStats.clear();
+	if (statsTimer) {
+		clearTimeout(statsTimer);
+		statsTimer = null;
+	}
+});
+
+function decryptKeyOrNull(enc: string): string | null {
+	try {
+		return decryptKey(enc);
+	} catch {
+		return hasApiKeySecret() ? null : enc;
+	}
+}
+
 function mapProxy(row: ProxyRow): ProxyConfig {
 	return {
 		id: row.id,
@@ -132,6 +223,17 @@ function mapProxy(row: ProxyRow): ProxyConfig {
 	};
 }
 
+function parseProxyIds(raw: string): number[] {
+	try {
+		const arr = JSON.parse(raw);
+		return Array.isArray(arr)
+			? arr.filter((n: unknown) => typeof n === "number")
+			: [];
+	} catch {
+		return [];
+	}
+}
+
 function mapPool(row: PoolRow): ProxyPool {
 	return {
 		id: row.id,
@@ -148,50 +250,71 @@ function mapPool(row: PoolRow): ProxyPool {
 	};
 }
 
-function parseProxyIds(raw: string): number[] {
-	try {
-		const arr = JSON.parse(raw);
-		return Array.isArray(arr)
-			? arr.filter((n: unknown) => typeof n === "number")
-			: [];
-	} catch {
-		return [];
-	}
-}
-
-function decryptKeyOrNull(enc: string): string | null {
-	try {
-		return decryptKey(enc);
-	} catch {
-		// Not encrypted (no API_KEY_SECRET was configured when stored) — treat as plaintext.
-		return enc;
-	}
-}
-
 function nowSec(): number {
 	return Math.floor(Date.now() / 1000);
 }
 
-// ---------------------------------------------------------------------------
-// Proxies
-// ---------------------------------------------------------------------------
+function ensureProxiesCache(): void {
+	flushProxyStats();
+	const ver = getTableVersion("outbound_proxies");
+	if (ver === proxyVer) return;
+	const rows = query("SELECT * FROM outbound_proxies ORDER BY name").all() as unknown as ProxyRow[];
+	cachedProxies = rows.map(mapProxy);
+	cachedProxiesById = new Map(cachedProxies.map((p) => [p.id, p]));
+	proxyVer = ver;
+}
+
+function ensurePoolsCache(): void {
+	const pv = getTableVersion("proxy_pools");
+	const av = getTableVersion("proxy_pool_assignments");
+	if (pv !== poolVer) {
+		const rows = query("SELECT * FROM proxy_pools ORDER BY name").all() as unknown as PoolRow[];
+		cachedPools = rows.map(mapPool);
+		cachedPoolsById = new Map(cachedPools.map((p) => [p.id, p]));
+	}
+	if (pv !== poolVer || av !== assignVer) {
+		const aRows = query("SELECT * FROM proxy_pool_assignments ORDER BY target_type, target_id").all() as unknown as AssignmentRow[];
+		cachedAssignments = aRows.map((r) => ({
+			proxy_pool_id: r.proxy_pool_id,
+			target_type: (r.target_type === "client_key" ? "client_key" : "provider") as "provider" | "client_key",
+			target_id: r.target_id,
+			created_at: r.created_at,
+		}));
+		const byProv = new Map<string, ProxyPool>();
+		const byKey = new Map<number, ProxyPool>();
+		for (const a of cachedAssignments) {
+			const pool = cachedPoolsById.get(a.proxy_pool_id);
+			if (!pool || !pool.is_active) continue;
+			if (a.target_type === "provider") {
+				if (!byProv.has(a.target_id)) byProv.set(a.target_id, pool);
+			} else {
+				const kid = Number(a.target_id);
+				if (Number.isFinite(kid) && !byKey.has(kid)) byKey.set(kid, pool);
+			}
+		}
+		cachedPoolByProvider = byProv;
+		cachedPoolByKey = byKey;
+		poolVer = pv;
+		assignVer = av;
+	}
+}
+
+export function hasAnyProxyPools(): boolean {
+	ensurePoolsCache();
+	return cachedPools.length > 0;
+}
 
 export function listProxies(activeOnly = false): ProxyConfig[] {
-	const sql = activeOnly
-		? "SELECT * FROM outbound_proxies WHERE is_active = 1 ORDER BY name"
-		: "SELECT * FROM outbound_proxies ORDER BY name";
-	return (query(sql).all() as unknown as ProxyRow[]).map(mapProxy);
+	ensureProxiesCache();
+	return activeOnly ? cachedProxies.filter((p) => p.is_active) : cachedProxies;
 }
 
 export function getProxy(id: number): ProxyConfig | null {
-	const row = query("SELECT * FROM outbound_proxies WHERE id = ?").get(id) as
-		| ProxyRow
-		| undefined;
-	return row ? mapProxy(row) : null;
+	ensureProxiesCache();
+	return cachedProxiesById.get(id) ?? null;
 }
 
 export function createProxy(input: CreateProxyInput): ProxyConfig {
-	// Prefer encrypted-at-rest; fall back to plaintext when no API_KEY_SECRET set.
 	const passwordEnc = input.password
 		? (encryptKey(input.password) ?? input.password)
 		: null;
@@ -219,93 +342,61 @@ export function updateProxy(
 ): ProxyConfig | null {
 	const current = getProxy(id);
 	if (!current) return null;
-	// Fully static SQL per field; values are parameterized.
-	const stmts: Array<{ sql: string; value: unknown }> = [];
-	if (input.name !== undefined) {
-		stmts.push({
-			sql: "UPDATE outbound_proxies SET name = ? WHERE id = ?",
-			value: input.name,
-		});
-	}
-	if (input.type !== undefined) {
-		stmts.push({
-			sql: "UPDATE outbound_proxies SET type = ? WHERE id = ?",
-			value: input.type,
-		});
-	}
-	if (input.host !== undefined) {
-		stmts.push({
-			sql: "UPDATE outbound_proxies SET host = ? WHERE id = ?",
-			value: input.host,
-		});
-	}
-	if (input.port !== undefined) {
-		stmts.push({
-			sql: "UPDATE outbound_proxies SET port = ? WHERE id = ?",
-			value: input.port,
-		});
-	}
-	if (input.username !== undefined) {
-		stmts.push({
-			sql: "UPDATE outbound_proxies SET username = ? WHERE id = ?",
-			value: input.username ?? null,
-		});
-	}
-	if (input.password !== undefined) {
-		// Explicit password set: empty string clears it, otherwise encrypt.
-		stmts.push({
-			sql: "UPDATE outbound_proxies SET password_enc = ? WHERE id = ?",
-			value: input.password
-				? (encryptKey(input.password) ?? input.password)
-				: null,
-		});
-	}
-	if (input.is_active !== undefined) {
-		stmts.push({
-			sql: "UPDATE outbound_proxies SET is_active = ? WHERE id = ?",
-			value: input.is_active ? 1 : 0,
-		});
-	}
-	if (stmts.length === 0) return current;
-	for (const s of stmts) {
-		query(s.sql).run(s.value, id);
-	}
-	query("UPDATE outbound_proxies SET updated_at = ? WHERE id = ?").run(
-		nowSec(),
-		id,
-	);
+	const name = input.name !== undefined ? input.name : current.name;
+	const type = input.type !== undefined ? input.type : current.type;
+	const host = input.host !== undefined ? input.host : current.host;
+	const port = input.port !== undefined ? input.port : current.port;
+	const username = input.username !== undefined ? (input.username ?? null) : current.username;
+	const passwordEnc =
+		input.password !== undefined
+			? (input.password ? (encryptKey(input.password) ?? input.password) : null)
+			: current.password_enc;
+	const isActive = input.is_active !== undefined ? (input.is_active ? 1 : 0) : (current.is_active ? 1 : 0);
+
+	query(
+		`UPDATE outbound_proxies
+		 SET name = ?, type = ?, host = ?, port = ?, username = ?, password_enc = ?, is_active = ?, updated_at = ?
+		 WHERE id = ?`,
+	).run(name, type, host, port, username, passwordEnc, isActive, nowSec(), id);
 	return getProxy(id);
 }
 
 export function deleteProxy(id: number): void {
-	query("DELETE FROM outbound_proxies WHERE id = ?").run(id);
-	// Remove the proxy id from every pool's proxy_ids list.
-	for (const pool of listPools()) {
-		if (pool.proxy_ids.includes(id)) {
-			const rest = pool.proxy_ids.filter((pid) => pid !== id);
-			query(
-				"UPDATE proxy_pools SET proxy_ids = ?, updated_at = ? WHERE id = ?",
-			).run(JSON.stringify(rest), nowSec(), pool.id);
+	deleteProxiesBatch([id]);
+}
+
+export function deleteProxiesBatch(ids: number[]): void {
+	const idSet = new Set(ids.filter((n) => Number.isFinite(n) && n > 0));
+	if (idSet.size === 0) return;
+	exec("BEGIN");
+	try {
+		const delStmt = query("DELETE FROM outbound_proxies WHERE id = ?");
+		for (const id of idSet) delStmt.run(id);
+		const updatePoolStmt = query(
+			"UPDATE proxy_pools SET proxy_ids = ?, updated_at = ? WHERE id = ?",
+		);
+		const ts = nowSec();
+		for (const pool of listPools()) {
+			if (pool.proxy_ids.some((pid) => idSet.has(pid))) {
+				const rest = pool.proxy_ids.filter((pid) => !idSet.has(pid));
+				updatePoolStmt.run(JSON.stringify(rest), ts, pool.id);
+			}
 		}
+		exec("COMMIT");
+	} catch (err) {
+		exec("ROLLBACK");
+		throw err;
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Pools
-// ---------------------------------------------------------------------------
-
 export function listPools(activeOnly = false): ProxyPool[] {
-	const sql = activeOnly
-		? "SELECT * FROM proxy_pools WHERE is_active = 1 ORDER BY name"
-		: "SELECT * FROM proxy_pools ORDER BY name";
-	return (query(sql).all() as unknown as PoolRow[]).map(mapPool);
+	ensurePoolsCache();
+	return activeOnly ? cachedPools.filter((p) => p.is_active) : cachedPools;
 }
 
 export function getPool(id: number): ProxyPool | null {
-	const row = query("SELECT * FROM proxy_pools WHERE id = ?").get(id) as
-		| PoolRow
-		| undefined;
-	return row ? mapPool(row) : null;
+	ensurePoolsCache();
+	return cachedPoolsById.get(id) ?? null;
 }
 
 export function createPool(input: CreatePoolInput): ProxyPool {
@@ -329,48 +420,28 @@ export function updatePool(
 ): ProxyPool | null {
 	const current = getPool(id);
 	if (!current) return null;
-	// Fully static SQL per field; values are parameterized.
-	const stmts: Array<{ sql: string; value: unknown }> = [];
-	if (input.name !== undefined) {
-		stmts.push({
-			sql: "UPDATE proxy_pools SET name = ? WHERE id = ?",
-			value: input.name,
-		});
-	}
-	if (input.proxy_ids !== undefined) {
-		stmts.push({
-			sql: "UPDATE proxy_pools SET proxy_ids = ? WHERE id = ?",
-			value: JSON.stringify(input.proxy_ids),
-		});
-	}
-	if (input.is_active !== undefined) {
-		stmts.push({
-			sql: "UPDATE proxy_pools SET is_active = ? WHERE id = ?",
-			value: input.is_active ? 1 : 0,
-		});
-	}
-	if (input.strategy !== undefined) {
-		stmts.push({
-			sql: "UPDATE proxy_pools SET strategy = ? WHERE id = ?",
-			value: input.strategy,
-		});
-	}
-	if (stmts.length === 0) return current;
-	for (const s of stmts) {
-		query(s.sql).run(s.value, id);
-	}
-	query("UPDATE proxy_pools SET updated_at = ? WHERE id = ?").run(nowSec(), id);
+	const name = input.name !== undefined ? input.name : current.name;
+	const proxyIds = input.proxy_ids !== undefined ? JSON.stringify(input.proxy_ids) : JSON.stringify(current.proxy_ids);
+	const isActive = input.is_active !== undefined ? (input.is_active ? 1 : 0) : (current.is_active ? 1 : 0);
+	const strategy = input.strategy !== undefined ? input.strategy : current.strategy;
+
+	query(
+		"UPDATE proxy_pools SET name = ?, proxy_ids = ?, is_active = ?, strategy = ?, updated_at = ? WHERE id = ?",
+	).run(name, proxyIds, isActive, strategy, nowSec(), id);
 	return getPool(id);
 }
 
 export function deletePool(id: number): void {
-	query("DELETE FROM proxy_pool_assignments WHERE proxy_pool_id = ?").run(id);
-	query("DELETE FROM proxy_pools WHERE id = ?").run(id);
+	exec("BEGIN");
+	try {
+		query("DELETE FROM proxy_pool_assignments WHERE proxy_pool_id = ?").run(id);
+		query("DELETE FROM proxy_pools WHERE id = ?").run(id);
+		exec("COMMIT");
+	} catch (err) {
+		exec("ROLLBACK");
+		throw err;
+	}
 }
-
-// ---------------------------------------------------------------------------
-// Assignments
-// ---------------------------------------------------------------------------
 
 export type AssignmentTargetType = "provider" | "client_key";
 
@@ -398,43 +469,19 @@ export function unassignPool(
 }
 
 export function listAssignments(): ProxyAssignment[] {
-	return (
-		query(
-			"SELECT * FROM proxy_pool_assignments ORDER BY target_type, target_id",
-		).all() as unknown as AssignmentRow[]
-	).map((r) => ({
-		proxy_pool_id: r.proxy_pool_id,
-		target_type: (r.target_type === "client_key" ? "client_key" : "provider") as
-			| "provider"
-			| "client_key",
-		target_id: r.target_id,
-		created_at: r.created_at,
-	}));
+	ensurePoolsCache();
+	return cachedAssignments;
 }
 
 export function getPoolForProvider(providerId: string): ProxyPool | null {
-	const row = query(
-		`SELECT p.* FROM proxy_pools p
-     JOIN proxy_pool_assignments a ON a.proxy_pool_id = p.id
-     WHERE a.target_type = 'provider' AND a.target_id = ? AND p.is_active = 1
-     LIMIT 1`,
-	).get(providerId) as PoolRow | undefined;
-	return row ? mapPool(row) : null;
+	ensurePoolsCache();
+	return cachedPoolByProvider.get(providerId) ?? null;
 }
 
 export function getPoolForApiKey(apiKeyId: number): ProxyPool | null {
-	const row = query(
-		`SELECT p.* FROM proxy_pools p
-     JOIN proxy_pool_assignments a ON a.proxy_pool_id = p.id
-     WHERE a.target_type = 'client_key' AND a.target_id = ? AND p.is_active = 1
-     LIMIT 1`,
-	).get(String(apiKeyId)) as PoolRow | undefined;
-	return row ? mapPool(row) : null;
+	ensurePoolsCache();
+	return cachedPoolByKey.get(apiKeyId) ?? null;
 }
-
-// ---------------------------------------------------------------------------
-// Bulk import
-// ---------------------------------------------------------------------------
 
 export function bulkImportProxies(rows: BulkProxyRow[]): {
 	imported: number;
@@ -442,76 +489,71 @@ export function bulkImportProxies(rows: BulkProxyRow[]): {
 } {
 	let imported = 0;
 	const errors: string[] = [];
-	const poolCache = new Map<string, ProxyPool>();
+	const poolAdditions = new Map<string, number[]>();
 
-	for (const [i, row] of rows.entries()) {
-		try {
-			if (!row.host || !row.port) {
-				errors.push(`row ${i + 1}: host and port required`);
-				continue;
-			}
-			const proxy = createProxy({
-				name: row.name || `${row.host}:${row.port}`,
-				type: row.type ?? "http-connect",
-				host: row.host,
-				port: row.port,
-				username: row.username ?? null,
-				password: row.password ?? null,
-			});
-			imported++;
-			if (row.poolName) {
-				let pool = poolCache.get(row.poolName);
-				if (!pool) {
-					pool = listPools().find((p) => p.name === row.poolName) ?? undefined;
-					if (!pool) {
-						pool = createPool({ name: row.poolName, proxy_ids: [] });
+	exec("BEGIN");
+	try {
+		for (const [i, row] of rows.entries()) {
+			try {
+				if (!row.host || !row.port) {
+					errors.push(`row ${i + 1}: host and port required`);
+					continue;
+				}
+				const proxy = createProxy({
+					name: row.name || `${row.host}:${row.port}`,
+					type: row.type ?? "http-connect",
+					host: row.host,
+					port: row.port,
+					username: row.username ?? null,
+					password: row.password ?? null,
+				});
+				imported++;
+				if (row.poolName) {
+					let arr = poolAdditions.get(row.poolName);
+					if (!arr) {
+						arr = [];
+						poolAdditions.set(row.poolName, arr);
 					}
-					poolCache.set(row.poolName, pool);
+					arr.push(proxy.id);
 				}
-				updatePool(pool.id, { proxy_ids: [...pool.proxy_ids, proxy.id] });
-				const refreshed = getPool(pool.id);
-				if (refreshed) {
-					pool = refreshed;
-					poolCache.set(row.poolName, refreshed);
-				}
+			} catch (err) {
+				errors.push(
+					`row ${i + 1}: ${err instanceof Error ? err.message : String(err)}`,
+				);
 			}
-		} catch (err) {
-			errors.push(
-				`row ${i + 1}: ${err instanceof Error ? err.message : String(err)}`,
-			);
 		}
+
+		for (const [poolName, addedIds] of poolAdditions) {
+			const existing = listPools().find((p) => p.name === poolName);
+			if (!existing) {
+				createPool({ name: poolName, proxy_ids: addedIds });
+			} else {
+				updatePool(existing.id, { proxy_ids: [...existing.proxy_ids, ...addedIds] });
+			}
+		}
+		exec("COMMIT");
+	} catch (err) {
+		exec("ROLLBACK");
+		throw err;
 	}
 	return { imported, errors };
 }
 
-// ---------------------------------------------------------------------------
-// Global proxy (default fallback before direct connection)
-// ---------------------------------------------------------------------------
-
 const GLOBAL_POOL_SETTING = "global_proxy_pool_id";
 
-/** Global fallback pool applied when neither the API key nor the provider has a pool. */
 export function getGlobalProxyPool(): ProxyPool | null {
-	const row = query("SELECT value FROM settings WHERE key = ?").get(
-		GLOBAL_POOL_SETTING,
-	) as { value: string } | undefined;
-	if (!row || !row.value) return null;
-	return getPool(Number(row.value));
+	const raw = getCachedSetting(GLOBAL_POOL_SETTING);
+	if (!raw) return null;
+	return getPool(Number(raw));
 }
 
 export function setGlobalProxyPool(poolId: number | null): void {
 	if (poolId == null || Number.isNaN(poolId)) {
-		query("DELETE FROM settings WHERE key = ?").run(GLOBAL_POOL_SETTING);
+		deleteCachedSetting(GLOBAL_POOL_SETTING);
 	} else {
-		query(
-			"INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-		).run(GLOBAL_POOL_SETTING, String(poolId));
+		setCachedSetting(GLOBAL_POOL_SETTING, String(poolId));
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Result tracking
-// ---------------------------------------------------------------------------
 
 export interface ProxyResultInput {
 	ok: boolean;
@@ -519,20 +561,49 @@ export interface ProxyResultInput {
 	error?: string;
 }
 
-/** Update usage stats for a proxy after a fetch attempt. */
 export function recordProxyResult(id: number, input: ProxyResultInput): void {
 	if (id <= 0) return;
+	const nowMs = Date.now();
+	const nowS = Math.floor(nowMs / 1000);
+	const existing = pendingStats.get(id) ?? {
+		okDelta: 0,
+		failDelta: 0,
+		lastOkAt: null,
+		lastLatencyMs: input.latencyMs,
+		lastError: null,
+		lastUsedAt: nowS,
+		updatedAt: nowS,
+	};
 	if (input.ok) {
-		query(
-			"UPDATE outbound_proxies SET success_count = success_count + 1, last_ok_at = ?, last_latency_ms = ?, last_error = NULL WHERE id = ?",
-		).run(Date.now(), input.latencyMs, id);
+		existing.okDelta += 1;
+		existing.lastOkAt = nowMs;
+		existing.lastError = null;
 	} else {
-		query(
-			"UPDATE outbound_proxies SET fail_count = fail_count + 1, last_error = ?, last_latency_ms = ? WHERE id = ?",
-		).run(input.error ?? "unknown error", input.latencyMs, id);
+		existing.failDelta += 1;
+		existing.lastError = input.error ?? "unknown error";
 	}
-	const nowSec = Math.floor(Date.now() / 1000);
-	query(
-		"UPDATE outbound_proxies SET last_used_at = ?, updated_at = ? WHERE id = ?",
-	).run(nowSec, nowSec, id);
+	existing.lastLatencyMs = input.latencyMs;
+	existing.lastUsedAt = nowS;
+	existing.updatedAt = nowS;
+	pendingStats.set(id, existing);
+
+	const cached = cachedProxiesById.get(id);
+	if (cached) {
+		if (input.ok) {
+			cached.success_count += 1;
+			cached.last_ok_at = nowMs;
+			cached.last_error = null;
+		} else {
+			cached.fail_count += 1;
+			cached.last_error = existing.lastError;
+		}
+		cached.last_latency_ms = input.latencyMs;
+		cached.last_used_at = nowS;
+		cached.updated_at = nowS;
+	}
+
+	if (!statsTimer) {
+		statsTimer = setTimeout(flushProxyStats, 2000);
+		statsTimer.unref?.();
+	}
 }

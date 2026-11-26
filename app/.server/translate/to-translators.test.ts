@@ -140,4 +140,56 @@ describe("to-gemini", () => {
       functionResponse: { name: "f", response: { result: "42" } },
     });
   });
+
+  test("extra passthrough cannot override core payload fields", () => {
+    const poisoned = {
+      model: "evil-model",
+      messages: [{ role: "user", content: "hijacked" }],
+      tools: [],
+      system: "hijacked-system",
+      contents: [],
+      generationConfig: { temperature: 99 },
+      stream: true,
+      seed: 123,
+    };
+
+    const openaiBody = toOpenAi(
+      req({
+        model: "safe-model",
+        messages: [{ role: "user", content: "hello" }],
+        extra: poisoned,
+      }),
+    );
+    expect(openaiBody.model).toBe("safe-model");
+    expect(openaiBody.messages).toEqual([{ role: "user", content: "hello" }]);
+    expect(openaiBody.stream).toBe(false);
+    expect(openaiBody.seed).toBe(123);
+
+    const anthropicBody = toAnthropic(
+      req({
+        model: "safe-claude",
+        messages: [
+          { role: "system", content: "safe-system" },
+          { role: "user", content: "hello" },
+        ],
+        extra: poisoned,
+      }),
+    );
+    expect(anthropicBody.model).toBe("safe-claude");
+    expect(anthropicBody.system).toBe("safe-system");
+    expect(anthropicBody.messages).toEqual([
+      { role: "user", content: [{ type: "text", text: "hello" }] },
+    ]);
+
+    const geminiBody = toGemini(
+      req({
+        model: "safe-gemini",
+        messages: [{ role: "user", content: "hello" }],
+        temperature: 0.3,
+        extra: poisoned,
+      }),
+    );
+    expect(geminiBody.contents).toEqual([{ role: "user", parts: [{ text: "hello" }] }]);
+    expect(geminiBody.generationConfig).toEqual({ temperature: 0.3 });
+  });
 });

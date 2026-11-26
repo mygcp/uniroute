@@ -23,7 +23,6 @@ import {
   isHarnessId,
   isKeyRevealAllowed,
   isKeyRevealLockedByEnv,
-  isMcpInstalled,
   readBackup,
   readConfig,
   removeMcp,
@@ -34,11 +33,11 @@ import {
   writeHarnessConfig,
 } from "../.server/agents-config";
 import type { HarnessId, HarnessStatus } from "../.server/agents-config";
-import { createClientKey, listClientKeys } from "../.server/client-key";
+import { createClientKey, getClientKeyById, listClientKeys } from "../.server/client-key";
 import { decryptKey } from "../.server/key-crypto";
 import { getStructuredSuggestions } from "../.server/suggest";
-import { getSessionToken, isValid } from "../.server/auth";
-import { resolveGatewayOrigin } from "../.server/tunnel";
+import { getSessionToken, isValid, requireLoaderSession } from "../.server/auth";
+import { getActiveTunnelUrl, resolveGatewayOrigin } from "../.server/tunnel";
 import { PageHeader } from "../components/ui/page-header";
 import { Card } from "../components/ui/card";
 import { Button, buttonClass } from "../components/ui/button";
@@ -61,6 +60,7 @@ export function meta() {
 type KeyOption = { id: number; name: string; prefix: string; revealable: boolean };
 
 export function loader({ request }: Route.LoaderArgs) {
+  requireLoaderSession(request);
   const revealAllowed = isKeyRevealAllowed();
   const revealLockedByEnv = isKeyRevealLockedByEnv();
   const keys: KeyOption[] = listClientKeys()
@@ -71,17 +71,23 @@ export function loader({ request }: Route.LoaderArgs) {
       prefix: k.key_prefix,
       revealable: Boolean(k.key_enc),
     }));
+  const harnesses = statusAll();
+  const byId = new Map(harnesses.map((h) => [h.id, h]));
+  const reqUrl = new URL(request.url);
+  const localPort = Number(process.env.PORT ?? reqUrl.port) || 3000;
   return {
-    harnesses: statusAll(),
+    harnesses,
     baseUrl: resolveGatewayOrigin(request),
+    localBaseUrl: `http://127.0.0.1:${localPort}`,
+    tunnelBaseUrl: getActiveTunnelUrl(),
     keys,
     revealAllowed,
     revealLockedByEnv,
     modelSuggestions: [...new Set(getStructuredSuggestions().map((s) => s.value))],
     mcp: {
-      codex: isMcpInstalled("codex"),
-      "claude-code": isMcpInstalled("claude-code"),
-      opencode: isMcpInstalled("opencode"),
+      codex: byId.get("codex")?.mcpInstalled ?? false,
+      "claude-code": byId.get("claude-code")?.mcpInstalled ?? false,
+      opencode: byId.get("opencode")?.mcpInstalled ?? false,
       command: defaultMcpCommand(),
     },
   };
@@ -114,7 +120,7 @@ function resolveApiKey(
       };
     }
     const id = Number(form.get("existing_key_id"));
-    const row = listClientKeys().find((k) => k.id === id);
+    const row = getClientKeyById(id);
     if (!row) return { ok: false, error: "API key not found." };
     if (!row.key_enc) {
       return { ok: false, error: "This key has no recoverable secret." };
@@ -342,6 +348,8 @@ type ConfirmFn = (opts: {
 const HarnessCard = memo(function HarnessCard({
   status,
   defaultBaseUrl,
+  localBaseUrl,
+  tunnelBaseUrl,
   keys,
   revealAllowed,
   modelSuggestions,
@@ -349,12 +357,15 @@ const HarnessCard = memo(function HarnessCard({
 }: {
   status: HarnessStatus;
   defaultBaseUrl: string;
+  localBaseUrl: string;
+  tunnelBaseUrl: string | null;
   keys: KeyOption[];
   revealAllowed: boolean;
   modelSuggestions: string[];
   confirm: ConfirmFn;
 }) {
   const id = status.id as HarnessId;
+  const [baseUrl, setBaseUrl] = useState(defaultBaseUrl);
   const [keyMode, setKeyMode] = useState<"new" | "existing" | "manual">("new");
   const [authMode, setAuthMode] = useState<"token" | "env">("token");
   const [model, setModel] = useState("");
@@ -527,12 +538,41 @@ const HarnessCard = memo(function HarnessCard({
         <input type="hidden" name="key_mode" value={keyMode} />
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
           <div>
-            <Label htmlFor={`${id}-base-url`}>Gateway base URL</Label>
+            <div className="flex items-center justify-between gap-2">
+              <Label htmlFor={`${id}-base-url`}>Gateway base URL</Label>
+              {tunnelBaseUrl ? (
+                <div className="flex items-center gap-1 pb-1 text-[11px]">
+                  <button
+                    type="button"
+                    onClick={() => setBaseUrl(localBaseUrl)}
+                    className={`rounded px-1.5 py-0.5 font-medium transition-colors ${
+                      baseUrl === localBaseUrl
+                        ? "bg-primary/15 text-primary"
+                        : "text-muted-foreground hover:text-foreground"
+                    }`}
+                  >
+                    Local
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setBaseUrl(tunnelBaseUrl)}
+                    className={`rounded px-1.5 py-0.5 font-medium transition-colors ${
+                      baseUrl === tunnelBaseUrl
+                        ? "bg-primary/15 text-primary"
+                        : "text-muted-foreground hover:text-foreground"
+                    }`}
+                  >
+                    Tunnel
+                  </button>
+                </div>
+              ) : null}
+            </div>
             <Input
               id={`${id}-base-url`}
               name="base_url"
-              defaultValue={defaultBaseUrl}
-              placeholder="http://192.168.1.10:3000"
+              value={baseUrl}
+              onChange={(e) => setBaseUrl(e.target.value)}
+              placeholder="http://127.0.0.1:3000"
             />
           </div>
           <div>
@@ -1085,6 +1125,8 @@ export default function Agents({
           key={selectedHarness.id}
           status={selectedHarness}
           defaultBaseUrl={loaderData.baseUrl}
+          localBaseUrl={loaderData.localBaseUrl}
+          tunnelBaseUrl={loaderData.tunnelBaseUrl}
           keys={loaderData.keys}
           revealAllowed={loaderData.revealAllowed}
           modelSuggestions={loaderData.modelSuggestions}

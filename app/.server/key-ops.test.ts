@@ -163,4 +163,35 @@ describe("key ops", () => {
     });
     expect(() => ops.deleteKey(id)).not.toThrow();
   });
+
+  test("healthCheck accepts preloaded key and usage summaries", async () => {
+    const usageModule = await import("./key-usage");
+    const { id } = makeKey({ budget: { monthly: 50 } });
+    ops.recordRequestUsage(id, {
+      model: "gpt-4o",
+      providerId: "openai",
+      status: 200,
+      promptTokens: 100,
+      completionTokens: 20,
+    });
+    const key = ck.getClientKeyById(id)!;
+    const month = usageModule.usageThisMonth(id);
+    const today = usageModule.usageToday(id);
+    const h = ops.healthCheck(id, { key, month, today });
+    expect(h.key_id).toBe(id);
+    expect(h.checks.monthly_cost).toBeCloseTo(month.cost, 8);
+    expect(h.checks.requests_today).toBe(today.requests);
+  });
+
+  test("exportKeysCsv escapes spreadsheet formula prefixes", async () => {
+    const bulk = await import("./key-bulk");
+    const { id } = makeKey();
+    const key = { ...ck.getClientKeyById(id)!, name: "=CMD|'/C calc'!A0" };
+    const csv = bulk.exportKeysCsv([key]);
+    expect(csv).toContain(`"'=CMD|'/C calc'!A0"`);
+    const plusKey = { ...key, name: "+1+1" };
+    expect(bulk.exportKeysCsv([plusKey])).toContain(`"'+1+1"`);
+    const atKey = { ...key, name: "@SUM(A1)" };
+    expect(bulk.exportKeysCsv([atKey])).toContain(`"'@SUM(A1)"`);
+  });
 });

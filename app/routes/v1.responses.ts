@@ -9,11 +9,9 @@ export async function action({ request }: Route.ActionArgs) {
       parse,
       endpoint: "responses",
     });
-  } catch (err) {
-    const message =
-      err instanceof Error ? err.message : "upstream request failed";
+  } catch {
     return Response.json(
-      { error: { message: `upstream error: ${message}`, type: "proxy_error" } },
+      { error: { message: "upstream request failed", type: "proxy_error" } },
       { status: 502 },
     );
   }

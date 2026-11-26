@@ -17,14 +17,16 @@ import {
 export function meta() {
 	return [{ title: "API Keys | UniRoute" }];
 }
-import { requireSession } from "../.server/auth";
+import { requireLoaderSession, requireSession } from "../.server/auth";
 import {
+	getClientKeyById,
 	listClientKeys,
 	isRequireApiKey,
 	setRequireApiKey,
 } from "../.server/client-key";
+import { query } from "../.server/db";
 import { computeStatus, type KeyStatus } from "../.server/key-enforce";
-import { usageThisMonth, usageToday } from "../.server/key-usage";
+import { flushUsageQueue, type UsageSummary } from "../.server/key-usage";
 import {
 	deleteKey,
 	reactivateKey,
@@ -47,16 +49,82 @@ import { Tooltip } from "../components/ui/tooltip";
 import { useConfirm } from "../components/ui/confirm-dialog";
 import { useToast } from "../components/ui/toast";
 
-export function loader() {
+export function loader({ request }: Route.LoaderArgs) {
+	requireLoaderSession(request);
+	flushUsageQueue();
+	const now = new Date();
+	const todayStr = now.toISOString().slice(0, 10);
+	const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1))
+		.toISOString()
+		.slice(0, 10);
+	const monthEnd = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1))
+		.toISOString()
+		.slice(0, 10);
+
+	const aggRows = query(
+		`SELECT key_id,
+		        COALESCE(SUM(requests), 0) AS m_req,
+		        COALESCE(SUM(prompt_tokens), 0) AS m_pt,
+		        COALESCE(SUM(completion_tokens), 0) AS m_ct,
+		        COALESCE(SUM(cost), 0) AS m_cost,
+		        COALESCE(SUM(CASE WHEN date = ? THEN requests ELSE 0 END), 0) AS t_req,
+		        COALESCE(SUM(CASE WHEN date = ? THEN prompt_tokens ELSE 0 END), 0) AS t_pt,
+		        COALESCE(SUM(CASE WHEN date = ? THEN completion_tokens ELSE 0 END), 0) AS t_ct,
+		        COALESCE(SUM(CASE WHEN date = ? THEN cost ELSE 0 END), 0) AS t_cost
+		   FROM key_usage_daily
+		  WHERE date >= ? AND date < ?
+		  GROUP BY key_id`,
+	).all(todayStr, todayStr, todayStr, todayStr, monthStart, monthEnd) as Array<{
+		key_id: number;
+		m_req: number;
+		m_pt: number;
+		m_ct: number;
+		m_cost: number;
+		t_req: number;
+		t_pt: number;
+		t_ct: number;
+		t_cost: number;
+	}>;
+
+	const EMPTY: UsageSummary = { requests: 0, promptTokens: 0, completionTokens: 0, cost: 0 };
+	const usageByKey = new Map<number, { month: UsageSummary; today: UsageSummary }>();
+	for (const r of aggRows) {
+		usageByKey.set(r.key_id, {
+			month: {
+				requests: Number(r.m_req),
+				promptTokens: Number(r.m_pt),
+				completionTokens: Number(r.m_ct),
+				cost: Number(r.m_cost),
+			},
+			today: {
+				requests: Number(r.t_req),
+				promptTokens: Number(r.t_pt),
+				completionTokens: Number(r.t_ct),
+				cost: Number(r.t_cost),
+			},
+		});
+	}
+
 	const keys = listClientKeys().map((k) => {
-		const month = usageThisMonth(k.id);
-		const today = usageToday(k.id);
+		const u = usageByKey.get(k.id);
+		const month = u?.month ?? EMPTY;
+		const today = u?.today ?? EMPTY;
+		const {
+			key_hash,
+			key_enc,
+			previous_key_hash: _pkh,
+			previous_key_enc: _pke,
+			...safeKey
+		} = k;
 		return {
-			key: k,
+			key: {
+				...safeKey,
+				masked_key: `${k.key_prefix}…${key_hash.slice(0, 4)}`,
+			},
 			month,
 			today,
 			status: computeStatus(k, month),
-			revealable: !!k.key_enc,
+			revealable: !!key_enc,
 		};
 	});
 	const requireApiKey = isRequireApiKey();
@@ -115,7 +183,7 @@ export async function action({ request }: Route.ActionArgs) {
 		return { notice: { ok: true, message: `Key #${id} deleted` } } satisfies Result;
 	}
 	if (intent === "reveal") {
-		const key = listClientKeys().find((k) => k.id === id);
+		const key = getClientKeyById(id);
 		if (!key || !key.key_enc || process.env.ALLOW_API_KEY_REVEAL !== "1") {
 			return { revealed: null } satisfies Result;
 		}
@@ -181,7 +249,7 @@ const STATUS_LABEL: Record<KeyStatus, string> = {
 };
 
 function masked(key: Row["key"]): string {
-	return `${key.key_prefix}…${key.key_hash.slice(0, 4)}`;
+	return key.masked_key;
 }
 
 function pct(value: number, total: number): number {

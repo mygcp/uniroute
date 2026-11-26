@@ -2,17 +2,19 @@ import { connect as netConnect } from "node:net";
 import { connect as tlsConnect } from "node:tls";
 import { once } from "node:events";
 import type { Socket } from "node:net";
-import { query } from "./db";
+import { onDbReset } from "./db";
 import { recordProxyLog } from "./logger";
 import {
 	getGlobalProxyPool,
 	getPool,
 	getProxy,
+	hasAnyProxyPools,
 	type PoolStrategy,
 	type ProxyConfig,
 	type ProxyPool,
 	recordProxyResult,
 } from "./outbound-proxy";
+import { validateUrlSync } from "./ssrf";
 
 /**
  * Outbound Proxy Engine — single egress point for all upstream HTTP/S traffic.
@@ -146,20 +148,19 @@ export function orderProxiesByStrategy(
 	];
 }
 
-function markProxyUsed(id: number): void {
-	query(
-		"UPDATE outbound_proxies SET last_used_at = ?, updated_at = ? WHERE id = ?",
-	).run(Date.now(), Math.floor(Date.now() / 1000), id);
+function markProxyUsed(resolved: ResolvedProxy): void {
+	resolved.proxy.last_used_at = Date.now();
 }
-
-// ---------------------------------------------------------------------------
-// Single egress point
-// ---------------------------------------------------------------------------
 
 export async function fetchUpstream(
 	url: string,
 	init: FetchUpstreamInit,
 ): Promise<Response> {
+	const urlCheck = validateUrlSync(url, { allowPrivate: true, allowLoopback: true });
+	if (!urlCheck.ok) {
+		throw new Error(`blocked upstream url: ${urlCheck.reason}`);
+	}
+
 	const {
 		apiKeyPoolId,
 		accountPoolId,
@@ -173,28 +174,28 @@ export async function fetchUpstream(
 		...fetchInit
 	} = init;
 
-	let chain =
-		proxyPoolId != null
-			? resolveProxyPool({ apiKeyPoolId: proxyPoolId })
-			: resolveProxyPool({ apiKeyPoolId, accountPoolId, providerPoolId, comboPoolId });
-	if (!chain) {
-		const globalPool = getGlobalProxyPool();
-		if (globalPool) chain = resolveProxyPool({ globalPoolId: globalPool.id });
+	let chain: ResolvedProxy[] | null = null;
+	if (hasAnyProxyPools()) {
+		chain =
+			proxyPoolId != null
+				? resolveProxyPool({ apiKeyPoolId: proxyPoolId })
+				: resolveProxyPool({ apiKeyPoolId, accountPoolId, providerPoolId, comboPoolId });
+		if (!chain) {
+			const globalPool = getGlobalProxyPool();
+			if (globalPool) chain = resolveProxyPool({ globalPoolId: globalPool.id });
+		}
 	}
 
 	if (!chain) {
-		// No active proxy pool → direct connection (current behavior).
 		return fetch(url, fetchInit);
 	}
 
-	// Urutan berdasarkan strategy pool (RR / priority / random), bukan
-	// hardcoded LRU lagi.
 	const ordered = orderProxiesByStrategy(chain);
 	let lastResponse: Response | null = null;
 	let lastError: string | null = null;
 
 	for (const resolved of ordered) {
-		markProxyUsed(resolved.proxy.id);
+		markProxyUsed(resolved);
 		onProxyUsed?.(resolved);
 		const started = Date.now();
 		try {
@@ -451,6 +452,153 @@ async function socks5Tunnel(
 // Raw HTTP/1.1 request over a tunneled socket
 // ---------------------------------------------------------------------------
 
+type PooledSocket = {
+	socket: Socket;
+	key: string;
+	expiresAt: number;
+	cleanup: () => void;
+};
+
+const MAX_IDLE_SOCKETS = 64;
+const IDLE_SOCKET_TTL_MS = 15_000;
+const MAX_CHUNK_LINE_BYTES = 8 * 1024;
+const MAX_CHUNK_TRAILER_BYTES = 16 * 1024;
+const idleSocketPool = new Map<string, PooledSocket[]>();
+let totalIdleSockets = 0;
+
+function removePooledEntry(entry: PooledSocket): void {
+	const list = idleSocketPool.get(entry.key);
+	if (!list) return;
+	const idx = list.indexOf(entry);
+	if (idx !== -1) {
+		list.splice(idx, 1);
+		totalIdleSockets = Math.max(0, totalIdleSockets - 1);
+		if (list.length === 0) idleSocketPool.delete(entry.key);
+	}
+	entry.cleanup();
+}
+
+function takePooledSocket(key: string): Socket | null {
+	const list = idleSocketPool.get(key);
+	if (!list || list.length === 0) return null;
+	const now = Date.now();
+	while (list.length > 0) {
+		const entry = list.pop()!;
+		totalIdleSockets = Math.max(0, totalIdleSockets - 1);
+		entry.cleanup();
+		if (list.length === 0) idleSocketPool.delete(key);
+		if (
+			entry.expiresAt > now &&
+			!entry.socket.destroyed &&
+			entry.socket.writable &&
+			entry.socket.readable
+		) {
+			entry.socket.ref?.();
+			return entry.socket;
+		}
+		entry.socket.destroy();
+	}
+	idleSocketPool.delete(key);
+	return null;
+}
+
+function evictOldestIdleSocket(): void {
+	for (const [, list] of idleSocketPool) {
+		if (list.length > 0) {
+			const oldest = list[0]!;
+			removePooledEntry(oldest);
+			oldest.socket.destroy();
+			return;
+		}
+	}
+}
+
+function returnPooledSocket(key: string, socket: Socket): void {
+	if (socket.destroyed || !socket.writable || !socket.readable) {
+		socket.destroy();
+		return;
+	}
+	while (totalIdleSockets >= MAX_IDLE_SOCKETS) {
+		evictOldestIdleSocket();
+	}
+	const onGone = () => {
+		removePooledEntry(entry);
+		socket.destroy();
+	};
+	const entry: PooledSocket = {
+		socket,
+		key,
+		expiresAt: Date.now() + IDLE_SOCKET_TTL_MS,
+		cleanup: () => {
+			socket.off("close", onGone);
+			socket.off("end", onGone);
+			socket.off("error", onGone);
+		},
+	};
+	socket.on("close", onGone);
+	socket.on("end", onGone);
+	socket.on("error", onGone);
+	socket.unref?.();
+
+	let list = idleSocketPool.get(key);
+	if (!list) {
+		list = [];
+		idleSocketPool.set(key, list);
+	}
+	list.push(entry);
+	totalIdleSockets += 1;
+}
+
+export function closeIdleProxySockets(): void {
+	for (const [, list] of idleSocketPool) {
+		for (const entry of list) {
+			entry.cleanup();
+			entry.socket.destroy();
+		}
+	}
+	idleSocketPool.clear();
+	totalIdleSockets = 0;
+}
+
+onDbReset(closeIdleProxySockets);
+
+async function openUpstreamSocket(
+	proxy: ProxyConfig,
+	hostname: string,
+	port: number,
+	isHttps: boolean,
+	signal?: AbortSignal,
+): Promise<Socket> {
+	const raw = await establishTunnel(proxy, hostname, port, signal);
+	if (!isHttps) return raw;
+
+	const tls = tlsConnect({ socket: raw, servername: hostname });
+	tls.on("error", () => {});
+	const onAbort = () => tls.destroy(new Error("aborted"));
+	const ctrl = new AbortController();
+	const timer = setTimeout(() => ctrl.abort(), PROXY_CONNECT_TIMEOUT_MS);
+	const onSignalAbort = () => ctrl.abort();
+	signal?.addEventListener("abort", onSignalAbort, { once: true });
+	try {
+		if (signal?.aborted || ctrl.signal.aborted) onAbort();
+		else ctrl.signal.addEventListener("abort", onAbort, { once: true });
+		await once(tls, "secureConnect");
+	} catch (err) {
+		clearTimeout(timer);
+		signal?.removeEventListener("abort", onSignalAbort);
+		if (ctrl.signal.aborted && !signal?.aborted) {
+			tls.destroy();
+			throw new Error(
+				`proxy TLS handshake timeout (${PROXY_CONNECT_TIMEOUT_MS}ms)`,
+			);
+		}
+		throw err;
+	}
+	clearTimeout(timer);
+	signal?.removeEventListener("abort", onSignalAbort);
+	return tls;
+}
+
 async function proxyFetch(
 	url: string,
 	init: RequestInit,
@@ -464,65 +612,54 @@ async function proxyFetch(
 	}
 	const isHttps = target.protocol === "https:";
 	const targetPort = Number(target.port) || (isHttps ? 443 : 80);
-
-	const raw = await establishTunnel(
-		proxy,
-		target.hostname,
-		targetPort,
-		init.signal ?? undefined,
-	);
-
-	let socket: Socket = raw;
-	if (isHttps) {
-		const tls = tlsConnect({ socket: raw, servername: target.hostname });
-		tls.on("error", () => {});
-		const onAbort = () => tls.destroy(new Error("aborted"));
-		const ctrl = new AbortController();
-		const timer = setTimeout(() => ctrl.abort(), PROXY_CONNECT_TIMEOUT_MS);
-		const onSignalAbort = () => ctrl.abort();
-		init.signal?.addEventListener("abort", onSignalAbort, { once: true });
-		try {
-			if (init.signal?.aborted || ctrl.signal.aborted) onAbort();
-			else ctrl.signal.addEventListener("abort", onAbort, { once: true });
-			await once(tls, "secureConnect");
-		} catch (err) {
-			clearTimeout(timer);
-			init.signal?.removeEventListener("abort", onSignalAbort);
-			if (ctrl.signal.aborted && !init.signal?.aborted) {
-				tls.destroy();
-				throw new Error(
-					`proxy TLS handshake timeout (${PROXY_CONNECT_TIMEOUT_MS}ms)`,
-				);
-			}
-			throw err;
-		}
-		clearTimeout(timer);
-		init.signal?.removeEventListener("abort", onSignalAbort);
-		socket = tls;
-	}
+	const poolKey = `${proxy.id}|${target.hostname}|${targetPort}|${isHttps ? 1 : 0}`;
+	const signal = init.signal ?? undefined;
 
 	const method = init.method ?? "GET";
 	const body = typeof init.body === "string" ? init.body : undefined;
 	const headers = new Headers(init.headers);
 	headers.set("Host", target.host);
-	headers.set("Connection", "close");
+	const callerWantsClose =
+		(headers.get("connection") ?? "").toLowerCase() === "close";
+	if (!callerWantsClose) {
+		headers.set("Connection", "keep-alive");
+	}
 	if (body) headers.set("Content-Length", String(Buffer.byteLength(body)));
 
 	const requestHead =
 		`${method} ${target.pathname}${target.search} HTTP/1.1\r\n` +
 		[...headers.entries()].map(([k, v]) => `${k}: ${v}`).join("\r\n") +
 		"\r\n\r\n";
-	socket.write(requestHead + (body ?? ""));
 
-	const { status, tail, respHeaders } = await readResponseHead(
-		socket,
-		init.signal ?? undefined,
-	);
+	let socket = takePooledSocket(poolKey);
+	let reused = socket !== null;
+	if (!socket) {
+		socket = await openUpstreamSocket(proxy, target.hostname, targetPort, isHttps, signal);
+	}
+
+	let parsedHead: { status: number; head: Buffer; tail: Buffer; respHeaders: Headers };
+	try {
+		socket.write(requestHead + (body ?? ""));
+		parsedHead = await readResponseHead(socket, signal);
+	} catch (err) {
+		socket.destroy();
+		if (!reused || signal?.aborted) throw err;
+		socket = await openUpstreamSocket(proxy, target.hostname, targetPort, isHttps, signal);
+		socket.write(requestHead + (body ?? ""));
+		parsedHead = await readResponseHead(socket, signal);
+	}
+
+	const { status, tail, respHeaders } = parsedHead;
+	const serverWantsClose = (respHeaders.get("connection") ?? "")
+		.toLowerCase()
+		.includes("close");
+	const canKeepAlive = !callerWantsClose && !serverWantsClose;
 	const bodyStream = makeBodyStream(
 		socket,
 		tail,
 		respHeaders,
-		init.signal ?? undefined,
+		signal,
+		canKeepAlive ? (s) => returnPooledSocket(poolKey, s) : undefined,
 	);
 	return new Response(bodyStream, { status, headers: respHeaders });
 }
@@ -530,7 +667,7 @@ function readResponseHead(
 	socket: Socket,
 	signal?: AbortSignal,
 ): Promise<{ status: number; head: Buffer; tail: Buffer; respHeaders: Headers }> {
-	return readUntil(socket, Buffer.from("\r\n\r\n"), 64 * 1024, signal).then(
+	return readUntil(socket, CRLF_CRLF, 64 * 1024, signal).then(
 		({ head, tail }) => {
 			const text = head.toString("latin1");
 			const lines = text.split("\r\n");
@@ -670,6 +807,7 @@ function makeBodyStream(
 	initial: Buffer,
 	headers: Headers,
 	signal?: AbortSignal,
+	onReusableEnd?: (socket: Socket) => void,
 ): ReadableStream<Uint8Array> {
 	const transferEncoding = (
 		headers.get("transfer-encoding") ?? ""
@@ -678,32 +816,18 @@ function makeBodyStream(
 	const contentLength = headers.has("content-length")
 		? Number(headers.get("content-length"))
 		: null;
+	const hasFramedEnd = chunked || (contentLength != null && Number.isFinite(contentLength));
 
 	return new ReadableStream<Uint8Array>({
 		start(controller) {
 			let emitted = 0;
 			let done = false;
-			// Chunked parser state.
 			let chunkMode: "size" | "data" | "trailer" = chunked ? "size" : "trailer";
 			let chunkRemaining = 0;
-			let chunkTerm = 0; // CRLF terminator bytes still to skip after a chunk
+			let chunkTerm = 0;
 			let lineBuf = Buffer.alloc(0);
 			let trailerBuf = Buffer.alloc(0);
 
-			const finish = () => {
-				if (done) return;
-				done = true;
-				controller.close();
-			};
-			const fail = (err: unknown) => {
-				if (done) return;
-				done = true;
-				controller.error(err);
-			};
-			const onAbort = () => {
-				fail(new Error("aborted"));
-				socket.destroy();
-			};
 			const cleanup = () => {
 				socket.off("data", onData);
 				socket.off("end", onEnd);
@@ -712,12 +836,39 @@ function makeBodyStream(
 				signal?.removeEventListener("abort", onAbort);
 			};
 
+			const finish = (reusable: boolean) => {
+				if (done) return;
+				done = true;
+				cleanup();
+				controller.close();
+				if (reusable && hasFramedEnd && onReusableEnd) {
+					onReusableEnd(socket);
+				} else {
+					socket.destroy();
+				}
+			};
+			const fail = (err: unknown) => {
+				if (done) return;
+				done = true;
+				cleanup();
+				controller.error(err);
+				socket.destroy();
+			};
+			const onAbort = () => {
+				fail(new Error("aborted"));
+			};
+
+			const enqueue = (chunk: Uint8Array) => {
+				controller.enqueue(chunk);
+				if (controller.desiredSize !== null && controller.desiredSize <= 0) {
+					socket.pause();
+				}
+			};
+
 			const consume = (data: Buffer): boolean => {
-				// Returns false when the stream is finished (stop processing).
 				let pos = 0;
 				while (pos < data.length) {
 					if (chunked && chunkMode === "size") {
-						// Skip the CRLF that terminates the previous chunk's data.
 						if (chunkTerm > 0) {
 							const take = Math.min(chunkTerm, data.length - pos);
 							pos += take;
@@ -727,7 +878,11 @@ function makeBodyStream(
 						const nl = data.indexOf(CRLF, pos);
 						if (nl === -1) {
 							lineBuf = Buffer.concat([lineBuf, data.subarray(pos)]);
-							return true; // wait for more
+							if (lineBuf.length > MAX_CHUNK_LINE_BYTES) {
+								fail(new Error("chunk header line too large"));
+								return false;
+							}
+							return true;
 						}
 						const line = Buffer.concat([
 							lineBuf,
@@ -735,8 +890,11 @@ function makeBodyStream(
 						]).toString("latin1");
 						lineBuf = Buffer.alloc(0);
 						pos = nl + 2;
-						const size = parseInt(line.split(";")[0].trim(), 16);
-						if (Number.isNaN(size)) {
+						const hexPart = line.split(";")[0].trim();
+						const size = /^[0-9a-fA-F]+$/.test(hexPart)
+							? parseInt(hexPart, 16)
+							: Number.NaN;
+						if (!Number.isSafeInteger(size) || size < 0) {
 							fail(new Error("invalid chunk size"));
 							return false;
 						}
@@ -747,7 +905,7 @@ function makeBodyStream(
 					if (chunked && chunkMode === "data") {
 						const take = Math.min(chunkRemaining, data.length - pos);
 						if (take > 0) {
-							controller.enqueue(new Uint8Array(data.subarray(pos, pos + take)));
+							enqueue(new Uint8Array(data.subarray(pos, pos + take)));
 							pos += take;
 							chunkRemaining -= take;
 						}
@@ -759,33 +917,35 @@ function makeBodyStream(
 					}
 					if (chunked && chunkMode === "trailer") {
 						trailerBuf = Buffer.concat([trailerBuf, data.subarray(pos)]);
+						if (trailerBuf.length > MAX_CHUNK_TRAILER_BYTES) {
+							fail(new Error("chunk trailers too large"));
+							return false;
+						}
 						const hasBlankLine =
 							trailerBuf.length >= 2 &&
 							trailerBuf.subarray(0, 2).equals(CRLF);
 						if (hasBlankLine || trailerBuf.indexOf(CRLF_CRLF) !== -1) {
-							finish();
+							finish(true);
 							return false;
 						}
 						return true;
 					}
-					// Non-chunked: content-length or close-delimited.
 					if (contentLength != null) {
 						const remaining = contentLength - emitted;
 						const take = Math.min(remaining, data.length - pos);
 						if (take > 0) {
-							controller.enqueue(new Uint8Array(data.subarray(pos, pos + take)));
+							enqueue(new Uint8Array(data.subarray(pos, pos + take)));
 							pos += take;
 							emitted += take;
 						}
 						if (emitted >= contentLength) {
-							finish();
+							finish(true);
 							return false;
 						}
 						if (pos >= data.length) return true;
 						continue;
 					}
-					// Close-delimited: emit everything until the socket ends.
-					controller.enqueue(new Uint8Array(data.subarray(pos)));
+					enqueue(new Uint8Array(data.subarray(pos)));
 					return true;
 				}
 				return true;
@@ -794,10 +954,9 @@ function makeBodyStream(
 			const onData = (data: Buffer) => {
 				if (done) return;
 				try {
-					if (!consume(data)) cleanup();
+					consume(data);
 				} catch (err) {
 					fail(err);
-					cleanup();
 				}
 			};
 			const onEnd = () => {
@@ -807,7 +966,7 @@ function makeBodyStream(
 				} else if (chunked && (chunkMode === "data" || chunkRemaining > 0)) {
 					fail(new Error("connection closed mid-chunk"));
 				} else {
-					finish();
+					finish(false);
 				}
 			};
 			const onClose = () => {
@@ -815,7 +974,7 @@ function makeBodyStream(
 				if (contentLength != null && emitted < contentLength) {
 					fail(new Error("connection closed before body complete"));
 				} else {
-					finish();
+					finish(false);
 				}
 			};
 			const onError = (err: Error) => {
@@ -829,15 +988,16 @@ function makeBodyStream(
 			if (signal?.aborted) onAbort();
 			else signal?.addEventListener("abort", onAbort, { once: true });
 
-			// Process bytes that arrived together with the response head.
 			if (initial.length > 0 && !done) {
 				try {
-					if (!consume(initial)) cleanup();
+					consume(initial);
 				} catch (err) {
 					fail(err);
-					cleanup();
 				}
 			}
+		},
+		pull() {
+			if (!socket.destroyed) socket.resume();
 		},
 		cancel() {
 			socket.destroy();

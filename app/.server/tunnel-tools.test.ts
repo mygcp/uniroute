@@ -120,7 +120,7 @@ describe("tunnel-tools helpers", () => {
     expect(parseFrpChecksumForAsset(sample, "missing.zip")).toBeNull();
   });
 
-  test("resolves managed binary paths and safely handles missing probes", () => {
+  test("resolves managed binary paths and safely handles missing probes", async () => {
     const prev = process.env.UNIROUTE_TOOLS_DIR;
     process.env.UNIROUTE_TOOLS_DIR = "/tmp/uniroute-tunnel-tools-test";
     try {
@@ -136,6 +136,6 @@ describe("tunnel-tools helpers", () => {
       else process.env.UNIROUTE_TOOLS_DIR = prev;
     }
     clearTunnelProbeCache();
-    expect(probeTunnelTool("cloudflared", "/nonexistent/cloudflared").ok).toBe(false);
+    expect((await probeTunnelTool("cloudflared", "/nonexistent/cloudflared")).ok).toBe(false);
   });
 });

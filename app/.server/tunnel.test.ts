@@ -404,4 +404,35 @@ describe("tunnel helpers & runtime config", () => {
       }
     }
   });
+
+  test("marks ERR_NGROK_4018 as fatal and clears error via clearTunnelError", async () => {
+    const { clearTunnelError, getTunnelStatus, parseTunnelOutputLine } = await import("./tunnel");
+    const parsed = parseTunnelOutputLine(
+      "ngrok",
+      JSON.stringify({
+        lvl: "eror",
+        err: "authentication failed: This ngrok session is not authenticated. ERR_NGROK_4018",
+      }),
+      {
+        custom_domain: "",
+        prefer_https: true,
+        cloudflared_mode: "quick",
+        frpc_server_addr: "",
+        frpc_subdomain: "",
+        frpc_protocol: "http",
+      },
+    );
+    expect(parsed?.fatal).toBe(true);
+    expect(parsed?.error).toContain("ERR_NGROK_4018");
+
+    const rtSym = Symbol.for("uniroute.tunnelRuntime");
+    const g = globalThis as Record<symbol, { status?: string; lastError?: string | null } | undefined>;
+    if (g[rtSym]) {
+      g[rtSym]!.status = "error";
+      g[rtSym]!.lastError = parsed?.error ?? "err";
+    }
+    const cleared = clearTunnelError();
+    expect(cleared.lastError).toBeNull();
+    expect(getTunnelStatus().status).toBe("stopped");
+  });
 });

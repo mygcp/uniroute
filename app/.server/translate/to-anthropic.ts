@@ -1,4 +1,4 @@
-import type { CanonicalMessage, CanonicalRequest } from "./canonical";
+import { sanitizeExtra, type CanonicalMessage, type CanonicalRequest } from "./canonical";
 
 function toBlock(part: {
   type: string;
@@ -134,5 +134,5 @@ export function build(c: CanonicalRequest): Record<string, unknown> {
   }
   const toolChoice = mapToolChoice(c.tool_choice);
   if (toolChoice !== undefined) body.tool_choice = toolChoice;
-  return { ...body, ...c.extra };
+  return { ...sanitizeExtra(c.extra), ...body };
 }

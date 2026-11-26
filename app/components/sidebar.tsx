@@ -9,6 +9,7 @@ import {
   FolderOpen,
   LogOut,
   ScrollText,
+  ShieldCheck,
   TrendingUp,
   Network,
   Bot,
@@ -25,6 +26,7 @@ const CORE_ITEMS = [
   { to: "/combo", label: "Model Combos", icon: Link2 },
   { to: "/proxies", label: "Proxies", icon: Network },
   { to: "/compression", label: "Compression", icon: FileArchive },
+  { to: "/prompt-guard", label: "Prompt Guard", icon: ShieldCheck },
 ];
 
 const TOOLS_ITEMS = [

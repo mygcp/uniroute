@@ -1,6 +1,25 @@
 import type { AccessHoursConfig } from "./client-key";
 
 const DAY_NAMES = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+const formatterCache = new Map<string, Intl.DateTimeFormat>();
+
+function getFormatter(timeZone: string): Intl.DateTimeFormat {
+  let fmt = formatterCache.get(timeZone);
+  if (fmt) return fmt;
+  if (formatterCache.size >= 100) {
+    const oldest = formatterCache.keys().next().value;
+    if (oldest !== undefined) formatterCache.delete(oldest);
+  }
+  fmt = new Intl.DateTimeFormat("en-US", {
+    hour: "2-digit",
+    minute: "2-digit",
+    weekday: "short",
+    hourCycle: "h23",
+    timeZone,
+  });
+  formatterCache.set(timeZone, fmt);
+  return fmt;
+}
 
 function pad(n: number): string {
   return n.toString().padStart(2, "0");
@@ -8,13 +27,7 @@ function pad(n: number): string {
 
 function toLocalParts(d: Date, timeZone: string): { hours: number; minutes: number; weekday: string } | null {
   try {
-    const parts = new Intl.DateTimeFormat("en-US", {
-      hour: "2-digit",
-      minute: "2-digit",
-      weekday: "short",
-      hourCycle: "h23",
-      timeZone,
-    }).formatToParts(d);
+    const parts = getFormatter(timeZone).formatToParts(d);
     const map: Record<string, string> = {};
     for (const part of parts) map[part.type] = part.value;
     const hours = Number(map.hour);

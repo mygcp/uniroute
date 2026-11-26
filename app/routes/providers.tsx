@@ -7,7 +7,8 @@ import {
   ProviderTemplateCard,
   type ProviderTemplate,
 } from "../components/provider-templates";
-import { requireSession } from "../.server/auth";
+import { requireLoaderSession, requireSession } from "../.server/auth";
+import { createLimiter } from "../.server/async-utils";
 import { query } from "../.server/db";
 import { reload } from "../.server/registry";
 import { getRegistryEntry } from "~/registry";
@@ -51,12 +52,15 @@ async function testProvider(providerId: string): Promise<{ connected: number; to
 }
 
 function runAllTests(rows: ProviderRow[], keyCounts: Record<string, number>) {
+  const limit = createLimiter(4);
   return Promise.all(
-    rows.map(async (p) => {
-      if (!keyCounts[p.id]) return null;
-      const result = await testProvider(p.id);
-      return [p.id, result] as const;
-    }),
+    rows.map((p) =>
+      limit(async () => {
+        if (!keyCounts[p.id]) return null;
+        const result = await testProvider(p.id);
+        return [p.id, result] as const;
+      }),
+    ),
   ).then((results) => {
     const initialTestResults: Record<string, { connected: number; total: number }> = {};
     for (const r of results) {
@@ -66,7 +70,8 @@ function runAllTests(rows: ProviderRow[], keyCounts: Record<string, number>) {
   });
 }
 
-export function loader() {
+export function loader({ request }: Route.LoaderArgs) {
+  requireLoaderSession(request);
   const providers = query(
     "SELECT id, name, base_url, auth_type, is_active, weight, priority, current_connections, last_used_at, prefix FROM providers ORDER BY is_active DESC, id",
   ).all() as unknown as ProviderRow[];

@@ -1,4 +1,4 @@
-import { query } from "./db";
+import { getTableVersion, onDbReset, query } from "./db";
 
 export type ModelPrice = {
   input: number;
@@ -12,10 +12,6 @@ export type PricingOverride = {
   output_per_mtok: number;
 };
 
-/**
- * Harga bawaan per 1M token (USD) untuk model populer. Nilai mendekati harga
- * publik; admin dapat menimpa via tabel `model_pricing`.
- */
 export const STATIC_PRICES: Record<string, ModelPrice> = {
   "gpt-4o": { input: 2.5, output: 10 },
   "gpt-4o-mini": { input: 0.15, output: 0.6 },
@@ -39,28 +35,51 @@ export const STATIC_PRICES: Record<string, ModelPrice> = {
   "grok-2": { input: 2, output: 10 },
 };
 
-/** Prioritas: override DB (`model_pricing`) > `STATIC_PRICES` > 0. */
+let cachedVersion = -1;
+let exactOverrides = new Map<string, ModelPrice>();
+let modelOverrides = new Map<string, ModelPrice>();
+
+onDbReset(() => {
+  cachedVersion = -1;
+  exactOverrides.clear();
+  modelOverrides.clear();
+});
+
+function ensureLoaded(): void {
+  const ver = getTableVersion("model_pricing");
+  if (ver === cachedVersion) return;
+  const rows = query(
+    "SELECT model, provider_id, input_per_mtok, output_per_mtok FROM model_pricing ORDER BY model ASC",
+  ).all() as unknown as PricingOverride[];
+  const nextExact = new Map<string, ModelPrice>();
+  const nextByModel = new Map<string, ModelPrice>();
+  for (const r of rows) {
+    const price = { input: r.input_per_mtok, output: r.output_per_mtok };
+    nextExact.set(`${r.model}::${r.provider_id}`, price);
+    if (!nextByModel.has(r.model)) {
+      nextByModel.set(r.model, price);
+    }
+  }
+  exactOverrides = nextExact;
+  modelOverrides = nextByModel;
+  cachedVersion = ver;
+}
+
 export function getPrice(model: string, providerId?: string | null): ModelPrice {
-  const key = `${model.trim().toLowerCase()}::${(providerId ?? "").trim().toLowerCase()}`;
-  const exact = query(
-    "SELECT input_per_mtok, output_per_mtok FROM model_pricing WHERE model = ? AND provider_id = ?",
-  ).get(model.trim().toLowerCase(), (providerId ?? "").trim().toLowerCase()) as
-    | { input_per_mtok: number; output_per_mtok: number }
-    | undefined;
-  if (exact) {
-    return { input: exact.input_per_mtok, output: exact.output_per_mtok };
-  }
-  const byModel = query(
-    "SELECT input_per_mtok, output_per_mtok FROM model_pricing WHERE model = ?",
-  ).get(model.trim().toLowerCase()) as
-    | { input_per_mtok: number; output_per_mtok: number }
-    | undefined;
-  if (byModel) {
-    return { input: byModel.input_per_mtok, output: byModel.output_per_mtok };
-  }
-  const lower = STATIC_PRICES[model.trim().toLowerCase()];
+  ensureLoaded();
+  const m = model.trim();
+  const mLower = m.toLowerCase();
+  const pLower = (providerId ?? "").trim().toLowerCase();
+
+  const exact = exactOverrides.get(`${mLower}::${pLower}`);
+  if (exact) return exact;
+
+  const byModel = modelOverrides.get(mLower);
+  if (byModel) return byModel;
+
+  const lower = STATIC_PRICES[mLower];
   if (lower) return lower;
-  return STATIC_PRICES[model.trim()] ?? { input: 0, output: 0 };
+  return STATIC_PRICES[m] ?? { input: 0, output: 0 };
 }
 
 export function setPrice(
@@ -96,7 +115,6 @@ export function deleteOverride(model: string, providerId: string): void {
   ).run(model.trim().toLowerCase(), providerId.trim().toLowerCase());
 }
 
-/** Estimasi biaya USD sebuah request dari token usage. */
 export function estimateCost(
   model: string,
   providerId: string | null | undefined,

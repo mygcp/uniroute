@@ -1,7 +1,8 @@
 import { spawn } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { closeSync, existsSync, openSync, readSync } from "node:fs";
 import { resolve } from "node:path";
-import { query } from "./db";
+import { createLimiter, TtlCache } from "./async-utils";
+import { getTableVersion, onDbReset, query } from "./db";
 import { recordProxyLog } from "./logger";
 import type { CanonicalRequest } from "./translate/canonical";
 import {
@@ -102,47 +103,81 @@ function findPosixShellOnWindows(): string | null {
   return null;
 }
 
-function buildSpawnCmd(binPath: string, args: string[] = []): string[] {
+const spawnPrefixCache = new TtlCache<string, string[]>(64, 30_000);
+let cachedSettings: CompressionSettings | null = null;
+let cachedSettingsVer = -1;
+
+onDbReset(() => {
+  cachedSettings = null;
+  cachedSettingsVer = -1;
+  spawnPrefixCache.clear();
+});
+
+function readHeadBytes(filePath: string, length: number): string {
+  const fd = openSync(filePath, "r");
+  try {
+    const buf = Buffer.allocUnsafe(length);
+    const bytesRead = readSync(fd, buf, 0, length, 0);
+    return buf.subarray(0, bytesRead).toString("utf8");
+  } finally {
+    closeSync(fd);
+  }
+}
+
+function resolveSpawnPrefix(binPath: string): string[] {
   const hasPathSep =
     binPath.includes("/") || binPath.includes("\\") || binPath.startsWith(".");
   const target = hasPathSep
     ? resolve(binPath)
     : ((typeof Bun !== "undefined" ? Bun.which(binPath) : null) ?? binPath);
 
-  if (process.platform !== "win32") {
-    return [target, ...args];
-  }
+  const cached = spawnPrefixCache.get(target);
+  if (cached) return cached;
 
-  if (/\.(cmd|bat)$/i.test(target)) {
-    return ["cmd.exe", "/c", target, ...args];
-  }
-
-  if (hasPathSep && !existsSync(target)) {
-    for (const ext of [".exe", ".cmd", ".bat"]) {
-      if (existsSync(`${target}${ext}`)) {
-        return ext === ".exe"
-          ? [`${target}${ext}`, ...args]
-          : ["cmd.exe", "/c", `${target}${ext}`, ...args];
+  let prefix: string[] = [target];
+  if (process.platform === "win32") {
+    if (/\.(cmd|bat)$/i.test(target)) {
+      prefix = ["cmd.exe", "/c", target];
+    } else if (hasPathSep && !existsSync(target)) {
+      for (const ext of [".exe", ".cmd", ".bat"]) {
+        if (existsSync(`${target}${ext}`)) {
+          prefix =
+            ext === ".exe"
+              ? [`${target}${ext}`]
+              : ["cmd.exe", "/c", `${target}${ext}`];
+          break;
+        }
+      }
+    } else if (existsSync(target)) {
+      try {
+        const head = readHeadBytes(target, 64);
+        if (head.startsWith("#!")) {
+          const sh = findPosixShellOnWindows();
+          if (sh) prefix = [sh, target];
+        }
+      } catch {
+        /* fall through to direct spawn */
       }
     }
   }
 
-  if (existsSync(target)) {
-    try {
-      const head = readFileSync(target, "utf8").slice(0, 64);
-      if (head.startsWith("#!")) {
-        const sh = findPosixShellOnWindows();
-        if (sh) return [sh, target, ...args];
-      }
-    } catch {
-      /* fall through to direct spawn */
-    }
+  if (existsSync(prefix[prefix.length - 1]!)) {
+    spawnPrefixCache.set(target, prefix);
   }
+  return prefix;
+}
 
-  return [target, ...args];
+function buildSpawnCmd(binPath: string, args: string[] = []): string[] {
+  const prefix = resolveSpawnPrefix(binPath);
+  return args.length === 0 ? prefix : [...prefix, ...args];
 }
 
 export function getSettings(): CompressionSettings {
+  const ver = getTableVersion("compression_settings");
+  if (cachedSettings && cachedSettingsVer === ver) {
+    return cachedSettings;
+  }
+
   const row = query(
     `SELECT rtk_enabled, caveman_enabled, rtk_binary_path, caveman_binary_path,
             rtk_filter, caveman_type, caveman_voice, scope, min_chars, timeout_ms, never_worse
@@ -182,7 +217,7 @@ export function getSettings(): CompressionSettings {
       : "tool_and_last"
   ) as CompressionScope;
 
-  return {
+  const parsed: CompressionSettings = {
     rtk_enabled: !!row?.rtk_enabled,
     caveman_enabled: !!row?.caveman_enabled,
     rtk_binary_path: (row?.rtk_binary_path ?? "").trim(),
@@ -200,6 +235,9 @@ export function getSettings(): CompressionSettings {
     ),
     never_worse: row?.never_worse == null ? true : row.never_worse !== 0,
   };
+  cachedSettings = parsed;
+  cachedSettingsVer = ver;
+  return parsed;
 }
 
 export function saveSettings(
@@ -276,18 +314,25 @@ export function saveSettings(
     next.never_worse ? 1 : 0,
   );
 
+  cachedSettings = next;
+  cachedSettingsVer = getTableVersion("compression_settings");
+  spawnPrefixCache.clear();
   return next;
 }
 
-export function getToolsStatus(): {
+export async function getToolsStatus(): Promise<{
   rtk: ToolStatus;
   caveman: ToolStatus;
   toolsDir: string;
-} {
+}> {
   const settings = getSettings();
+  const [rtk, caveman] = await Promise.all([
+    probeTool("rtk", settings.rtk_binary_path),
+    probeTool("caveman", settings.caveman_binary_path),
+  ]);
   return {
-    rtk: probeTool("rtk", settings.rtk_binary_path),
-    caveman: probeTool("caveman", settings.caveman_binary_path),
+    rtk,
+    caveman,
     toolsDir: toolsDir(),
   };
 }
@@ -445,7 +490,7 @@ async function runStage(
     );
   }
 
-  const { kind } = detectBinaryKind(tool, resolvedPath);
+  const { kind } = await detectBinaryKind(tool, resolvedPath);
   let args: string[] = [];
   if (kind === "rtk-cli") {
     args = mode && mode !== "auto" ? ["pipe", "-f", mode] : ["pipe"];
@@ -641,43 +686,67 @@ export async function compressCanonicalRequest(
       }
     }
 
+    type CompressionTask =
+      | {
+          kind: "string";
+          msg: (typeof canonical.messages)[number];
+          text: string;
+        }
+      | {
+          kind: "part";
+          msg: (typeof canonical.messages)[number];
+          part: { type: "text"; text: string };
+          text: string;
+        };
+
+    const tasks: CompressionTask[] = [];
     for (const idx of targetIndices) {
       const msg = canonical.messages[idx]!;
       if (typeof msg.content === "string") {
-        if (msg.content.length < settings.min_chars) continue;
-        const r = await runPipeline(
-          settings,
-          msg.content,
-          "global compression failed, fallback to original message",
-        );
-        totalMs += r.durationMs;
-        if (r.usedFallback) anyFallback = true;
-        if (!r.usedFallback && r.output !== msg.content) {
-          totalSaved += Math.max(0, msg.content.length - r.output.length);
-          msg.content = r.output;
-          messagesCompressed++;
+        if (msg.content.length >= settings.min_chars) {
+          tasks.push({ kind: "string", msg, text: msg.content });
         }
       } else if (Array.isArray(msg.content)) {
-        let changed = false;
         for (const part of msg.content) {
-          if (part.type !== "text" || part.text.length < settings.min_chars) {
-            continue;
-          }
-          const r = await runPipeline(
-            settings,
-            part.text,
-            "global compression failed, fallback to original text block",
-          );
-          totalMs += r.durationMs;
-          if (r.usedFallback) anyFallback = true;
-          if (!r.usedFallback && r.output !== part.text) {
-            totalSaved += Math.max(0, part.text.length - r.output.length);
-            part.text = r.output;
-            changed = true;
+          if (part.type === "text" && part.text.length >= settings.min_chars) {
+            tasks.push({ kind: "part", msg, part, text: part.text });
           }
         }
-        if (changed) messagesCompressed++;
       }
+    }
+
+    if (tasks.length > 0) {
+      const limit = createLimiter(4);
+      const results = await Promise.all(
+        tasks.map((task) =>
+          limit(() =>
+            runPipeline(
+              settings,
+              task.text,
+              task.kind === "string"
+                ? "global compression failed, fallback to original message"
+                : "global compression failed, fallback to original text block",
+            ),
+          ),
+        ),
+      );
+      const changedMessages = new Set<object>();
+      for (let i = 0; i < tasks.length; i++) {
+        const task = tasks[i]!;
+        const r = results[i]!;
+        totalMs += r.durationMs;
+        if (r.usedFallback) anyFallback = true;
+        if (!r.usedFallback && r.output !== task.text) {
+          totalSaved += Math.max(0, task.text.length - r.output.length);
+          if (task.kind === "string") {
+            task.msg.content = r.output;
+          } else {
+            task.part.text = r.output;
+          }
+          changedMessages.add(task.msg);
+        }
+      }
+      messagesCompressed = changedMessages.size;
     }
 
     if (messagesCompressed > 0 || anyFallback) {

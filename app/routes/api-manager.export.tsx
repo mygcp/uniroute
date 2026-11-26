@@ -27,8 +27,11 @@ export function loader({ request }: Route.LoaderArgs) {
 	);
 
 	const keys = res.exported ?? [];
+	const safeJsonKeys = keys.map(
+		({ key_hash: _kh, key_enc: _ke, previous_key_hash: _pkh, previous_key_enc: _pke, ...rest }) => rest,
+	);
 	const body =
-		format === "json" ? JSON.stringify(keys, null, 2) : exportKeysCsv(keys);
+		format === "json" ? JSON.stringify(safeJsonKeys, null, 2) : exportKeysCsv(keys);
 	const ext = format === "json" ? "json" : "csv";
 	return new Response(body, {
 		headers: {

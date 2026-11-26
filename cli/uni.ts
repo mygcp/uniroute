@@ -352,8 +352,62 @@ async function cmdUpdate(flags: Record<string, string | boolean>) {
   try {
     const res = await fetch(url);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const buf = Buffer.from(await res.arrayBuffer());
-    fs.writeFileSync(tmp, buf, { mode: 0o755 });
+    if (!res.body) {
+      const buf = Buffer.from(await res.arrayBuffer());
+      fs.writeFileSync(tmp, buf, { mode: 0o755 });
+    } else {
+      const total = Number(res.headers.get("content-length") ?? 0) || 0;
+      const ws = fs.createWriteStream(tmp, { mode: 0o755 });
+      const reader = res.body.getReader();
+      let received = 0;
+      let lastDraw = 0;
+      const isTty = Boolean(process.stdout.isTTY);
+      const drawBar = (done = false) => {
+        const mb = (received / (1024 * 1024)).toFixed(1);
+        if (total > 0) {
+          const pct = Math.min(100, Math.round((received / total) * 100));
+          const totalMb = (total / (1024 * 1024)).toFixed(1);
+          const width = 24;
+          const filled = Math.round((pct / 100) * width);
+          const bar = "=".repeat(filled) + (filled < width ? ">" : "") + " ".repeat(Math.max(0, width - filled - (filled < width ? 1 : 0)));
+          if (isTty) {
+            process.stdout.write(`\r  [${bar}] ${String(pct).padStart(3)}% ${mb}/${totalMb} MB${done ? "\n" : ""}`);
+          } else if (done) {
+            console.log(`  downloaded ${mb}/${totalMb} MB (100%)`);
+          }
+        } else if (isTty) {
+          process.stdout.write(`\r  downloaded ${mb} MB${done ? "\n" : ""}`);
+        } else if (done) {
+          console.log(`  downloaded ${mb} MB`);
+        }
+      };
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          if (!value || value.byteLength === 0) continue;
+          received += value.byteLength;
+          if (!ws.write(value)) {
+            await new Promise<void>((resolve) => ws.once("drain", resolve));
+          }
+          const now = Date.now();
+          if (now - lastDraw >= 100) {
+            lastDraw = now;
+            drawBar(false);
+          }
+        }
+        await new Promise<void>((resolve, reject) => {
+          ws.on("error", reject);
+          ws.end(() => resolve());
+        });
+        drawBar(true);
+      } catch (err) {
+        try {
+          ws.destroy();
+        } catch {}
+        throw err;
+      }
+    }
   } catch (e) {
     console.error(`[uni] download failed: ${e instanceof Error ? e.message : String(e)}`);
     process.exit(1);

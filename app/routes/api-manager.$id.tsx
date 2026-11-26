@@ -42,7 +42,7 @@ import { Table, THead, THeadCell, TRow, TCell } from "../components/ui/table";
 import { UsageBar } from "../components/ui/usage-bar";
 import { useConfirm } from "../components/ui/confirm-dialog";
 import { useToast } from "../components/ui/toast";
-import { requireSession } from "../.server/auth";
+import { requireLoaderSession, requireSession } from "../.server/auth";
 import { getStructuredSuggestions } from "../.server/suggest";
 import type { TagSuggestion } from "../.server/suggest";
 import { TagInput } from "../components/ui/tag-input";
@@ -52,7 +52,8 @@ export function meta() {
 	return [{ title: "API Key Details | UniRoute" }];
 }
 
-export function loader({ params }: Route.LoaderArgs) {
+export function loader({ request, params }: Route.LoaderArgs) {
+	requireLoaderSession(request);
 	const id = Number(params.id);
 	const key = getClientKeyById(id);
 	if (!key) throw new Response("Not found", { status: 404 });
@@ -63,11 +64,21 @@ export function loader({ params }: Route.LoaderArgs) {
 	const audit = listAudit(id, 50);
 	const byDay = usageByDay(id, 30);
 	const groups = groupsOfKey(id);
-	const health = healthCheck(id);
+	const health = healthCheck(id, { key, month, today });
 	const budget = key.budget?.monthly;
+	const {
+		key_hash,
+		key_enc: _ke,
+		previous_key_hash: _pkh,
+		previous_key_enc: _pke,
+		...safeKey
+	} = key;
 
 	return {
-		key,
+		key: {
+			...safeKey,
+			masked_key: `${key.key_prefix}…${key_hash.slice(0, 6)}`,
+		},
 		month,
 		today,
 		status,
@@ -270,7 +281,7 @@ export default function KeyDetail({
 	const errors = health.checks.errors_last_hour;
 	const { dialog, confirm } = useConfirm();
 
-	const maskedKey = `${key.key_prefix}…${key.key_hash.slice(0, 6)}`;
+	const maskedKey = key.masked_key;
 	const subtitle = key.description
 		? `${maskedKey} · ${key.description}`
 		: maskedKey;
@@ -628,7 +639,9 @@ function EditKeyForm({
 	options,
 	onCancel,
 }: {
-	data: ClientKey;
+	data: Omit<ClientKey, "key_hash" | "key_enc" | "previous_key_hash" | "previous_key_enc"> & {
+		masked_key: string;
+	};
 	options: TagSuggestion[];
 	onCancel: () => void;
 }) {

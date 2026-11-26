@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { Form, redirect, useNavigation } from "react-router";
+import { useEffect, useState } from "react";
+import { data, redirect, useFetcher } from "react-router";
 import { AlertCircle, Eye, EyeOff, Lock, Moon, Sun } from "lucide-react";
 import type { Route } from "./+types/login";
 import { BrandMark } from "../components/sidebar";
@@ -8,20 +8,39 @@ import { Input, Label } from "../components/ui/field";
 import { Spinner } from "../components/ui/feedback";
 import { useTheme } from "../hooks/use-theme";
 import {
+  checkLoginRateLimit,
+  clearLoginFailures,
   createSession,
   getSessionToken,
   isValid,
+  recordLoginFailure,
   setSessionCookie,
   verifyPassword,
 } from "../.server/auth";
+import { clientIpFromRequest } from "../.server/key-enforce";
 
 export function meta() {
   return [{ title: "Sign in | UniRoute" }];
 }
 
 function safeNext(raw: string | null): string {
-  if (raw && raw.startsWith("/") && !raw.startsWith("//")) return raw;
-  return "/home";
+  if (!raw || !raw.startsWith("/") || raw.startsWith("//") || raw.includes("\\")) {
+    return "/home";
+  }
+  try {
+    const parsed = new URL(raw, "http://localhost");
+    if (parsed.origin !== "http://localhost") return "/home";
+    if (
+      parsed.pathname === "/login" ||
+      parsed.pathname === "/login.data" ||
+      parsed.pathname.endsWith(".data")
+    ) {
+      return "/home";
+    }
+    return `${parsed.pathname}${parsed.search}${parsed.hash}`;
+  } catch {
+    return "/home";
+  }
 }
 
 export function loader({ request }: Route.LoaderArgs) {
@@ -33,32 +52,62 @@ export function loader({ request }: Route.LoaderArgs) {
 }
 
 export async function action({ request }: Route.ActionArgs) {
+  const ip = clientIpFromRequest(request) ?? "local";
   const form = await request.formData();
   const password = String(form.get("password") ?? "");
   const next = safeNext(String(form.get("next") ?? "/home"));
 
-  if (!verifyPassword(password)) {
-    return { error: "Invalid password. Please try again.", next };
+  const limit = checkLoginRateLimit(ip);
+  if (!limit.ok) {
+    return data(
+      {
+        error: `Too many login attempts. Retry in ${limit.retryAfterSec}s.`,
+        next,
+      },
+      { status: 429 },
+    );
   }
 
+  if (!verifyPassword(password)) {
+    recordLoginFailure(ip);
+    return data(
+      { error: "Invalid password. Please try again.", next },
+      { status: 401 },
+    );
+  }
+
+  clearLoginFailures(ip);
   const token = createSession();
   const response = redirect(next);
-  setSessionCookie(response, token);
+  setSessionCookie(response, token, request);
   return response;
 }
 
-export default function Login({ loaderData, actionData }: Route.ComponentProps) {
+export default function Login({ loaderData }: Route.ComponentProps) {
   const [showPassword, setShowPassword] = useState(false);
+  const [timedOut, setTimedOut] = useState(false);
   const { theme, toggle } = useTheme();
-  const navigation = useNavigation();
-  const submitting = navigation.state !== "idle";
+  const fetcher = useFetcher<typeof action>();
+  const submitting = fetcher.state !== "idle" && !timedOut;
+
+  useEffect(() => {
+    if (fetcher.state === "idle") {
+      setTimedOut(false);
+      return;
+    }
+    const timer = setTimeout(() => setTimedOut(true), 15_000);
+    return () => clearTimeout(timer);
+  }, [fetcher.state]);
 
   const next =
-    actionData && "next" in actionData
-      ? safeNext(String(actionData.next))
+    fetcher.data && "next" in fetcher.data
+      ? safeNext(String(fetcher.data.next))
       : loaderData.next;
-  const error =
-    actionData && "error" in actionData ? String(actionData.error) : null;
+  const error = timedOut
+    ? "Sign in request timed out. Please try again."
+    : fetcher.data && "error" in fetcher.data
+      ? String(fetcher.data.error)
+      : null;
 
   return (
     <main className="relative flex min-h-screen items-center justify-center px-4 py-12">
@@ -85,7 +134,11 @@ export default function Login({ loaderData, actionData }: Route.ComponentProps) 
           </p>
         </div>
 
-        <Form method="post" className="flex flex-col gap-4">
+        <fetcher.Form
+          method="post"
+          className="flex flex-col gap-4"
+          onSubmit={() => setTimedOut(false)}
+        >
           <input type="hidden" name="next" value={next} />
           <div>
             <Label htmlFor="password">Admin password</Label>
@@ -130,7 +183,7 @@ export default function Login({ loaderData, actionData }: Route.ComponentProps) 
             {submitting ? <Spinner size={15} /> : null}
             {submitting ? "Signing in…" : "Sign in"}
           </Button>
-        </Form>
+        </fetcher.Form>
       </div>
     </main>
   );

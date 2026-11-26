@@ -8,6 +8,7 @@ import {
   Scripts,
   ScrollRestoration,
   useLocation,
+  type ShouldRevalidateFunctionArgs,
 } from "react-router";
 import { useEffect, useRef, useState } from "react";
 import { AlertTriangle, Home, RefreshCw } from "lucide-react";
@@ -18,9 +19,10 @@ import { ToastProvider } from "./components/ui/toast";
 import { Button, buttonClass } from "./components/ui/button";
 import { ThemeProvider } from "./hooks/use-theme";
 import { getSessionToken, isValid } from "./.server/auth";
-import "./app.css";
+import appStylesheet from "./app.css?url";
 
 export const links: Route.LinksFunction = () => [
+  { rel: "stylesheet", href: appStylesheet },
   { rel: "preconnect", href: "https://fonts.googleapis.com" },
   {
     rel: "preconnect",
@@ -33,9 +35,22 @@ export const links: Route.LinksFunction = () => [
   },
 ];
 
+export function shouldRevalidate({
+  formMethod,
+  currentUrl,
+  nextUrl,
+}: ShouldRevalidateFunctionArgs) {
+  if (formMethod) return true;
+  return currentUrl.pathname === "/login" || nextUrl.pathname === "/login";
+}
+
 export async function loader({ request }: Route.LoaderArgs) {
   const { pathname } = new URL(request.url);
-  if (pathname === "/login" || pathname.startsWith("/v1/")) {
+  if (
+    pathname === "/login" ||
+    pathname === "/login.data" ||
+    pathname.startsWith("/v1/")
+  ) {
     return {};
   }
   if (isValid(getSessionToken(request))) {

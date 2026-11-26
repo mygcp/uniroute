@@ -2,8 +2,10 @@ import { createRequestHandler } from "react-router";
 import type { ServerBuild } from "react-router";
 import fs from "node:fs";
 import path from "node:path";
-import { closeDb } from "./app/.server/db";
-import { flushLogs } from "./app/.server/logger";
+import { getSessionToken, isValid } from "./app/.server/auth";
+import { closeDb, runShutdownFlushers } from "./app/.server/db";
+import { registerRequestPeerIp } from "./app/.server/key-enforce";
+import { isLoopbackHost } from "./app/.server/ssrf";
 import { startWebhookDeliverer, stopWebhookDeliverer } from "./app/.server/webhook";
 import { ensureMcpHttpFromSettings, killMcpHttpProcess } from "./app/.server/mcp-runtime";
 import { ensureTunnelFromSettings, stopTunnelProcess } from "./app/.server/tunnel";
@@ -14,6 +16,22 @@ import embeddedAssetsModule from "./build/client-assets.js";
 
 const serverBuild = build as unknown as ServerBuild;
 const embeddedAssets: Record<string, string> = embeddedAssetsModule ?? {};
+const embeddedExistsCache = new Map<string, boolean>();
+const staticGzipCache = new Map<string, Uint8Array>();
+
+const MIME_BY_EXT: Record<string, string> = {
+  ".css": "text/css; charset=utf-8",
+  ".js": "application/javascript; charset=utf-8",
+  ".mjs": "application/javascript; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+  ".svg": "image/svg+xml",
+  ".png": "image/png",
+  ".ico": "image/x-icon",
+  ".woff2": "font/woff2",
+  ".txt": "text/plain; charset=utf-8",
+};
+
+const COMPRESSIBLE_EXTS = new Set([".css", ".js", ".mjs", ".json", ".svg", ".txt"]);
 
 const requestHandler = createRequestHandler(serverBuild, "production");
 
@@ -31,6 +49,30 @@ function resolveClientDir(): string | null {
   return null;
 }
 
+function indexStaticFiles(clientDir: string | null): Map<string, string> {
+  const map = new Map<string, string>();
+  if (!clientDir) return map;
+  const walk = (dir: string, relPrefix: string) => {
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name);
+      const urlPath = `${relPrefix}/${entry.name}`;
+      if (entry.isDirectory()) {
+        walk(full, urlPath);
+      } else if (entry.isFile()) {
+        map.set(urlPath, full);
+      }
+    }
+  };
+  walk(clientDir, "");
+  return map;
+}
+
 function decodePathname(pathname: string): string {
   if (!pathname.includes("%")) return pathname;
   try {
@@ -40,15 +82,156 @@ function decodePathname(pathname: string): string {
   }
 }
 
-function buildStaticResponse(file: ReturnType<typeof Bun.file>, pathname: string, headOnly: boolean): Response {
-  const headers = new Headers();
-  if (file.type) headers.set("Content-Type", file.type);
+function applySecurityHeaders(headers: Headers): Headers {
+  if (!headers.has("X-Content-Type-Options")) headers.set("X-Content-Type-Options", "nosniff");
+  if (!headers.has("X-Frame-Options")) headers.set("X-Frame-Options", "DENY");
+  if (!headers.has("Referrer-Policy")) headers.set("Referrer-Policy", "no-referrer");
+  if (!headers.has("Permissions-Policy")) {
+    headers.set("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+  }
+  return headers;
+}
+
+function acceptsGzip(request: Request): boolean {
+  const ae = request.headers.get("accept-encoding") ?? "";
+  return ae.toLowerCase().includes("gzip");
+}
+
+function normalizeForwardedRequest(request: Request, peerIp: string | null): Request {
+  const trusted = (peerIp != null && isLoopbackHost(peerIp)) || process.env.TRUST_PROXY === "1";
+  if (!trusted) return request;
+
+  const xfHost = request.headers.get("x-forwarded-host")?.split(",")[0]?.trim();
+  if (!xfHost || /[\s/@\\?#]/.test(xfHost)) return request;
+
+  const url = new URL(request.url);
+  const xfProto = request.headers.get("x-forwarded-proto")?.split(",")[0]?.trim().toLowerCase();
+  const cfVisitor = request.headers.get("cf-visitor")?.toLowerCase();
+  const proto =
+    xfProto === "http" || xfProto === "https"
+      ? xfProto
+      : cfVisitor?.includes('"https"')
+        ? "https"
+        : url.protocol.replace(/:$/, "");
+
+  if (xfHost === url.host && `${proto}:` === url.protocol) {
+    return request;
+  }
+
+  let targetUrl: string;
+  try {
+    const parsed = new URL(`${proto}://${xfHost}${url.pathname}${url.search}`);
+    if (parsed.host !== xfHost.toLowerCase() && parsed.host !== xfHost) {
+      return request;
+    }
+    targetUrl = parsed.toString();
+  } catch {
+    return request;
+  }
+
+  const hasBody = request.method !== "GET" && request.method !== "HEAD";
+  const fwdHeaders = new Headers(request.headers);
+  fwdHeaders.set("host", xfHost);
+  const init: RequestInit & { duplex?: "half" } = {
+    method: request.method,
+    headers: fwdHeaders,
+  };
+  if (hasBody && request.body) {
+    init.body = request.body;
+    init.duplex = "half";
+  }
+  const rewritten = new Request(targetUrl, init);
+  if (peerIp) registerRequestPeerIp(rewritten, peerIp);
+  return rewritten;
+}
+
+function appendVaryAcceptEncoding(headers: Headers): void {
+  const existing = headers.get("Vary");
+  if (!existing) {
+    headers.set("Vary", "Accept-Encoding");
+  } else if (!existing.toLowerCase().includes("accept-encoding")) {
+    headers.set("Vary", `${existing}, Accept-Encoding`);
+  }
+}
+
+async function withSecurityHeaders(
+  res: Response,
+  request: Request,
+  isDataRequest: boolean,
+): Promise<Response> {
+  if (res.status === 101) return res;
+  const headers = applySecurityHeaders(new Headers(res.headers));
+  if (isDataRequest && !headers.has("Cache-Control")) {
+    headers.set("Cache-Control", "no-store");
+  }
+
+  const contentType = (headers.get("Content-Type") ?? "").toLowerCase();
+  const compressibleDynamic =
+    res.status === 200 &&
+    res.body !== null &&
+    !headers.has("Content-Encoding") &&
+    acceptsGzip(request) &&
+    !contentType.includes("text/event-stream") &&
+    (contentType.startsWith("text/html") ||
+      contentType.startsWith("application/json") ||
+      contentType.startsWith("text/x-script") ||
+      contentType.startsWith("text/plain"));
+
+  if (compressibleDynamic) {
+    const raw = new Uint8Array(await res.arrayBuffer());
+    if (raw.byteLength >= 1024) {
+      const gz = Bun.gzipSync(raw);
+      headers.set("Content-Encoding", "gzip");
+      headers.set("Content-Length", String(gz.byteLength));
+      appendVaryAcceptEncoding(headers);
+      return new Response(Buffer.from(gz), {
+        status: res.status,
+        statusText: res.statusText,
+        headers,
+      });
+    }
+    return new Response(Buffer.from(raw), {
+      status: res.status,
+      statusText: res.statusText,
+      headers,
+    });
+  }
+
+  return new Response(res.body, {
+    status: res.status,
+    statusText: res.statusText,
+    headers,
+  });
+}
+
+async function buildStaticResponse(
+  file: ReturnType<typeof Bun.file>,
+  pathname: string,
+  headOnly: boolean,
+  gzip: boolean,
+): Promise<Response> {
+  const ext = path.extname(pathname).toLowerCase();
+  const headers = applySecurityHeaders(new Headers());
+  const mime = file.type || MIME_BY_EXT[ext];
+  if (mime) headers.set("Content-Type", mime);
   if (pathname.startsWith("/assets/")) {
     headers.set("Cache-Control", "public, max-age=31536000, immutable");
   }
   if (headOnly) {
     headers.set("Content-Length", String(file.size));
     return new Response(null, { status: 200, headers });
+  }
+  if (gzip && file.size >= 512 && COMPRESSIBLE_EXTS.has(ext)) {
+    let gz = staticGzipCache.get(pathname);
+    if (!gz) {
+      gz = Bun.gzipSync(new Uint8Array(await file.arrayBuffer()));
+      if (staticGzipCache.size >= 32) staticGzipCache.clear();
+      staticGzipCache.set(pathname, gz);
+    }
+    headers.set("Content-Encoding", "gzip");
+    headers.set("Content-Length", String(gz.byteLength));
+    appendVaryAcceptEncoding(headers);
+    return new Response(Buffer.from(gz), { headers });
   }
   return new Response(file, { headers });
 }
@@ -62,38 +245,73 @@ export type StartOpts = {
 
 export function startServer(opts: StartOpts = {}) {
   const clientDir = resolveClientDir();
+  const staticIndex = indexStaticFiles(clientDir);
   const port = Number(opts.port ?? process.env.PORT ?? 3000);
   const hostname = opts.hostname ?? process.env.HOST ?? "0.0.0.0";
 
   const server = Bun.serve({
     port,
     hostname,
-    async fetch(request) {
-      if (request.method === "GET" || request.method === "HEAD") {
-        const { pathname } = new URL(request.url);
+    maxRequestBodySize: 32 * 1024 * 1024,
+    async fetch(request, serverRef) {
+      const peer = serverRef?.requestIP?.(request);
+      const peerIp = peer?.address ?? null;
+      if (peerIp) {
+        registerRequestPeerIp(request, peerIp);
+      }
+      const effectiveRequest = normalizeForwardedRequest(request, peerIp);
+
+      const url = new URL(effectiveRequest.url);
+      const { pathname } = url;
+      const gzip = acceptsGzip(effectiveRequest);
+
+      if (effectiveRequest.method === "GET" || effectiveRequest.method === "HEAD") {
         const decoded = decodePathname(pathname);
-        const headOnly = request.method === "HEAD";
+        const headOnly = effectiveRequest.method === "HEAD";
 
         const embeddedPath = embeddedAssets[pathname] ?? embeddedAssets[decoded];
         if (embeddedPath) {
           const file = Bun.file(embeddedPath);
-          if (await file.exists()) {
-            return buildStaticResponse(file, decoded, headOnly);
+          let exists = embeddedExistsCache.get(embeddedPath);
+          if (exists === undefined) {
+            exists = await file.exists();
+            embeddedExistsCache.set(embeddedPath, exists);
+          }
+          if (exists) {
+            return await buildStaticResponse(file, decoded, headOnly, gzip);
           }
         }
 
-        if (clientDir && decoded !== "/") {
-          const resolved = path.resolve(clientDir, `.${decoded}`);
-          if (resolved.startsWith(`${clientDir}${path.sep}`)) {
-            try {
-              if (fs.statSync(resolved).isFile()) {
-                return buildStaticResponse(Bun.file(resolved), decoded, headOnly);
-              }
-            } catch {}
+        let diskPath = staticIndex.get(decoded);
+        if (!diskPath && clientDir && decoded.startsWith("/assets/")) {
+          const candidate = path.resolve(clientDir, `.${decoded}`);
+          if (
+            candidate.startsWith(clientDir + path.sep) &&
+            fs.existsSync(candidate) &&
+            fs.statSync(candidate).isFile()
+          ) {
+            staticIndex.set(decoded, candidate);
+            diskPath = candidate;
           }
         }
+        if (diskPath) {
+          return await buildStaticResponse(Bun.file(diskPath), decoded, headOnly, gzip);
+        }
       }
-      return requestHandler(request);
+
+      const isDataRequest = pathname.endsWith(".data");
+      if (isDataRequest && pathname !== "/login.data" && pathname !== "/_root.data") {
+        if (!isValid(getSessionToken(effectiveRequest))) {
+          return await withSecurityHeaders(
+            Response.json({ ok: false, error: "unauthorized" }, { status: 401 }),
+            effectiveRequest,
+            true,
+          );
+        }
+      }
+
+      const res = await requestHandler(effectiveRequest);
+      return await withSecurityHeaders(res, effectiveRequest, isDataRequest);
     },
   });
 
@@ -103,6 +321,14 @@ export function startServer(opts: StartOpts = {}) {
   startWebhookDeliverer();
   ensureMcpHttpFromSettings();
   ensureTunnelFromSettings({ port: server.port as number });
+  const gcTimer = setTimeout(() => {
+    try {
+      (globalThis as { Bun?: { gc?: (force?: boolean) => void } }).Bun?.gc?.(false);
+    } catch {
+      /* ignore */
+    }
+  }, 1500);
+  gcTimer.unref?.();
 
   let shuttingDown = false;
 
@@ -122,7 +348,7 @@ export function startServer(opts: StartOpts = {}) {
       .then(() => killMcpHttpProcess())
       .then(() => stopTunnelProcess())
       .then(() => server.stop(true))
-      .then(() => flushLogs())
+      .then(() => runShutdownFlushers())
       .then(() => closeDb())
       .then(() => {
         opts.onShutdown?.();

@@ -50,7 +50,12 @@ export function transformRequest(
   const url = resolveUrl(provider, entry, opts?.model);
   const headers = new Headers({ "Content-Type": "application/json" });
 
-  const usedKey = opts?.apiKey ?? getApiKey(provider.id);
+  const usedKey =
+    opts?.apiKey !== undefined
+      ? opts.apiKey
+      : provider.auth_type === "none"
+        ? null
+        : getApiKey(provider.id);
 
   if (entry?.authHeader) {
     if (usedKey) {
@@ -66,7 +71,7 @@ export function transformRequest(
 }
 
 const encoder = new TextEncoder();
-const decoder = new TextDecoder();
+const EMPTY_BYTES = new Uint8Array(0);
 
 type SseChunk = {
   choices?: { delta?: { content?: string }; text?: string }[];
@@ -74,6 +79,7 @@ type SseChunk = {
 };
 
 export function createStreamTransformer() {
+  const decoder = new TextDecoder();
   let pending = "";
 
   function transform(chunk: Uint8Array): Uint8Array {
@@ -86,7 +92,7 @@ export function createStreamTransformer() {
       const normalized = transformLine(line);
       if (normalized) out.push(normalized);
     }
-    if (out.length === 0) return encoder.encode("");
+    if (out.length === 0) return EMPTY_BYTES;
     return encoder.encode(out.join(""));
   }
 
@@ -116,7 +122,7 @@ export function createStreamTransformer() {
   }
 
   function flush(): Uint8Array {
-    if (pending.trim() === "") return encoder.encode("");
+    if (pending.trim() === "") return EMPTY_BYTES;
     const out = transformLine(pending);
     pending = "";
     return encoder.encode(out);

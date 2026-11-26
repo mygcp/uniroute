@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router";
 import type { Route } from "./+types/analytics.usage";
+import { requireLoaderSession } from "../.server/auth";
 import { ArrowDown, ArrowUp, ArrowUpDown, ChevronDown, Search, TrendingUp, X } from "lucide-react";
 import { Badge } from "../components/ui/badge";
 import {
@@ -44,6 +45,7 @@ function parseParam<T extends string>(raw: string | null, allowed: T[], fallback
 }
 
 export function loader({ request }: Route.LoaderArgs) {
+  requireLoaderSession(request);
   const url = new URL(request.url);
   const range = parseParam<TimeRange>(url.searchParams.get("range"), RANGES, "month");
   const metric = parseParam<Metric>(url.searchParams.get("metric"), METRICS, "tokens");

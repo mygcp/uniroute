@@ -91,6 +91,9 @@ const CATEGORY_BY_TOOL: Record<string, string> = {
   chat_completion: "Other",
   set_compression: "Other",
   test_compression: "Other",
+  get_prompt_guard: "Other",
+  set_prompt_guard: "Other",
+  test_prompt_guard: "Other",
   clear_logs: "Other",
   tunnel_status: "Tunneling",
   start_tunnel: "Tunneling",
@@ -107,6 +110,8 @@ const CATEGORY_ORDER = [
 ];
 
 export async function loader({ request }: Route.LoaderArgs) {
+  const { requireLoaderSession } = await import("../.server/auth");
+  requireLoaderSession(request);
   const [
     { HARNESS_REGISTRY, defaultMcpCommand, isMcpInstalled },
     { TOOLS },
@@ -125,6 +130,9 @@ export async function loader({ request }: Route.LoaderArgs) {
   const tunnelUrl = getActiveTunnelUrl();
   const origin = resolveGatewayOrigin(request);
   const remoteEndpoint = `${origin}/api/mcp`;
+  const reqUrl = new URL(request.url);
+  const localPort = Number(process.env.PORT ?? reqUrl.port) || 3000;
+  const localEndpoint = `http://127.0.0.1:${localPort}/api/mcp`;
   const remote = getRemoteMcpStatus();
 
   const tools: ToolInfo[] = TOOLS.map((t) => ({
@@ -138,6 +146,7 @@ export async function loader({ request }: Route.LoaderArgs) {
     cmdStr,
     tunnelUrl,
     remoteEndpoint,
+    localEndpoint,
     remote,
     tools,
     harnesses: Object.values(HARNESS_REGISTRY).map((h) => ({
@@ -601,6 +610,19 @@ export default function McpPage() {
               </code>
               <CopyButton text={data.remoteEndpoint} label="Copy endpoint URL" />
             </div>
+            {data.tunnelUrl ? (
+              <div className="flex items-center justify-between gap-2 rounded-lg border border-border bg-surface/60 px-3 py-1.5">
+                <div className="min-w-0">
+                  <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+                    Local HTTP (still active)
+                  </span>
+                  <code className="block truncate font-mono text-[11px] text-foreground">
+                    {data.localEndpoint}
+                  </code>
+                </div>
+                <CopyButton text={data.localEndpoint} label="Copy local endpoint URL" />
+              </div>
+            ) : null}
             <div className="flex flex-wrap items-center gap-2 pt-0.5">
               <Button
                 type="button"
@@ -767,7 +789,8 @@ export default function McpPage() {
               One-Click Local Registration (Same Machine Only)
             </h2>
             <p className="text-xs text-muted-foreground">
-              Writes a local Stdio MCP entry into CLI configs on this host with automatic backup.
+              Writes a local Stdio MCP entry into CLI configs on this host with automatic backup
+              (works directly over local SQLite even while a tunnel is active).
               For agents on a different machine, use the Remote HTTP Server above.
             </p>
           </div>

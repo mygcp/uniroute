@@ -1,4 +1,5 @@
-import { query } from "./db";
+import { TtlCache } from "./async-utils";
+import { getTableVersion, onDbReset, query } from "./db";
 import { getPrice } from "./pricing";
 
 export type TimeRange = "day" | "week" | "month" | "year" | "all";
@@ -75,11 +76,8 @@ export type UsageData = {
   errors: Errors;
   timeSeries: TimeSeriesPoint[];
   breakdown: BreakdownEntry[];
-  /** Success-rate (%) per time bucket — backs the success-trend toggle. */
   successTrend: TimeSeriesPoint[];
-  /** p50/p95 of duration_ms for the range (0 when no samples). */
   latency: LatencyStats;
-  /** Per-model aggregates (top 10 by cost) for drilldown tables. */
   modelInsights: ModelInsight[];
   range: TimeRange;
   metric: Metric;
@@ -87,24 +85,20 @@ export type UsageData = {
 };
 
 const DAY_MS = 86_400_000;
+const usageCache = new TtlCache<string, UsageData>(32, 5000);
+onDbReset(() => usageCache.clear());
 
 type PricePair = { input: number; output: number };
 
-/**
- * Cache harga per kombinasi model::provider untuk satu batch perhitungan.
- * Tanpa ini, loop cost memanggil getPrice (2 query) untuk SETIAP baris log.
- */
-function priceLookup(
-  rows: Array<Record<string, unknown>>,
-): (model: unknown, providerId: unknown) => PricePair {
+function createPriceLookup(): (model: unknown, providerId: unknown) => PricePair {
   const cache = new Map<string, PricePair>();
   return (model, providerId) => {
-    const key = `${String(model ?? "").toLowerCase()}::${String(
-      providerId ?? "",
-    ).toLowerCase()}`;
+    const m = String(model ?? "");
+    const p = String(providerId ?? "");
+    const key = `${m.toLowerCase()}::${p.toLowerCase()}`;
     let price = cache.get(key);
     if (!price) {
-      price = getPrice(String(model ?? ""), String(providerId ?? ""));
+      price = getPrice(m, p);
       cache.set(key, price);
     }
     return price;
@@ -131,7 +125,7 @@ function rangeBounds(range: TimeRange): [number, number] {
       return [Date.UTC(y, m, d), Date.now()];
     case "week": {
       const todayStart = Date.UTC(y, m, d);
-      const dow = now.getUTCDay(); // 0 = Sun
+      const dow = now.getUTCDay();
       const daysSinceMon = dow === 0 ? 6 : dow - 1;
       return [todayStart - daysSinceMon * DAY_MS, Date.now()];
     }
@@ -154,7 +148,7 @@ function prevRangeBounds(range: TimeRange): [number, number] | null {
     case "day":
       return [todayStart - DAY_MS, todayStart];
     case "week": {
-      const dow = now.getUTCDay(); // 0 = Sun
+      const dow = now.getUTCDay();
       const daysSinceMon = dow === 0 ? 6 : dow - 1;
       const thisMon = todayStart - daysSinceMon * DAY_MS;
       return [thisMon - 7 * DAY_MS, thisMon];
@@ -175,7 +169,7 @@ function dateExpr(range: TimeRange): string {
 }
 
 function shortLabel(dt: string, range: TimeRange): string {
-  if (range === "day") return dt.slice(11, 16); // "14:00"
+  if (range === "day") return dt.slice(11, 16);
   if (range === "year" || range === "all") {
     const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
     return months[parseInt(dt.slice(5, 7), 10) - 1];
@@ -200,62 +194,110 @@ function groupLabel(grp: string | number, dim: Dimension): string {
   return String(grp);
 }
 
-function _querySummaryFor(bounds: [number, number]): UsageSummary {
-  const [fromTs, toTs] = bounds;
-  const sumRow = query(
-    `SELECT COALESCE(SUM(prompt_tokens), 0) AS pt,
-            COALESCE(SUM(completion_tokens), 0) AS ct,
-            COALESCE(SUM(cached_tokens), 0) AS cache
-       FROM request_logs
-      WHERE created_at >= ? AND created_at < ?`,
-  ).get(fromTs, toTs) as { pt: number; ct: number; cache: number };
-  const pt = Number(sumRow.pt);
-  const ct = Number(sumRow.ct);
-  const cache = Number(sumRow.cache);
+type AggModelProvRow = {
+  model: string | null;
+  provider_id: string | null;
+  reqs: number;
+  ok: number;
+  pt: number;
+  ct: number;
+  cached: number;
+  sum_dur: number;
+  cnt_dur: number;
+};
 
+function queryAggByModelProvider(bounds: [number, number]): {
+  summary: UsageSummary;
+  performance: Performance;
+  modelInsights: ModelInsight[];
+} {
+  const [fromTs, toTs] = bounds;
   const rows = query(
-    `SELECT prompt_tokens, completion_tokens, model, provider_id
+    `SELECT model, provider_id,
+            COUNT(*) AS reqs,
+            COALESCE(SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END), 0) AS ok,
+            COALESCE(SUM(prompt_tokens), 0) AS pt,
+            COALESCE(SUM(completion_tokens), 0) AS ct,
+            COALESCE(SUM(cached_tokens), 0) AS cached,
+            COALESCE(SUM(duration_ms), 0) AS sum_dur,
+            COUNT(duration_ms) AS cnt_dur
        FROM request_logs
       WHERE created_at >= ? AND created_at < ?
-        AND (prompt_tokens IS NOT NULL OR completion_tokens IS NOT NULL)`,
-  ).all(fromTs, toTs) as Record<string, unknown>[];
-  const priceOf = priceLookup(rows);
-  const cost = rows.reduce(
-    (s, r) =>
-      s +
-      computeCost(
-        r.prompt_tokens as number | null,
-        r.completion_tokens as number | null,
-        priceOf(r.model, r.provider_id),
-      ),
-    0,
-  );
+      GROUP BY model, provider_id`,
+  ).all(fromTs, toTs) as unknown as AggModelProvRow[];
 
-  return { totalTokens: pt + ct, inputTokens: pt, outputTokens: ct, cachedTokens: cache, cost };
-}
+  const priceOf = createPriceLookup();
+  let requests = 0;
+  let okCount = 0;
+  let pt = 0;
+  let ct = 0;
+  let cached = 0;
+  let cost = 0;
+  let sumDur = 0;
+  let cntDur = 0;
 
-function _querySummary(range: TimeRange): UsageSummary {
-  return _querySummaryFor(rangeBounds(range));
-}
+  const modelMap = new Map<
+    string,
+    { providers: Set<string>; requests: number; tokens: number; cost: number; errors: number }
+  >();
 
-function _queryPerformanceFor(bounds: [number, number], tokens: number, cost: number): Performance {
-  const [fromTs, toTs] = bounds;
-  const row = query(
-    `SELECT COUNT(*) AS requests,
-            COALESCE(SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END), 0) AS ok,
-            AVG(duration_ms) AS avgDur
-       FROM request_logs
-      WHERE created_at >= ? AND created_at < ?`,
-  ).get(fromTs, toTs) as { requests: number; ok: number; avgDur: number | null };
-  const requests = Number(row.requests);
-  const ok = Number(row.ok);
-  const avgDur = Number(row.avgDur ?? 0);
+  for (const r of rows) {
+    const rReqs = Number(r.reqs);
+    const rOk = Number(r.ok);
+    const rPt = Number(r.pt);
+    const rCt = Number(r.ct);
+    const rCached = Number(r.cached);
+    const rCost = computeCost(rPt, rCt, priceOf(r.model, r.provider_id));
+
+    requests += rReqs;
+    okCount += rOk;
+    pt += rPt;
+    ct += rCt;
+    cached += rCached;
+    cost += rCost;
+    sumDur += Number(r.sum_dur);
+    cntDur += Number(r.cnt_dur);
+
+    const modelName = String(r.model ?? "unknown");
+    let entry = modelMap.get(modelName);
+    if (!entry) {
+      entry = { providers: new Set(), requests: 0, tokens: 0, cost: 0, errors: 0 };
+      modelMap.set(modelName, entry);
+    }
+    entry.providers.add(String(r.provider_id ?? "unknown"));
+    entry.requests += rReqs;
+    entry.tokens += rPt + rCt;
+    entry.cost += rCost;
+    entry.errors += rReqs - rOk;
+  }
+
+  const totalTokens = pt + ct;
+  const avgDur = cntDur > 0 ? sumDur / cntDur : 0;
+
+  const modelInsights: ModelInsight[] = Array.from(modelMap.entries())
+    .map(([model, e]) => ({
+      model,
+      providers: Array.from(e.providers).sort(),
+      requests: e.requests,
+      tokens: e.tokens,
+      cost: Math.round(e.cost * 1_000_000) / 1_000_000,
+      errors: e.errors,
+      errorRate: e.requests ? Math.round((e.errors / e.requests) * 100) : 0,
+      avgTokensPerReq: e.requests ? Math.round(e.tokens / e.requests) : 0,
+    }))
+    .sort((a, b) => b.cost - a.cost)
+    .slice(0, 10);
+
   return {
-    requests,
-    successRate: requests ? Math.round((ok / requests) * 100) : 0,
-    avgLatencyMs: Math.round(avgDur),
-    tokensPerReq: requests ? tokens / requests : 0,
-    costPerReq: requests ? cost / requests : 0,
+    summary: { totalTokens, inputTokens: pt, outputTokens: ct, cachedTokens: cached, cost },
+    performance: {
+      requests,
+      successRate: requests ? Math.round((okCount / requests) * 100) : 0,
+      avgLatencyMs: Math.round(avgDur),
+      tokensPerReq: requests ? totalTokens / requests : 0,
+      costPerReq: requests ? cost / requests : 0,
+    },
+    modelInsights,
   };
 }
 
@@ -283,8 +325,7 @@ function _queryTrends(range: TimeRange, summary: UsageSummary, performance: Perf
       tokensPerReq: null,
     };
   }
-  const prevSummary = _querySummaryFor(prev);
-  const prevPerf = _queryPerformanceFor(prev, prevSummary.totalTokens, prevSummary.cost);
+  const { summary: prevSummary, performance: prevPerf } = queryAggByModelProvider(prev);
   return {
     totalTokens: pctDelta(summary.totalTokens, prevSummary.totalTokens),
     inputTokens: pctDelta(summary.inputTokens, prevSummary.inputTokens),
@@ -298,8 +339,8 @@ function _queryTrends(range: TimeRange, summary: UsageSummary, performance: Perf
   };
 }
 
-function _queryErrors(range: TimeRange): Errors {
-  const [fromTs, toTs] = rangeBounds(range);
+function _queryErrors(bounds: [number, number]): Errors {
+  const [fromTs, toTs] = bounds;
   const statusRows = query(
     `SELECT status, COUNT(*) AS c
        FROM request_logs
@@ -326,43 +367,84 @@ function _queryErrors(range: TimeRange): Errors {
   };
 }
 
-function _queryTimeSeries(range: TimeRange, metric: Metric): TimeSeriesPoint[] {
-  const [fromTs, toTs] = rangeBounds(range);
+function _queryTimeAndSuccessSeries(
+  bounds: [number, number],
+  range: TimeRange,
+  metric: Metric,
+): { timeSeries: TimeSeriesPoint[]; successTrend: TimeSeriesPoint[] } {
+  const [fromTs, toTs] = bounds;
   const dtExpr = dateExpr(range);
 
   if (metric === "tokens") {
     const rows = query(
       `SELECT ${dtExpr} AS dt,
+              COUNT(*) AS c,
+              COALESCE(SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END), 0) AS ok,
               COALESCE(SUM(prompt_tokens), 0) + COALESCE(SUM(completion_tokens), 0) AS val
          FROM request_logs
         WHERE created_at >= ? AND created_at < ?
         GROUP BY dt ORDER BY dt`,
-    ).all(fromTs, toTs) as { dt: string; val: number }[];
-    return rows.map((r) => ({ label: shortLabel(r.dt, range), labelFull: r.dt, value: Number(r.val) }));
+    ).all(fromTs, toTs) as { dt: string; c: number; ok: number; val: number }[];
+    return {
+      timeSeries: rows.map((r) => ({ label: shortLabel(r.dt, range), labelFull: r.dt, value: Number(r.val) })),
+      successTrend: rows.map((r) => {
+        const total = Number(r.c);
+        const ok = Number(r.ok);
+        return {
+          label: shortLabel(r.dt, range),
+          labelFull: r.dt,
+          value: total ? Math.round((ok / total) * 1000) / 10 : 0,
+        };
+      }),
+    };
   }
 
   const rows = query(
-    `SELECT ${dtExpr} AS dt, prompt_tokens, completion_tokens, model, provider_id
+    `SELECT ${dtExpr} AS dt,
+            model,
+            provider_id,
+            COUNT(*) AS c,
+            COALESCE(SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END), 0) AS ok,
+            COALESCE(SUM(prompt_tokens), 0) AS pt,
+            COALESCE(SUM(completion_tokens), 0) AS ct
        FROM request_logs
-      WHERE created_at >= ? AND created_at < ?`,
-  ).all(fromTs, toTs) as Record<string, unknown>[];
-  const priceOf = priceLookup(rows);
-  const map = new Map<string, number>();
+      WHERE created_at >= ? AND created_at < ?
+      GROUP BY dt, model, provider_id ORDER BY dt`,
+  ).all(fromTs, toTs) as {
+    dt: string;
+    model: string | null;
+    provider_id: string | null;
+    c: number;
+    ok: number;
+    pt: number;
+    ct: number;
+  }[];
+
+  const priceOf = createPriceLookup();
+  const byDt = new Map<string, { cost: number; total: number; ok: number }>();
   for (const r of rows) {
-    const dt = r.dt as string;
-    map.set(
-      dt,
-      (map.get(dt) ?? 0) +
-        computeCost(
-          r.prompt_tokens as number | null,
-          r.completion_tokens as number | null,
-          priceOf(r.model, r.provider_id),
-        ),
-    );
+    let bucket = byDt.get(r.dt);
+    if (!bucket) {
+      bucket = { cost: 0, total: 0, ok: 0 };
+      byDt.set(r.dt, bucket);
+    }
+    bucket.cost += computeCost(Number(r.pt), Number(r.ct), priceOf(r.model, r.provider_id));
+    bucket.total += Number(r.c);
+    bucket.ok += Number(r.ok);
   }
-  return Array.from(map.entries())
-    .sort((a, b) => a[0].localeCompare(b[0]))
-    .map(([dt, value]) => ({ label: shortLabel(dt, range), labelFull: dt, value }));
+  const sorted = Array.from(byDt.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+  return {
+    timeSeries: sorted.map(([dt, b]) => ({
+      label: shortLabel(dt, range),
+      labelFull: dt,
+      value: b.cost,
+    })),
+    successTrend: sorted.map(([dt, b]) => ({
+      label: shortLabel(dt, range),
+      labelFull: dt,
+      value: b.total ? Math.round((b.ok / b.total) * 1000) / 10 : 0,
+    })),
+  };
 }
 
 function _formatBreakdown(
@@ -387,8 +469,12 @@ function _formatBreakdown(
   return rows.map(format);
 }
 
-function _queryBreakdown(range: TimeRange, metric: Metric, dim: Dimension): BreakdownEntry[] {
-  const [fromTs, toTs] = rangeBounds(range);
+function _queryBreakdown(
+  bounds: [number, number],
+  metric: Metric,
+  dim: Dimension,
+): BreakdownEntry[] {
+  const [fromTs, toTs] = bounds;
   const groupCol = buildGroupCol(dim);
 
   if (metric === "tokens") {
@@ -404,22 +490,28 @@ function _queryBreakdown(range: TimeRange, metric: Metric, dim: Dimension): Brea
   }
 
   const rows = query(
-    `SELECT ${groupCol} AS grp, prompt_tokens, completion_tokens, model, provider_id
+    `SELECT ${groupCol} AS grp,
+            model,
+            provider_id,
+            COALESCE(SUM(prompt_tokens), 0) AS pt,
+            COALESCE(SUM(completion_tokens), 0) AS ct
        FROM request_logs
-      WHERE created_at >= ? AND created_at < ?`,
-  ).all(fromTs, toTs) as Record<string, unknown>[];
-  const priceOf = priceLookup(rows);
+      WHERE created_at >= ? AND created_at < ?
+      GROUP BY grp, model, provider_id`,
+  ).all(fromTs, toTs) as {
+    grp: string | number;
+    model: string | null;
+    provider_id: string | null;
+    pt: number;
+    ct: number;
+  }[];
+  const priceOf = createPriceLookup();
   const map = new Map<string, number>();
   for (const r of rows) {
     const grp = String(r.grp);
     map.set(
       grp,
-      (map.get(grp) ?? 0) +
-        computeCost(
-          r.prompt_tokens as number | null,
-          r.completion_tokens as number | null,
-          priceOf(r.model, r.provider_id),
-        ),
+      (map.get(grp) ?? 0) + computeCost(Number(r.pt), Number(r.ct), priceOf(r.model, r.provider_id)),
     );
   }
   const sorted = Array.from(map.entries())
@@ -433,6 +525,40 @@ function _queryBreakdown(range: TimeRange, metric: Metric, dim: Dimension): Brea
   );
 }
 
+function _queryLatency(bounds: [number, number]): LatencyStats {
+  const [fromTs, toTs] = bounds;
+  const countRow = query(
+    `SELECT COUNT(*) AS c
+       FROM request_logs
+      WHERE created_at >= ? AND created_at < ?
+        AND duration_ms IS NOT NULL`,
+  ).get(fromTs, toTs) as { c: number };
+  const count = Number(countRow?.c ?? 0);
+  if (count === 0) return { p50: 0, p95: 0 };
+
+  const pickOffset = (p: number): number => {
+    const offset = Math.min(count - 1, Math.max(0, Math.ceil(p * count) - 1));
+    const row = query(
+      `SELECT duration_ms AS d
+         FROM request_logs
+        WHERE created_at >= ? AND created_at < ?
+          AND duration_ms IS NOT NULL
+        ORDER BY duration_ms ASC
+        LIMIT 1 OFFSET ?`,
+    ).get(fromTs, toTs, offset) as { d: number } | undefined;
+    return row ? Math.round(Number(row.d)) : 0;
+  };
+  return { p50: pickOffset(0.5), p95: pickOffset(0.95) };
+}
+
+export function getUsageSummaryOnly(range: TimeRange): {
+  summary: UsageSummary;
+  performance: Performance;
+} {
+  const { summary, performance } = queryAggByModelProvider(rangeBounds(range));
+  return { summary, performance };
+}
+
 export function getUsageData(opts: {
   range: TimeRange;
   metric?: Metric;
@@ -441,101 +567,28 @@ export function getUsageData(opts: {
   const { range } = opts;
   const metric = opts.metric ?? "tokens";
   const dimension = opts.dimension ?? "provider";
-  const summary = _querySummary(range);
-  const performance = _queryPerformanceFor(rangeBounds(range), summary.totalTokens, summary.cost);
-  return {
+  const cacheKey = `${range}:${metric}:${dimension}:${getTableVersion("request_logs")}:${getTableVersion("model_pricing")}`;
+  const cached = usageCache.get(cacheKey);
+  if (cached) return cached;
+
+  const bounds = rangeBounds(range);
+  const { summary, performance, modelInsights } = queryAggByModelProvider(bounds);
+  const { timeSeries, successTrend } = _queryTimeAndSuccessSeries(bounds, range, metric);
+
+  const result: UsageData = {
     summary,
     performance,
     trends: _queryTrends(range, summary, performance),
-    errors: _queryErrors(range),
-    timeSeries: _queryTimeSeries(range, metric),
-    breakdown: _queryBreakdown(range, metric, dimension),
-    successTrend: _querySuccessTrend(range),
-    latency: _queryLatency(range),
-    modelInsights: _queryModelInsights(range),
+    errors: _queryErrors(bounds),
+    timeSeries,
+    breakdown: _queryBreakdown(bounds, metric, dimension),
+    successTrend,
+    latency: _queryLatency(bounds),
+    modelInsights,
     range,
     metric,
     dimension,
   };
-}
-
-function _queryLatency(range: TimeRange): LatencyStats {
-  const [fromTs, toTs] = rangeBounds(range);
-  const rows = query(
-    `SELECT duration_ms AS d
-       FROM request_logs
-      WHERE created_at >= ? AND created_at < ?
-        AND duration_ms IS NOT NULL
-      ORDER BY d`,
-  ).all(fromTs, toTs) as { d: number }[];
-  if (rows.length === 0) return { p50: 0, p95: 0 };
-  const pick = (p: number): number =>
-    Math.round(Number(rows[Math.min(rows.length - 1, Math.ceil(p * rows.length) - 1)].d));
-  return { p50: pick(0.5), p95: pick(0.95) };
-}
-
-function _querySuccessTrend(range: TimeRange): TimeSeriesPoint[] {
-  const [fromTs, toTs] = rangeBounds(range);
-  const dtExpr = dateExpr(range);
-  const rows = query(
-    `SELECT ${dtExpr} AS dt,
-            COUNT(*) AS c,
-            COALESCE(SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END), 0) AS ok
-       FROM request_logs
-      WHERE created_at >= ? AND created_at < ?
-      GROUP BY dt ORDER BY dt`,
-  ).all(fromTs, toTs) as { dt: string; c: number; ok: number }[];
-  return rows.map((r) => {
-    const total = Number(r.c);
-    const ok = Number(r.ok);
-    return {
-      label: shortLabel(r.dt, range),
-      labelFull: r.dt,
-      value: total ? Math.round((ok / total) * 1000) / 10 : 0,
-    };
-  });
-}
-
-function _queryModelInsights(range: TimeRange): ModelInsight[] {
-  const [fromTs, toTs] = rangeBounds(range);
-  const rows = query(
-    `SELECT model, provider_id, prompt_tokens, completion_tokens, status
-       FROM request_logs
-      WHERE created_at >= ? AND created_at < ?`,
-  ).all(fromTs, toTs) as Record<string, unknown>[];
-  const priceOf = priceLookup(rows);
-  const map = new Map<
-    string,
-    { providers: Set<string>; requests: number; tokens: number; cost: number; errors: number }
-  >();
-  for (const r of rows) {
-    const model = String(r.model ?? "unknown");
-    let entry = map.get(model);
-    if (!entry) {
-      entry = { providers: new Set(), requests: 0, tokens: 0, cost: 0, errors: 0 };
-      map.set(model, entry);
-    }
-    entry.providers.add(String(r.provider_id ?? "unknown"));
-    entry.requests += 1;
-    entry.tokens += Number(r.prompt_tokens ?? 0) + Number(r.completion_tokens ?? 0);
-    entry.cost += computeCost(
-      r.prompt_tokens as number | null,
-      r.completion_tokens as number | null,
-      priceOf(r.model, r.provider_id),
-    );
-    if (r.status !== "success") entry.errors += 1;
-  }
-  return Array.from(map.entries())
-    .map(([model, e]) => ({
-      model,
-      providers: Array.from(e.providers).sort(),
-      requests: e.requests,
-      tokens: e.tokens,
-      cost: Math.round(e.cost * 1_000_000) / 1_000_000,
-      errors: e.errors,
-      errorRate: e.requests ? Math.round((e.errors / e.requests) * 100) : 0,
-      avgTokensPerReq: e.requests ? Math.round(e.tokens / e.requests) : 0,
-    }))
-    .sort((a, b) => b.cost - a.cost)
-    .slice(0, 10);
+  usageCache.set(cacheKey, result);
+  return result;
 }

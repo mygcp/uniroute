@@ -6,17 +6,17 @@ import { Pencil, Users, Trash2, Plus, X } from "lucide-react";
 export function meta() {
 	return [{ title: "API Key Groups | UniRoute" }];
 }
-import { requireSession } from "../.server/auth";
+import { requireLoaderSession, requireSession } from "../.server/auth";
 import {
 	listGroups,
 	createGroup,
 	deleteGroup,
 	updateGroup,
 	setGroupMembers,
-	groupMembers,
-	groupUsage,
 	type KeyGroup,
 } from "../.server/key-groups";
+import { query } from "../.server/db";
+import { flushUsageQueue } from "../.server/key-usage";
 import { listClientKeys } from "../.server/client-key";
 import { PageHeader } from "../components/ui/page-header";
 import { Card } from "../components/ui/card";
@@ -27,16 +27,70 @@ import { UsageBar } from "../components/ui/usage-bar";
 import { useConfirm } from "../components/ui/confirm-dialog";
 import { useToast } from "../components/ui/toast";
 
-export function loader() {
+export function loader({ request }: Route.LoaderArgs) {
+	requireLoaderSession(request);
+	flushUsageQueue();
+	const now = new Date();
+	const from = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString().slice(0, 10);
+	const to = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1)).toISOString().slice(0, 10);
+
 	const keys = listClientKeys().map((k) => ({
 		id: k.id,
 		name: k.name,
 		masked: `${k.key_prefix}…${k.key_hash.slice(0, 4)}`,
 	}));
+
+	const memberRows = query(
+		"SELECT group_id, key_id FROM key_group_members",
+	).all() as Array<{ group_id: number; key_id: number }>;
+	const membersByGroup = new Map<number, number[]>();
+	for (const r of memberRows) {
+		let arr = membersByGroup.get(r.group_id);
+		if (!arr) {
+			arr = [];
+			membersByGroup.set(r.group_id, arr);
+		}
+		arr.push(r.key_id);
+	}
+
+	const usageRows = query(
+		`SELECT m.group_id AS group_id,
+		        COALESCE(SUM(u.requests), 0) AS requests,
+		        COALESCE(SUM(u.prompt_tokens), 0) AS prompt_tokens,
+		        COALESCE(SUM(u.completion_tokens), 0) AS completion_tokens,
+		        COALESCE(SUM(u.cost), 0) AS cost
+		   FROM key_group_members m
+		   JOIN key_usage_daily u ON u.key_id = m.key_id
+		  WHERE u.date >= ? AND u.date < ?
+		  GROUP BY m.group_id`,
+	).all(from, to) as Array<{
+		group_id: number;
+		requests: number;
+		prompt_tokens: number;
+		completion_tokens: number;
+		cost: number;
+	}>;
+	const usageByGroup = new Map(
+		usageRows.map((u) => [
+			u.group_id,
+			{
+				requests: Number(u.requests),
+				promptTokens: Number(u.prompt_tokens),
+				completionTokens: Number(u.completion_tokens),
+				cost: Number(u.cost),
+			},
+		]),
+	);
+
 	const groups = listGroups().map((g) => ({
 		group: g,
-		members: groupMembers(g.id),
-		usage: groupUsage(g),
+		members: membersByGroup.get(g.id) ?? [],
+		usage: usageByGroup.get(g.id) ?? {
+			requests: 0,
+			promptTokens: 0,
+			completionTokens: 0,
+			cost: 0,
+		},
 	}));
 	return { keys, groups };
 }

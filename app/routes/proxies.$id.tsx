@@ -1,7 +1,7 @@
 import { Form, Link, redirect, useNavigation, useSubmit } from "react-router";
 import { useEffect, useRef, useState } from "react";
 import type { Route } from "./+types/proxies.$id";
-import { requireSession } from "../.server/auth";
+import { requireLoaderSession, requireSession } from "../.server/auth";
 import { getProxy, updateProxy, deleteProxy } from "../.server/outbound-proxy";
 import { testProxyConnection } from "../.server/proxy-resolver";
 import { Network, Plug, Trash2 } from "lucide-react";
@@ -18,8 +18,17 @@ export function meta() {
   return [{ title: "Edit Proxy | UniRoute" }];
 }
 
-export async function loader({ params }: Route.LoaderArgs) {
-  return { proxy: getProxy(Number(params.id)) ?? null };
+export async function loader({ request, params }: Route.LoaderArgs) {
+  requireLoaderSession(request);
+  const raw = getProxy(Number(params.id));
+  if (!raw) return { proxy: null };
+  const { password, password_enc, ...rest } = raw;
+  return {
+    proxy: {
+      ...rest,
+      has_password: Boolean(password || password_enc),
+    },
+  };
 }
 
 export async function action({ request, params }: Route.ActionArgs) {

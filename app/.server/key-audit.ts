@@ -1,4 +1,4 @@
-import { query } from "./db";
+import { exec, hasColumn, onBeforeRead, onDbReset, onShutdownFlush, query } from "./db";
 
 export type AuditEntry = {
   id: number;
@@ -22,32 +22,96 @@ export type AuditInput = Partial<
 const AUDIT_COLUMNS =
   "id, key_id, action, model, provider_id, status, tokens, cost, details, ip, user_agent, created_at";
 
-const AUDIT_FIELDS: (keyof AuditInput)[] = [
-  "model",
-  "provider_id",
-  "status",
-  "tokens",
-  "cost",
-  "details",
-  "ip",
-  "user_agent",
-];
+type QueuedAudit = {
+  keyId: number;
+  action: string;
+  model: string | null;
+  provider_id: string | null;
+  status: number | null;
+  tokens: number | null;
+  cost: number | null;
+  details: string | null;
+  ip: string | null;
+  user_agent: string | null;
+  created_at: number;
+};
+
+const MAX_AUDIT_QUEUE = 5000;
+const auditQueue: QueuedAudit[] = [];
+let auditTimer: ReturnType<typeof setTimeout> | null = null;
+
+export function flushAuditQueue(): void {
+  if (auditTimer) {
+    clearTimeout(auditTimer);
+    auditTimer = null;
+  }
+  if (auditQueue.length === 0) return;
+  const items = auditQueue.splice(0);
+  exec("BEGIN");
+  try {
+    const stmt = query(
+      `INSERT INTO key_audit_logs
+         (key_id, action, model, provider_id, status, tokens, cost, details, ip, user_agent, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    for (const item of items) {
+      stmt.run(
+        item.keyId,
+        item.action,
+        item.model,
+        item.provider_id,
+        item.status,
+        item.tokens,
+        item.cost,
+        item.details,
+        item.ip,
+        item.user_agent,
+        item.created_at,
+      );
+    }
+    exec("COMMIT");
+  } catch (err) {
+    exec("ROLLBACK");
+    throw err;
+  }
+}
+
+onBeforeRead("key_audit_logs", flushAuditQueue);
+onShutdownFlush(flushAuditQueue);
+onDbReset(() => {
+  auditQueue.length = 0;
+  if (auditTimer) {
+    clearTimeout(auditTimer);
+    auditTimer = null;
+  }
+});
 
 export function logAudit(keyId: number, action: string, input?: AuditInput): void {
-  const fields = input ?? {};
-  const cols = ["key_id", "action"];
-  const vals: unknown[] = [keyId, action];
-  for (const field of AUDIT_FIELDS) {
-    if (fields[field] !== undefined) {
-      cols.push(field);
-      vals.push(fields[field]);
-    }
+  if (auditQueue.length >= MAX_AUDIT_QUEUE) {
+    auditQueue.shift();
   }
-  query(
-    `INSERT INTO key_audit_logs (${cols.join(", ")}) VALUES (${cols
-      .map(() => "?")
-      .join(", ")})`,
-  ).run(...vals);
+  const fields = input ?? {};
+  auditQueue.push({
+    keyId,
+    action,
+    model: fields.model ?? null,
+    provider_id: fields.provider_id ?? null,
+    status: fields.status ?? null,
+    tokens: fields.tokens ?? null,
+    cost: fields.cost ?? null,
+    details: fields.details ?? null,
+    ip: fields.ip ?? null,
+    user_agent: fields.user_agent ?? null,
+    created_at: Math.floor(Date.now() / 1000),
+  });
+  if (auditQueue.length >= 64) {
+    flushAuditQueue();
+    return;
+  }
+  if (!auditTimer) {
+    auditTimer = setTimeout(flushAuditQueue, 50);
+    auditTimer.unref?.();
+  }
 }
 
 function mapRows(rows: Record<string, unknown>[]): AuditEntry[] {
@@ -74,6 +138,7 @@ function clampLimit(limit?: number): number {
 }
 
 export function listAudit(keyId: number, limit?: number): AuditEntry[] {
+  flushAuditQueue();
   const clamped = clampLimit(limit);
   return mapRows(
     query(
@@ -83,6 +148,7 @@ export function listAudit(keyId: number, limit?: number): AuditEntry[] {
 }
 
 export function recentAudit(keyId: number, sinceTs: number): AuditEntry[] {
+  flushAuditQueue();
   return mapRows(
     query(
       `SELECT ${AUDIT_COLUMNS} FROM key_audit_logs WHERE key_id = ? AND created_at >= ? ORDER BY created_at DESC, id DESC`,
@@ -90,7 +156,16 @@ export function recentAudit(keyId: number, sinceTs: number): AuditEntry[] {
   );
 }
 
+export function hasBudgetAlertSince(keyId: number, sinceTs: number): boolean {
+  flushAuditQueue();
+  const row = query(
+    `SELECT 1 AS ok FROM key_audit_logs WHERE key_id = ? AND action IN ('BUDGET_ALERT', 'BUDGET_BLOCKED') AND created_at >= ? LIMIT 1`,
+  ).get(keyId, sinceTs) as { ok: number } | undefined;
+  return Boolean(row);
+}
+
 export function auditErrorsLastHour(keyId: number): number {
+  flushAuditQueue();
   const since = Math.floor(Date.now() / 1000) - 3600;
   const row = query(
     `SELECT COUNT(*) AS c FROM key_audit_logs WHERE key_id = ? AND action = 'REQUEST' AND status >= 400 AND created_at >= ?`,
@@ -99,10 +174,7 @@ export function auditErrorsLastHour(keyId: number): number {
 }
 
 export function avgLatencyMs(keyId: number, sinceTs: number): number | null {
-  const cols = (
-    query("PRAGMA table_info(request_logs)").all() as { name: string }[]
-  ).map((c) => c.name);
-  if (!cols.includes("api_key_id")) return null;
+  if (!hasColumn("request_logs", "api_key_id")) return null;
   const row = query(
     "SELECT AVG(duration_ms) AS a FROM request_logs WHERE api_key_id = ? AND created_at >= ?",
   ).get(keyId, sinceTs) as { a: number | null } | undefined;

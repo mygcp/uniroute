@@ -7,7 +7,7 @@ import {
   type ClientKey,
 } from "./client-key";
 import { encryptKey } from "./key-crypto";
-import { logAudit, recentAudit } from "./key-audit";
+import { hasBudgetAlertSince, logAudit, recentAudit } from "./key-audit";
 import { usageThisMonth, usageToday, recordUsage, type UsageSummary } from "./key-usage";
 import { enqueueWebhook } from "./webhook";
 import { estimateCost } from "./pricing";
@@ -121,9 +121,13 @@ export type RequestOutcomeInput = {
  * cek alert threshold → webhook, dan auto-block bila budget habis.
  * Return `{ blocked }` agar caller bisa membalas 429 bila perlu.
  */
-export function recordRequestUsage(keyId: number, input: RequestOutcomeInput): { blocked: boolean } {
-  const key = getClientKeyById(keyId);
+export function recordRequestUsage(
+  keyIdOrKey: number | ClientKey,
+  input: RequestOutcomeInput,
+): { blocked: boolean } {
+  const key = typeof keyIdOrKey === "number" ? getClientKeyById(keyIdOrKey) : keyIdOrKey;
   if (!key) return { blocked: false };
+  const keyId = key.id;
   const tokens = input.promptTokens + input.completionTokens;
   const cost = estimateCost(input.model, input.providerId, input.promptTokens, input.completionTokens);
 
@@ -143,19 +147,17 @@ export function recordRequestUsage(keyId: number, input: RequestOutcomeInput): {
     user_agent: input.userAgent ?? undefined,
   });
 
-  const month = usageThisMonth(keyId);
   const monthlyBudget = key.budget?.monthly;
   let blocked = false;
 
   if (monthlyBudget != null && monthlyBudget > 0) {
+    const month = usageThisMonth(keyId);
     const threshold = key.alert_threshold;
     const hitThreshold =
       threshold != null && threshold > 0 && month.cost >= monthlyBudget * threshold;
     const exhausted = month.cost >= monthlyBudget;
     if (hitThreshold || exhausted) {
-      const alerted = recentAudit(keyId, monthStartSec()).some(
-        (a) => a.action === "BUDGET_ALERT" || a.action === "BUDGET_BLOCKED",
-      );
+      const alerted = hasBudgetAlertSince(keyId, monthStartSec());
       if (!alerted) {
         logAudit(keyId, "BUDGET_ALERT", {
           details: JSON.stringify({ cost: month.cost, budget: monthlyBudget, exhausted }),
@@ -196,11 +198,14 @@ export type KeyHealth = {
   };
 };
 
-export function healthCheck(id: number): KeyHealth {
-  const key = getClientKeyById(id);
+export function healthCheck(
+  id: number,
+  preloaded?: { key?: ClientKey; month?: UsageSummary; today?: UsageSummary },
+): KeyHealth {
+  const key = preloaded?.key ?? getClientKeyById(id);
   if (!key) throw new Error("key not found");
-  const month: UsageSummary = usageThisMonth(id);
-  const today = usageToday(id);
+  const month: UsageSummary = preloaded?.month ?? usageThisMonth(id);
+  const today = preloaded?.today ?? usageToday(id);
   const status = computeStatus(key, month);
   const recent = recentAudit(id, Math.floor(Date.now() / 1000) - 3600);
   const errors = recent.filter((a) => a.action === "REQUEST" && (a.status ?? 0) >= 400).length;

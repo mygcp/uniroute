@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
-import { query } from "./db";
+import { TtlCache } from "./async-utils";
+import { getTableVersion, onDbReset, query } from "./db";
 import { encryptKey } from "./key-crypto";
+import { getCachedSetting, setCachedSetting } from "./settings-cache";
 
 export type BudgetConfig = {
   monthly?: number;
@@ -404,6 +406,14 @@ export type ResolveResult =
   | { ok: true; key: ClientKey; usedPrevious?: boolean }
   | { ok: false; status: number; message: string };
 
+const resolveCache = new TtlCache<string, ResolveResult>(2000, 10_000);
+let resolvedKeysVersion = -1;
+
+onDbReset(() => {
+  resolveCache.clear();
+  resolvedKeysVersion = -1;
+});
+
 function rowToResolve(row: ClientKeyRow, usedPrevious: boolean): ResolveResult {
   return { ok: true, key: toClientKey(row), usedPrevious };
 }
@@ -412,7 +422,27 @@ export function resolveClientKey(token: string | null | undefined): ResolveResul
   if (!token) {
     return { ok: false, status: 401, message: "api key required" };
   }
+  const ver = getTableVersion("client_api_keys");
+  if (ver !== resolvedKeysVersion) {
+    resolveCache.clear();
+    resolvedKeysVersion = ver;
+  }
+
   const hash = hashKey(token);
+  const cached = resolveCache.get(hash);
+  if (cached) {
+    if (
+      cached.ok &&
+      cached.usedPrevious &&
+      cached.key.previous_expires_at != null &&
+      cached.key.previous_expires_at <= Math.floor(Date.now() / 1000)
+    ) {
+      resolveCache.delete(hash);
+    } else {
+      return cached;
+    }
+  }
+
   const row = query(
     `SELECT ${COLUMNS} FROM client_api_keys WHERE key_hash = ?`,
   ).get(hash) as ClientKeyRow | undefined;
@@ -420,10 +450,11 @@ export function resolveClientKey(token: string | null | undefined): ResolveResul
     if (row.is_active !== 1 || row.blocked_at) {
       return { ok: false, status: 401, message: "invalid api key" };
     }
-    return rowToResolve(row, false);
+    const res = rowToResolve(row, false);
+    resolveCache.set(hash, res);
+    return res;
   }
 
-  // Grace period setelah rotation: key lama masih valid sampai previous_expires_at.
   const prev = query(
     `SELECT ${COLUMNS} FROM client_api_keys
      WHERE previous_key_hash = ? AND previous_expires_at > unixepoch()`,
@@ -432,7 +463,9 @@ export function resolveClientKey(token: string | null | undefined): ResolveResul
     if (prev.is_active !== 1 || prev.blocked_at) {
       return { ok: false, status: 401, message: "invalid api key" };
     }
-    return rowToResolve(prev, true);
+    const res = rowToResolve(prev, true);
+    resolveCache.set(hash, res);
+    return res;
   }
 
   return { ok: false, status: 401, message: "invalid api key" };
@@ -461,16 +494,11 @@ export function providerBlocked(key: ClientKey, providerId: string): boolean {
 const REQUIRE_KEY_SETTING = "require_api_key";
 
 export function isRequireApiKey(): boolean {
-  const row = query("SELECT value FROM settings WHERE key = ?").get(
-    REQUIRE_KEY_SETTING,
-  ) as { value: string } | undefined;
-  return row?.value === "1";
+  return getCachedSetting(REQUIRE_KEY_SETTING) === "1";
 }
 
 export function setRequireApiKey(enabled: boolean): void {
-  query(
-    "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-  ).run(REQUIRE_KEY_SETTING, enabled ? "1" : "0");
+  setCachedSetting(REQUIRE_KEY_SETTING, enabled ? "1" : "0");
 }
 
 /** Backwards-compat: rewrote the "rules" columns only. Empty input clears optional rules. */

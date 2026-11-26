@@ -1,7 +1,12 @@
 import { Form, redirect, Link, useNavigation } from "react-router";
 import type { Route } from "./+types/proxies.create";
-import { requireSession } from "../.server/auth";
+import { requireLoaderSession, requireSession } from "../.server/auth";
 import { createProxy } from "../.server/outbound-proxy";
+
+export function loader({ request }: Route.LoaderArgs) {
+  requireLoaderSession(request);
+  return null;
+}
 import { Button, buttonClass } from "../components/ui/button";
 import { Card } from "../components/ui/card";
 import { Checkbox, Input, Label, Select } from "../components/ui/field";

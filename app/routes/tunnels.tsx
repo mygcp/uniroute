@@ -17,8 +17,9 @@ import {
   Trash2,
   Zap,
 } from "lucide-react";
-import { requireSession } from "../.server/auth";
+import { requireLoaderSession, requireSession } from "../.server/auth";
 import {
+  clearTunnelError,
   clearTunnelLogs,
   getPublicTunnelSettings,
   getTunnelSettings,
@@ -54,6 +55,7 @@ import { Card } from "../components/ui/card";
 import { StatCard } from "../components/ui/stat-card";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
+import { DownloadProgressBar } from "../components/download-progress-bar";
 import { CopyButton } from "../components/ui/copy-button";
 import { Input, Label, Select } from "../components/ui/field";
 import { Toggle } from "../components/ui/toggle";
@@ -87,11 +89,12 @@ function configuredBinaryMap(
   };
 }
 
-export function loader({ request }: Route.LoaderArgs) {
+export async function loader({ request }: Route.LoaderArgs) {
+  requireLoaderSession(request);
   const raw = getTunnelSettings();
   const settings = getPublicTunnelSettings(raw);
   const status = getTunnelStatus();
-  const tools = getAllTunnelToolsStatus(configuredBinaryMap(raw));
+  const tools = await getAllTunnelToolsStatus(configuredBinaryMap(raw));
   return {
     settings,
     status,
@@ -112,6 +115,7 @@ type ActionResult =
   | { ok: true; started: TunnelRuntimeStatus }
   | { ok: true; stopped: TunnelRuntimeStatus }
   | { ok: true; clearedLogs: true; status: TunnelRuntimeStatus }
+  | { ok: true; clearedError: true; status: TunnelRuntimeStatus }
   | { ok: false; error: string; tool?: TunnelProviderId };
 
 function saveSettingsFromForm(form: FormData) {
@@ -286,6 +290,11 @@ export async function action({ request }: Route.ActionArgs) {
     return { ok: true, clearedLogs: true, status: getTunnelStatus() } satisfies ActionResult;
   }
 
+  if (intent === "clear_error") {
+    const status = clearTunnelError();
+    return { ok: true, clearedError: true, status } satisfies ActionResult;
+  }
+
   return Response.json(
     { ok: false, error: "Unknown intent." } satisfies ActionResult,
     { status: 400 },
@@ -359,8 +368,12 @@ function TunnelToolCard({
     const d = fetcher.data;
     if (d.ok && "downloaded" in d) {
       toast({
-        title: `${tool.name} downloaded`,
-        description: `${d.downloaded.tag} installed to ${d.downloaded.binaryPath}${d.downloaded.checksumVerified ? " (SHA-256 verified)" : ""}`,
+        title: d.downloaded.upToDate
+          ? `${tool.name} is already up to date`
+          : `${tool.name} downloaded`,
+        description: d.downloaded.upToDate
+          ? `Version ${d.downloaded.version ?? d.downloaded.tag} is already the latest release.`
+          : `${d.downloaded.tag} installed to ${d.downloaded.binaryPath}${d.downloaded.checksumVerified ? " (SHA-256 verified)" : ""}`,
         variant: "success",
       });
     } else if (d.ok && "uninstalled" in d) {
@@ -435,6 +448,10 @@ function TunnelToolCard({
       </div>
 
       <div className="space-y-3 border-t border-border pt-3">
+        <DownloadProgressBar
+          progressKey={`tunnel:${tool.id}`}
+          active={activeIntent === "download"}
+        />
         <div className="flex flex-wrap items-center gap-2">
           <fetcher.Form method="post">
             <input type="hidden" name="intent" value="download" />
@@ -899,12 +916,20 @@ export default function TunnelsPage({
 
       {liveStatus.lastError ? (
         <Card className="border-danger/35 bg-danger/10">
-          <div className="flex items-start gap-2.5 text-xs text-danger">
-            <AlertTriangle size={16} className="mt-0.5 shrink-0" aria-hidden="true" />
-            <div className="min-w-0">
-              <p className="font-semibold">Last Tunnel Error</p>
-              <p className="mt-0.5 break-words">{liveStatus.lastError}</p>
+          <div className="flex items-start justify-between gap-3 text-xs text-danger">
+            <div className="flex min-w-0 items-start gap-2.5">
+              <AlertTriangle size={16} className="mt-0.5 shrink-0" aria-hidden="true" />
+              <div className="min-w-0">
+                <p className="font-semibold">Last Tunnel Error</p>
+                <p className="mt-0.5 break-words">{liveStatus.lastError}</p>
+              </div>
             </div>
+            <Form method="post" onSubmit={() => setLiveStatus((s) => ({ ...s, lastError: null }))}>
+              <input type="hidden" name="intent" value="clear_error" />
+              <Button type="submit" size="sm" variant="ghost" className="shrink-0 text-danger hover:bg-danger/15">
+                Dismiss
+              </Button>
+            </Form>
           </div>
         </Card>
       ) : null}

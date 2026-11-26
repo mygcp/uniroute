@@ -1,21 +1,22 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
 
-/**
- * Enkripsi AES-256-GCM untuk nilai API key.
- * Kunci AES diturunkan dari env `API_KEY_SECRET` (hex 32 byte) via SHA-256.
- * Format tersimpan: base64(iv(12) || ciphertext || tag(16)).
- * Dibaca saat pemanggilan (bukan module-load) supaya test bisa set env per-case.
- */
+let cachedSecret: string | undefined;
+let cachedDerivedKey: Buffer | null = null;
 
 export function hasApiKeySecret(): boolean {
   return !!process.env.API_KEY_SECRET?.trim();
 }
 
 function aesKey(): Buffer {
-  return createHash("sha256").update(process.env.API_KEY_SECRET ?? "").digest();
+  const secret = process.env.API_KEY_SECRET ?? "";
+  if (cachedDerivedKey && cachedSecret === secret) {
+    return cachedDerivedKey;
+  }
+  cachedSecret = secret;
+  cachedDerivedKey = createHash("sha256").update(secret).digest();
+  return cachedDerivedKey;
 }
 
-/** Encrypt raw key. Return `null` bila `API_KEY_SECRET` tidak diset. */
 export function encryptKey(raw: string): string | null {
   if (!hasApiKeySecret()) return null;
   const iv = randomBytes(12);
@@ -25,7 +26,6 @@ export function encryptKey(raw: string): string | null {
   return Buffer.concat([iv, encrypted, tag]).toString("base64");
 }
 
-/** Decrypt base64(iv||ciphertext||tag). Throw bila secret hilang atau data rusak. */
 export function decryptKey(enc: string): string {
   if (!hasApiKeySecret()) {
     throw new Error("API_KEY_SECRET is not set");

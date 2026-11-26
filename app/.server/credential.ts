@@ -1,4 +1,4 @@
-import { query } from "./db";
+import { getTableVersion, onDbReset, query } from "./db";
 
 export type ApiKeyRow = {
   id: number;
@@ -12,26 +12,44 @@ export type ApiKeyRow = {
   updated_at: number;
 };
 
+let cachedVersion = -1;
+const keysByProvider = new Map<string, ApiKeyRow[]>();
+
+onDbReset(() => {
+  cachedVersion = -1;
+  keysByProvider.clear();
+});
+
+function ensureFresh(): void {
+  const ver = getTableVersion("provider_credentials");
+  if (ver !== cachedVersion) {
+    keysByProvider.clear();
+    cachedVersion = ver;
+  }
+}
+
 export function listApiKeys(providerId: string): ApiKeyRow[] {
-  return query(
+  ensureFresh();
+  const cached = keysByProvider.get(providerId);
+  if (cached) return cached;
+  const rows = query(
     `SELECT id, provider_id, label, api_key, proxy_pool_id, is_active, is_routing, created_at, updated_at
       FROM provider_credentials WHERE provider_id = ? ORDER BY id`,
   ).all(providerId) as unknown as ApiKeyRow[];
+  keysByProvider.set(providerId, rows);
+  return rows;
 }
 
-/** Ambil api_key yang sedang dipakai untuk routing (is_routing=1, aktif). */
+export function getApiKeyRow(providerId: string): ApiKeyRow | null {
+  const active = listApiKeys(providerId).filter((k) => k.is_active === 1);
+  if (active.length === 0) return null;
+  return active.find((k) => k.is_routing === 1) ?? active[0];
+}
+
 export function getApiKey(providerId: string): string | null {
-  const row = query(
-    "SELECT api_key FROM provider_credentials WHERE provider_id = ? AND is_routing = 1 AND is_active = 1 ORDER BY id LIMIT 1",
-  ).get(providerId) as { api_key: string } | undefined;
-  if (row) return row.api_key;
-  const fallback = query(
-    "SELECT api_key FROM provider_credentials WHERE provider_id = ? AND is_active = 1 ORDER BY id LIMIT 1",
-  ).get(providerId) as { api_key: string } | undefined;
-  return fallback?.api_key ?? null;
+  return getApiKeyRow(providerId)?.api_key ?? null;
 }
 
-/** Tambah API key baru (multi account). Optionally becomes the routing key. */
 export function addApiKey(
   providerId: string,
   apiKey: string,
@@ -49,7 +67,6 @@ export function addApiKey(
   ).run(providerId, label, apiKey, makeRouting ? 1 : 0);
 }
 
-/** Legacacy upsert: set/replace the routing key for a provider. */
 export function setApiKey(providerId: string, apiKey: string): void {
   const existing = query(
     "SELECT id FROM provider_credentials WHERE provider_id = ? AND is_routing = 1 LIMIT 1",
@@ -67,7 +84,6 @@ export function deleteApiKeyById(id: number): void {
   query("DELETE FROM provider_credentials WHERE id = ?").run(id);
 }
 
-/** Legacy helper — deletes ALL keys for a provider. */
 export function deleteApiKey(providerId: string): void {
   query("DELETE FROM provider_credentials WHERE provider_id = ?").run(
     providerId,
@@ -93,37 +109,15 @@ export function setApiKeyActive(id: number, active: boolean): void {
   ).run(active ? 1 : 0, id);
 }
 
-/** Set proxy pool assigned to one provider credential (API key). Null clears it. */
 export function setApiKeyProxyPool(id: number, poolId: number | null): void {
   query(
     "UPDATE provider_credentials SET proxy_pool_id = ?, updated_at = unixepoch() WHERE id = ?",
   ).run(poolId, id);
 }
 
-/**
- * Hanya `proxy_pool_id` kredensial yang dipakai routing (routing key dulu,
- * fallback key aktif tertua). Query satu kolom — jangan tarik baris penuh
- * (termasuk api_key) hanya untuk baca pool di jalur panas.
- */
 export function getRoutingPoolId(
   providerId: string,
 ): number | undefined {
-  const row = query(
-    "SELECT proxy_pool_id FROM provider_credentials WHERE provider_id = ? AND is_active = 1 ORDER BY is_routing DESC, id LIMIT 1",
-  ).get(providerId) as { proxy_pool_id: number | null } | undefined;
+  const row = getApiKeyRow(providerId);
   return row ? (row.proxy_pool_id ?? undefined) : undefined;
-}
-
-/** Full row of the credential getApiKey() would resolve (routing, else first active). */
-export function getApiKeyRow(providerId: string): ApiKeyRow | null {
-  const cols =
-    "id, provider_id, label, api_key, proxy_pool_id, is_active, is_routing, created_at, updated_at";
-  const routing = query(
-    `SELECT ${cols} FROM provider_credentials WHERE provider_id = ? AND is_routing = 1 AND is_active = 1 ORDER BY id LIMIT 1`,
-  ).get(providerId) as ApiKeyRow | undefined;
-  if (routing) return routing;
-  const fallback = query(
-    `SELECT ${cols} FROM provider_credentials WHERE provider_id = ? AND is_active = 1 ORDER BY id LIMIT 1`,
-  ).get(providerId) as ApiKeyRow | undefined;
-  return fallback ?? null;
 }

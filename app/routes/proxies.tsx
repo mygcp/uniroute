@@ -1,8 +1,10 @@
 import { Form, Link, redirect, useFetcher, useNavigation, useOutlet, useSearchParams, useSubmit } from "react-router";
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 import type { Route } from "./+types/proxies";
-import { requireSession } from "../.server/auth";
-import { query } from "../.server/db";
+import { requireLoaderSession, requireSession } from "../.server/auth";
+import { createLimiter } from "../.server/async-utils";
+import { exec, query } from "../.server/db";
+import { assertSafeUrl } from "../.server/ssrf";
 import { fmtTs } from "../lib/log-format";
 import {
 	listProxies,
@@ -11,6 +13,7 @@ import {
 	getProxy,
 	updateProxy,
 	deleteProxy,
+	deleteProxiesBatch,
 	createPool,
 	deletePool,
 	assignPool,
@@ -131,10 +134,16 @@ async function fetchFreeProxies(
 	limit: number,
 	format: FreeSourceFormat = "text",
 ): Promise<FreeProxyRow[]> {
-	const controller = new AbortController();
-	const timer = setTimeout(() => controller.abort(), 10_000);
 	try {
-		const resp = await fetch(sourceUrl, { signal: controller.signal });
+		await assertSafeUrl(sourceUrl, { allowPrivate: false, allowLoopback: false });
+	} catch {
+		return [];
+	}
+	try {
+		const resp = await fetch(sourceUrl, {
+			redirect: "manual",
+			signal: AbortSignal.timeout(10_000),
+		});
 		if (!resp.ok) return [];
 		const text = await resp.text();
 		const rows: FreeProxyRow[] = [];
@@ -170,8 +179,6 @@ async function fetchFreeProxies(
 		return rows;
 	} catch {
 		return [];
-	} finally {
-		clearTimeout(timer);
 	}
 }
 
@@ -179,7 +186,8 @@ async function fetchFreeProxies(
 // Loader / action
 //---------------------------------------------------------------------------
 
-export async function loader() {
+export async function loader({ request }: Route.LoaderArgs) {
+	requireLoaderSession(request);
 	const providers = query("SELECT id, name FROM providers ORDER BY name").all() as unknown as {
 		id: string;
 		name: string;
@@ -190,8 +198,12 @@ export async function loader() {
 		id: number;
 		name: string;
 	}[];
+	const proxies = listProxies().map(({ password, password_enc, ...rest }) => ({
+		...rest,
+		has_password: Boolean(password || password_enc),
+	}));
 	return {
-		proxies: listProxies(),
+		proxies,
 		pools: listPools(),
 		assignments: listAssignments(),
 		providers,
@@ -233,11 +245,10 @@ async function testRows(
 	rows: FreeProxyRow[],
 	onResult: (row: FreeProxyRow, result: { ok: boolean; latencyMs: number }) => void,
 ): Promise<void> {
-	const batch = 6;
-	for (let i = 0; i < rows.length; i += batch) {
-		const slice = rows.slice(i, i + batch);
-		await Promise.all(
-			slice.map(async (row) => {
+	const limit = createLimiter(8);
+	await Promise.all(
+		rows.map((row) =>
+			limit(async () => {
 				const proxy: ProxyConfig = {
 					id: 0,
 					name: `${row.host}:${row.port}`,
@@ -260,8 +271,8 @@ async function testRows(
 				const result = await testProxyConnection(proxy);
 				onResult(row, result);
 			}),
-		);
-	}
+		),
+	);
 }
 
 export async function action({ request }: Route.ActionArgs) {
@@ -284,41 +295,46 @@ export async function action({ request }: Route.ActionArgs) {
 	}
 
 	if (intent === "delete-many") {
-		for (const id of form.getAll("ids").map(Number)) deleteProxy(id);
+		deleteProxiesBatch(form.getAll("ids").map(Number));
 		return redirect(tabParam ? `/proxies?tab=${encodeURIComponent(tabParam)}` : "/proxies");
 	}
 
-	// Hapus semua proxy yang terakhir kali dites gagal (last_error != NULL).
 	if (intent === "delete-errors") {
 		const rows = query(
 			"SELECT id FROM outbound_proxies WHERE last_error IS NOT NULL",
 		).all() as unknown as { id: number }[];
-		for (const r of rows) deleteProxy(Number(r.id));
+		deleteProxiesBatch(rows.map((r) => Number(r.id)));
 		return redirect("/proxies");
 	}
 
 	if (intent === "bulk-active") {
 		const active = form.get("active") === "1";
-		for (const id of form.getAll("ids").map(Number)) {
-			const current = getProxy(id);
-			if (current && current.is_active !== active) {
-				updateProxy(id, { is_active: active });
+		exec("BEGIN");
+		try {
+			for (const id of form.getAll("ids").map(Number)) {
+				const current = getProxy(id);
+				if (current && current.is_active !== active) {
+					updateProxy(id, { is_active: active });
+				}
 			}
+			exec("COMMIT");
+		} catch (err) {
+			exec("ROLLBACK");
+			throw err;
 		}
 		return redirect("/proxies");
 	}
 
-	// Test banyak proxy sekaligus (semua atau seleksi) lewat URL kustom.
 	if (intent === "test-many") {
 		const ids = [...new Set(form.getAll("ids").map(Number))].filter((n) =>
 			Number.isFinite(n),
 		);
 		const customUrl = String(form.get("url") || "").trim();
 		const results: Array<{ id: number; ok: boolean; latencyMs: number }> = [];
-		const batch = 6;
-		for (let i = 0; i < ids.length; i += batch) {
-			await Promise.all(
-				ids.slice(i, i + batch).map(async (id) => {
+		const limit = createLimiter(8);
+		await Promise.all(
+			ids.map((id) =>
+				limit(async () => {
 					const proxy = getProxy(id);
 					if (!proxy) return;
 					const r = await testProxyConnection(
@@ -327,8 +343,8 @@ export async function action({ request }: Route.ActionArgs) {
 					);
 					results.push({ id, ok: r.ok, latencyMs: r.latencyMs });
 				}),
-			);
-		}
+			),
+		);
 		return { manyTests: results };
 	}
 
@@ -382,11 +398,20 @@ export async function action({ request }: Route.ActionArgs) {
 				: "http-connect";
 			rows = await fetchFreeProxies(source.url, type, limit, source.format);
 		} else {
-			// Auto: try every source until we get results.
-			for (const s of FREE_SOURCES) {
-				const t: ProxyType = s.id.includes("socks5") ? "socks5" : "http-connect";
-				rows = await fetchFreeProxies(s.url, t, limit, s.format);
-				if (rows.length > 0) break;
+			for (let i = 0; i < FREE_SOURCES.length && rows.length === 0; i += 3) {
+				const batch = FREE_SOURCES.slice(i, i + 3);
+				const fetched = await Promise.all(
+					batch.map((s) => {
+						const t: ProxyType = s.id.includes("socks5") ? "socks5" : "http-connect";
+						return fetchFreeProxies(s.url, t, limit, s.format);
+					}),
+				);
+				for (const chunk of fetched) {
+					if (chunk.length > 0) {
+						rows = chunk;
+						break;
+					}
+				}
 			}
 		}
 

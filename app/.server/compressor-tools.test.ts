@@ -74,7 +74,7 @@ describe("compressor-tools helpers", () => {
     expect(extractLatestTagFromAtom(atom, "v")).toBe("v4.2.0");
   });
 
-  test("identifies legacy mock stubs without treating them as installed tools", () => {
+  test("identifies legacy mock stubs without treating them as installed tools", async () => {
     expect(isLegacyStubPath("./bin/rtk")).toBe(true);
     expect(isLegacyStubPath("./bin/caveman")).toBe(true);
     expect(isLegacyStubPath("C:\\Users\\user\\.uniroute\\bin\\rtk.exe")).toBe(false);
@@ -84,7 +84,7 @@ describe("compressor-tools helpers", () => {
     process.env.UNIROUTE_TOOLS_DIR = tmpDir;
     clearProbeCache();
     try {
-      const rtkStub = probeTool("rtk", "./bin/rtk");
+      const rtkStub = await probeTool("rtk", "./bin/rtk");
       // If rtk is not on system PATH, ./bin/rtk is honestly flagged as stub
       if (rtkStub.source === "stub") {
         expect(rtkStub.isStub).toBe(true);

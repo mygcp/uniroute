@@ -9,7 +9,7 @@ export function meta({ loaderData }: Route.MetaArgs) {
 }
 import { getRegistryEntry } from "~/registry";
 import type { RegistryEntry } from "~/types";
-import { requireSession } from "../.server/auth";
+import { requireLoaderSession, requireSession } from "../.server/auth";
 import { query } from "../.server/db";
 import {
   listSessions,
@@ -113,12 +113,20 @@ function parseContextLength(value: FormDataEntryValue | null): number | null {
   return Math.round(n);
 }
 
-export async function loader({ params }: Route.LoaderArgs) {
+function maskCredentialKey(raw: string): string {
+  if (raw.length <= 8) return "••••";
+  return `${raw.slice(0, 6)}••••••••${raw.slice(-4)}`;
+}
+
+export async function loader({ request, params }: Route.LoaderArgs) {
+  requireLoaderSession(request);
   const provider = query(
     "SELECT id, name, base_url, auth_type, is_active, prefix FROM providers WHERE id = ?",
   ).get(params.id) as ProviderRow | undefined;
 
-  const keys = provider ? listApiKeys(provider.id) : [];
+  const keys = provider
+    ? listApiKeys(provider.id).map((k) => ({ ...k, api_key: maskCredentialKey(k.api_key) }))
+    : [];
   let models: ModelRow[] = [];
   if (provider) {
     try {
@@ -126,7 +134,6 @@ export async function loader({ params }: Route.LoaderArgs) {
         "SELECT id, model_name, display_name, context_length, is_active, is_primary FROM models WHERE provider_id = ? ORDER BY is_primary DESC, id",
       ).all(provider.id) as unknown as ModelRow[];
     } catch {
-      // DB lama belum punya kolom display_name
       models = query(
         "SELECT id, model_name, context_length, is_active, is_primary FROM models WHERE provider_id = ? ORDER BY is_primary DESC, id",
       ).all(provider.id) as unknown as ModelRow[];
@@ -134,8 +141,9 @@ export async function loader({ params }: Route.LoaderArgs) {
   }
 
   const pools = listPools();
-  const activeProxies = listProxies(true).length;
-  const proxies = listProxies();
+  const rawProxies = listProxies();
+  const activeProxies = rawProxies.filter((p) => p.is_active).length;
+  const proxies = rawProxies.map(({ password: _p, password_enc: _pe, ...rest }) => rest);
   const chatSessions = provider ? listSessions(provider.id) : [];
 
   // Assignment provider aktif: pool biasa atau singleton single-proxy.
@@ -533,7 +541,7 @@ export async function action({ request, params }: Route.ActionArgs) {
       };
     }
 
-    const { upsertProviderModel, fetchProviderModelsList } = await import(
+    const { upsertProviderModelsBatch, fetchProviderModelsList } = await import(
       "../.server/provider-models"
     );
     const fetched = await fetchProviderModelsList(id);
@@ -542,17 +550,13 @@ export async function action({ request, params }: Route.ActionArgs) {
       for (const m of fetched.models) contextById.set(m.id, m.contextLength);
     }
 
-    let created = 0;
-    let updated = 0;
-    for (const name of selected) {
-      const ctx = contextById.has(name)
+    const items = selected.map((name) => ({
+      modelName: name,
+      contextLength: contextById.has(name)
         ? (contextById.get(name) ?? null)
-        : parseContextLength(form.get(`context_${name}`));
-      const result = upsertProviderModel(id, name, ctx ?? null, false);
-      if (result.created) created += 1;
-      else updated += 1;
-    }
-    reload();
+        : (parseContextLength(form.get(`context_${name}`)) ?? null),
+    }));
+    const { created, updated } = upsertProviderModelsBatch(id, items);
     return {
       modelsAction: {
         ok: true,

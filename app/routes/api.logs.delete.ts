@@ -1,15 +1,10 @@
 import type { Route } from "./+types/api.logs.delete";
-import { getSessionToken, isValid } from "../.server/auth";
+import { requireSession } from "../.server/auth";
 import { query } from "../.server/db";
 
-/**
- * POST /api/logs/delete — hapus satu baris log.
- * Form fields: id (number), type = "request" | "proxy".
- */
 export async function action({ request }: Route.ActionArgs) {
-  if (!isValid(getSessionToken(request))) {
-    return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
-  }
+  const denied = requireSession(request);
+  if (denied) return denied;
 
   const form = await request.formData();
   const id = Number(form.get("id"));

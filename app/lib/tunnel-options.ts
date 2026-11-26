@@ -213,6 +213,7 @@ export type DownloadTunnelToolResult = {
   sha256: string;
   checksumVerified: boolean;
   sizeBytes: number;
+  upToDate?: boolean;
 };
 
 export const DEFAULT_TUNNEL_SETTINGS: TunnelSettings = {

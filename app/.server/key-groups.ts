@@ -1,6 +1,6 @@
-import { query } from "./db";
+import { exec, query } from "./db";
 import type { ClientKey } from "./client-key";
-import { usageThisMonth, type UsageSummary } from "./key-usage";
+import { flushUsageQueue, type UsageSummary } from "./key-usage";
 
 export type SharedQuotaConfig = {
   monthly_budget?: number;
@@ -63,14 +63,24 @@ export function createGroup(
 ): number {
   const quota =
     sharedQuota && Object.keys(sharedQuota).length > 0 ? JSON.stringify(sharedQuota) : null;
-  const res = query(
-    "INSERT INTO key_groups (name, description, shared_quota) VALUES (?, ?, ?)",
-  ).run(name.trim(), description?.trim() || null, quota) as { lastInsertRowid?: number };
-  const id = Number(res.lastInsertRowid);
-  for (const memberId of memberIds) {
-    addGroupMember(id, memberId);
+  exec("BEGIN");
+  try {
+    const res = query(
+      "INSERT INTO key_groups (name, description, shared_quota) VALUES (?, ?, ?)",
+    ).run(name.trim(), description?.trim() || null, quota) as { lastInsertRowid?: number };
+    const id = Number(res.lastInsertRowid);
+    const stmt = query(
+      "INSERT OR IGNORE INTO key_group_members (group_id, key_id) VALUES (?, ?)",
+    );
+    for (const memberId of memberIds) {
+      stmt.run(id, memberId);
+    }
+    exec("COMMIT");
+    return id;
+  } catch (err) {
+    exec("ROLLBACK");
+    throw err;
   }
-  return id;
 }
 
 export function updateGroup(
@@ -114,8 +124,18 @@ export function removeGroupMember(groupId: number, keyId: number): void {
 }
 
 export function setGroupMembers(groupId: number, keyIds: number[]): void {
-  query("DELETE FROM key_group_members WHERE group_id = ?").run(groupId);
-  for (const keyId of keyIds) addGroupMember(groupId, keyId);
+  exec("BEGIN");
+  try {
+    query("DELETE FROM key_group_members WHERE group_id = ?").run(groupId);
+    const stmt = query(
+      "INSERT OR IGNORE INTO key_group_members (group_id, key_id) VALUES (?, ?)",
+    );
+    for (const keyId of keyIds) stmt.run(groupId, keyId);
+    exec("COMMIT");
+  } catch (err) {
+    exec("ROLLBACK");
+    throw err;
+  }
 }
 
 export function groupMembers(groupId: number): number[] {
@@ -135,18 +155,31 @@ export function groupsOfKey(keyId: number): KeyGroup[] {
   return rows.map(toGroup);
 }
 
-/** Agregasi usage seluruh anggota grup (untuk shared quota). */
+function currentMonthDateBounds(): [string, string] {
+  const now = new Date();
+  const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString().slice(0, 10);
+  const end = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1)).toISOString().slice(0, 10);
+  return [start, end];
+}
+
 export function groupUsage(group: KeyGroup): UsageSummary {
-  const members = groupMembers(group.id);
-  let total: UsageSummary = { requests: 0, promptTokens: 0, completionTokens: 0, cost: 0 };
-  for (const keyId of members) {
-    const u = usageThisMonth(keyId);
-    total.requests += u.requests;
-    total.promptTokens += u.promptTokens;
-    total.completionTokens += u.completionTokens;
-    total.cost += u.cost;
-  }
-  return total;
+  flushUsageQueue();
+  const [from, to] = currentMonthDateBounds();
+  const row = query(
+    `SELECT COALESCE(SUM(u.requests), 0) AS requests,
+            COALESCE(SUM(u.prompt_tokens), 0) AS prompt_tokens,
+            COALESCE(SUM(u.completion_tokens), 0) AS completion_tokens,
+            COALESCE(SUM(u.cost), 0) AS cost
+       FROM key_usage_daily u
+       JOIN key_group_members m ON m.key_id = u.key_id
+      WHERE m.group_id = ? AND u.date >= ? AND u.date < ?`,
+  ).get(group.id, from, to) as Record<string, unknown>;
+  return {
+    requests: Number(row.requests),
+    promptTokens: Number(row.prompt_tokens),
+    completionTokens: Number(row.completion_tokens),
+    cost: Number(row.cost),
+  };
 }
 
 export type GroupQuotaCheck =

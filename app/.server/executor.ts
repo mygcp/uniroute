@@ -8,26 +8,18 @@ export type ExecutorOptions = {
 	headers: Headers;
 	body: string;
 	signal?: AbortSignal;
-	/** Client API key's proxy pool (highest priority: client key). */
 	apiKeyPoolId?: number;
-	/** Provider credential's proxy pool (second priority: account). */
 	accountPoolId?: number;
-	/** Combo's proxy pool (third priority: combo). */
 	comboPoolId?: number;
-	/** Provider's proxy pool (fourth priority: provider; then global, then direct). */
 	providerPoolId?: number;
-	/** Provider id, used only for diagnostics. */
 	providerId?: string;
-	/** Dipanggil saat proxy spesifik terpilih (untuk metadata request log). */
 	onProxyUsed?: (info: ProxyUsedInfo | null) => void;
-	/** Konteks proxy_logs. */
 	logClientIp?: string | null;
 	logApiKeyId?: number | null;
 	streamTransformer?: StreamTransformer;
 	onComplete: (log: Partial<RequestLog> & Pick<RequestLog, "status">) => void;
 };
 
-/** Metadata proxy yang dipakai egress — dibawa sekali agar log tidak re-query. */
 export type ProxyUsedInfo = {
 	id: number;
 	name: string;
@@ -41,8 +33,17 @@ type AttemptResult =
 
 const EXECUTE_TIMEOUT_MS = 120_000;
 const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
-// Encoder bersama — encode() stateless, aman dipakai lintas stream.
 const ENCODER = new TextEncoder();
+const EMPTY_BYTES = new Uint8Array(0);
+const KEEP_ALIVE_BYTES = ENCODER.encode(": keep-alive\n\n");
+export const UPSTREAM_DISCONNECT_CODE = "upstream_disconnect";
+const DISCONNECT_BYTES = ENCODER.encode(
+	`data: ${JSON.stringify({ error: { code: UPSTREAM_DISCONNECT_CODE, message: "upstream closed mid-stream" } })}\n\n`,
+);
+const SANITIZED_STREAM_ERROR_BODY = JSON.stringify({
+	error: { message: "provider request failed" },
+});
+const DELTA_CONTENT_RE = /"delta":\{"content":"((?:[^"\\]|\\.)*)"/g;
 
 async function attempt(options: ExecutorOptions): Promise<AttemptResult> {
 	const {
@@ -55,7 +56,6 @@ async function attempt(options: ExecutorOptions): Promise<AttemptResult> {
 		providerPoolId,
 		comboPoolId,
 		providerId,
-		onProxyUsed,
 		logClientIp,
 		logApiKeyId,
 	} = options;
@@ -113,10 +113,7 @@ async function attempt(options: ExecutorOptions): Promise<AttemptResult> {
 		return { ok: true, response: upstream };
 	} catch (err) {
 		controller.abort();
-		const raw = err instanceof Error ? err.message : String(err);
-		const message = raw;
-		// Timeout upstream (120s): hampir pasti gagal lagi kalau diulang —
-		// jangan buang 2×waktu untuk retry.
+		const message = err instanceof Error ? err.message : String(err);
 		const isTimeout =
 			err instanceof Error &&
 			(err.name === "TimeoutError" || message.includes("aborted due to timeout"));
@@ -140,21 +137,15 @@ async function runWithRetry(options: ExecutorOptions): Promise<AttemptResult> {
 }
 
 function countDeltaContent(text: string): number {
-	const re = /"delta":\{"content":"((?:[^"\\]|\\.)*)"/g;
+	DELTA_CONTENT_RE.lastIndex = 0;
 	let tokens = 0;
 	let match: RegExpExecArray | null;
-	while ((match = re.exec(text)) !== null) {
+	while ((match = DELTA_CONTENT_RE.exec(text)) !== null) {
 		tokens += Math.max(1, Math.ceil(match[1].length / 4));
 	}
 	return tokens;
 }
 
-/**
- * Ekstraksi token usage resmi dari body JSON upstream. Mendukung format
- * openai (`usage.prompt_tokens` + `prompt_tokens_details.cached_tokens`),
- * anthropic (`usage.input_tokens` + cache_read/creation) dan gemini
- * (`usageMetadata.*TokenCount`). Return null bila tidak tersedia.
- */
 function extractUsage(json: unknown): {
 	promptTokens: number | null;
 	completionTokens: number | null;
@@ -194,203 +185,181 @@ function extractUsage(json: unknown): {
 	};
 }
 
-export const UPSTREAM_DISCONNECT_CODE = "upstream_disconnect";
-
-function disconnectMarker(): Uint8Array {
-  return ENCODER.encode(
-    `data: ${JSON.stringify({ error: { code: UPSTREAM_DISCONNECT_CODE, message: "upstream closed mid-stream" } })}\n\n`,
-  );
-}
-
 function buildStreamResponse(
-  upstream: Response,
-  options: ExecutorOptions,
-  transformer: StreamTransformer,
+	upstream: Response,
+	options: ExecutorOptions,
+	transformer: StreamTransformer,
 ): Response {
-  const started = Date.now();
-  let completionTokens = 0;
-  let finalized = false;
-  let gotFirstByte = false;
-  let forwardedBytes = 0;
+	const started = Date.now();
+	let completionTokens = 0;
+	let finalized = false;
+	let gotFirstByte = false;
+	let kaTimer: ReturnType<typeof setInterval> | undefined;
+	const dec = new TextDecoder();
+	let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
 
-  const finalize = (
-    log: Partial<RequestLog> & Pick<RequestLog, "status">,
-  ): void => {
-    if (finalized) return;
-    finalized = true;
-    clearInterval(kaTimer);
-    try {
-      options.signal?.removeEventListener("abort", onClientAbort);
-    } catch {
-      /* ignore */
-    }
-    try {
-      reader?.cancel().catch(() => undefined);
-    } catch {
-      /* ignore */
-    }
-    const usage = options.streamTransformer?.getUsage?.() ?? null;
-    options.onComplete({
-      duration_ms: Date.now() - started,
-      completion_tokens: usage?.completion_tokens ?? completionTokens,
-      prompt_tokens: usage?.prompt_tokens ?? null,
-      cached_tokens: usage?.cached_tokens ?? null,
-      ...log,
-    });
-  };
+	const finalize = (
+		log: Partial<RequestLog> & Pick<RequestLog, "status">,
+	): void => {
+		if (finalized) return;
+		finalized = true;
+		clearInterval(kaTimer);
+		try {
+			options.signal?.removeEventListener("abort", onClientAbort);
+		} catch {
+			/* ignore */
+		}
+		try {
+			reader?.cancel().catch(() => undefined);
+		} catch {
+			/* ignore */
+		}
+		const usage = options.streamTransformer?.getUsage?.() ?? null;
+		options.onComplete({
+			duration_ms: Date.now() - started,
+			completion_tokens: usage?.completion_tokens ?? completionTokens,
+			prompt_tokens: usage?.prompt_tokens ?? null,
+			cached_tokens: usage?.cached_tokens ?? null,
+			...log,
+		});
+	};
 
-  let kaTimer: ReturnType<typeof setInterval> | undefined = undefined;
-  // Decoder satu instance per stream — mode streaming aman untuk multibyte
-  // yang terpotong di batas chunk.
-  const dec = new TextDecoder();
-  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+	const onClientAbort = (): void => {
+		finalize({ status: "error", error_message: "client disconnected" });
+		try {
+			reader?.cancel().catch(() => undefined);
+		} catch {
+			/* ignore */
+		}
+	};
 
-  const stream = new ReadableStream<Uint8Array>({
-    start(controller) {
-      // Keep-alive tiap 10s sampai byte pertama upstream datang.
-      kaTimer = setInterval(() => {
-        if (gotFirstByte) return;
-        try {
-          controller.enqueue(ENCODER.encode(": keep-alive\n\n"));
-        } catch {
-          /* ignore */
-        }
-      }, 10_000);
+	const onUpstreamEnd = (
+		controller: ReadableStreamDefaultController<Uint8Array>,
+	): void => {
+		clearInterval(kaTimer);
+		try {
+			const rest = transformer.flush();
+			if (rest.byteLength > 0) {
+				controller.enqueue(rest);
+			}
+			const term = transformer.terminate?.() ?? EMPTY_BYTES;
+			if (term.byteLength > 0) {
+				controller.enqueue(term);
+			}
+			finalize({ status: "success" });
+		} catch {
+			/* ignore */
+		}
+		try {
+			controller.close();
+		} catch {
+			/* ignore */
+		}
+	};
 
-      const onUpstreamEnd = (clean: boolean): void => {
-        clearInterval(kaTimer);
-        try {
-          if (clean) {
-            const rest = transformer.flush();
-            if (rest.byteLength > 0) {
-              forwardedBytes += rest.byteLength;
-              controller.enqueue(rest);
-            }
-            const term = transformer.terminate?.() ?? new Uint8Array(0);
-            if (term.byteLength > 0) {
-              forwardedBytes += term.byteLength;
-              controller.enqueue(term);
-            }
-            finalize({ status: "success" });
-          }
-        } catch {
-          /* ignore */
-        }
-        try {
-          controller.close();
-        } catch {
-          /* ignore */
-        }
-      };
+	const stream = new ReadableStream<Uint8Array>({
+		start(controller) {
+			kaTimer = setInterval(() => {
+				if (gotFirstByte) return;
+				try {
+					controller.enqueue(KEEP_ALIVE_BYTES);
+				} catch {
+					/* ignore */
+				}
+			}, 10_000);
 
-      (async () => {
-        try {
-          reader = upstream.body!.getReader();
-        } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
-          finalize({ status: "error", error_message: message });
-          try {
-            controller.close();
-          } catch {
-            /* ignore */
-          }
-          return;
-        }
-        for (;;) {
-          if (options.signal?.aborted) return; // onClientAbort yang finalize
-          let read: Awaited<ReturnType<NonNullable<typeof reader>["read"]>>;
-          try {
-            read = await reader.read();
-          } catch (err) {
-            // Putus tengah jalan setelah bytes terkirim → marker eksplisit
-            // (tanpa [DONE]) agar client bisa auto-lanjut potongan.
-            if (!options.signal?.aborted && gotFirstByte) {
-              try {
-                controller.enqueue(disconnectMarker());
-              } catch {
-                /* ignore */
-              }
-            }
-            const message = err instanceof Error ? err.message : String(err);
-            finalize({ status: "error", error_message: message || "upstream_disconnect" });
-            try {
-              controller.close();
-            } catch {
-              /* ignore */
-            }
-            return;
-          }
-          if (read.done) {
-            onUpstreamEnd(true);
-            return;
-          }
-          const chunk = read.value;
-          if (!gotFirstByte) {
-            gotFirstByte = true;
-            clearInterval(kaTimer);
-          }
-          let out: Uint8Array;
-          let chunkText: string;
-          if (transformer.transformChunk) {
-            const r = transformer.transformChunk(chunk);
-            out = r.out;
-            chunkText = r.text; // frame kontrol punya text → tetap dihitung
-          } else {
-            out = transformer.transform(chunk);
-            chunkText =
-              out.byteLength > 0 ? dec.decode(out, { stream: true }) : "";
-          }
-          completionTokens +=
-            transformer.countTokens?.(chunkText) ?? countDeltaContent(chunkText);
-          if (out.byteLength > 0) {
-            forwardedBytes += out.byteLength;
-            try {
-              controller.enqueue(out);
-            } catch {
-              return; // client menutup koneksi
-            }
-          }
-        }
-      })().catch((err: unknown) => {
-        if (options.signal?.aborted) return; // sudah dicatat onClientAbort
-        const message = err instanceof Error ? err.message : String(err);
-        finalize({ status: "error", error_message: message });
-        try {
-          controller.close();
-        } catch {
-          /* ignore */
-        }
-      });
-    },
-    cancel() {
-      finalize({ status: "error", error_message: "client disconnected" });
-      try {
-        reader?.cancel().catch(() => undefined);
-      } catch {
-        /* ignore */
-      }
-    },
-  });
+			try {
+				reader = upstream.body!.getReader();
+			} catch (err) {
+				const message = err instanceof Error ? err.message : String(err);
+				finalize({ status: "error", error_message: message });
+				try {
+					controller.close();
+				} catch {
+					/* ignore */
+				}
+			}
+			options.signal?.addEventListener("abort", onClientAbort, { once: true });
+		},
+		async pull(controller) {
+			if (!reader || finalized) return;
+			for (;;) {
+				if (options.signal?.aborted || finalized) return;
+				let read: Awaited<ReturnType<NonNullable<typeof reader>["read"]>>;
+				try {
+					read = await reader.read();
+				} catch (err) {
+					if (!options.signal?.aborted && gotFirstByte) {
+						try {
+							controller.enqueue(DISCONNECT_BYTES);
+						} catch {
+							/* ignore */
+						}
+					}
+					const message = err instanceof Error ? err.message : String(err);
+					finalize({
+						status: "error",
+						error_message: message || "upstream_disconnect",
+					});
+					try {
+						controller.close();
+					} catch {
+						/* ignore */
+					}
+					return;
+				}
+				if (read.done) {
+					onUpstreamEnd(controller);
+					return;
+				}
+				const chunk = read.value;
+				if (!gotFirstByte) {
+					gotFirstByte = true;
+					clearInterval(kaTimer);
+				}
+				let out: Uint8Array;
+				let chunkText: string;
+				if (transformer.transformChunk) {
+					const r = transformer.transformChunk(chunk);
+					out = r.out;
+					chunkText = r.text;
+				} else {
+					out = transformer.transform(chunk);
+					chunkText =
+						out.byteLength > 0 ? dec.decode(out, { stream: true }) : "";
+				}
+				completionTokens +=
+					transformer.countTokens?.(chunkText) ?? countDeltaContent(chunkText);
+				if (out.byteLength > 0) {
+					try {
+						controller.enqueue(out);
+					} catch {
+						return;
+					}
+					if ((controller.desiredSize ?? 0) <= 0) {
+						return;
+					}
+				}
+			}
+		},
+		cancel() {
+			finalize({ status: "error", error_message: "client disconnected" });
+			try {
+				reader?.cancel().catch(() => undefined);
+			} catch {
+				/* ignore */
+			}
+		},
+	});
 
-  // Client putus koneksi → hentikan upstream & catat.
-  const onClientAbort = (): void => {
-    finalize({ status: "error", error_message: "client disconnected" });
-    try {
-      reader?.cancel().catch(() => undefined);
-    } catch {
-      /* ignore */
-    }
-  };
-  options.signal?.addEventListener("abort", onClientAbort, { once: true });
-
-  return new Response(stream, {
-    headers: {
-      "Content-Type": "text/event-stream",
-      "Cache-Control": "no-cache",
-      Connection: "keep-alive",
-      "X-Accel-Buffering": "no",
-    },
-  });
+	return new Response(stream, {
+		headers: {
+			"Content-Type": "text/event-stream",
+			"Cache-Control": "no-cache",
+			Connection: "keep-alive",
+			"X-Accel-Buffering": "no",
+		},
+	});
 }
 
 export async function executeStreaming(
@@ -406,7 +375,7 @@ export async function executeStreaming(
 			error_message: result.detailText,
 			duration_ms: Date.now() - started,
 		});
-		return new Response(result.detailText, {
+		return new Response(SANITIZED_STREAM_ERROR_BODY, {
 			status: result.status,
 			headers: { "Content-Type": "application/json" },
 		});

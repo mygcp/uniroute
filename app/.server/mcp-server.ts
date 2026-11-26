@@ -18,6 +18,7 @@ import path from "node:path";
 // Pin data ke folder repo UniRoute apa pun CWD proses agent — tanpa ini,
 // spawn dari direktori lain membuat/membaca SQLite yang salah (ter-seed
 // kosong) dan semua tool melaporkan data palsu.
+import { timingSafeStringEqual } from "./auth";
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 process.env.DATABASE_URL ??= path.resolve(HERE, "../../data/uniroute.db");
 
@@ -147,12 +148,18 @@ async function runStdio(): Promise<void> {
 /* -------------------------------- http mode ------------------------------- */
 
 async function runHttp(port: number): Promise<void> {
-	const token = process.env.UNIROUTE_MCP_TOKEN?.trim();
-	const authed = (req: Request): boolean =>
-		!token || req.headers.get("authorization") === `Bearer ${token}`;
+	const token = process.env.UNIROUTE_MCP_TOKEN?.trim() ?? "";
+	const hostname = process.env.MCP_HOST?.trim() || "127.0.0.1";
+	const authed = (req: Request): boolean => {
+		if (!token) return false;
+		const auth = req.headers.get("authorization") ?? "";
+		const m = auth.match(/^Bearer\s+(.+)$/i);
+		return m ? timingSafeStringEqual(m[1].trim(), token) : false;
+	};
 
 	const server = Bun.serve({
 		port,
+		hostname,
 		async fetch(req) {
 			const url = new URL(req.url);
 			if (!url.pathname.endsWith("/mcp")) {

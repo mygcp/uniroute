@@ -117,9 +117,9 @@ echo "→ Downloading $URL"
 mkdir -p "$BIN_DIR"
 TMP=$(mktemp)
 if command -v curl >/dev/null 2>&1; then
-  curl -fsSL "$URL" -o "$TMP"
+  curl -fL --progress-bar "$URL" -o "$TMP"
 elif command -v wget >/dev/null 2>&1; then
-  wget -qO "$TMP" "$URL"
+  wget --show-progress -qO "$TMP" "$URL" 2>/dev/null || wget -O "$TMP" "$URL"
 else
   echo "Need curl or wget" >&2; exit 1
 fi

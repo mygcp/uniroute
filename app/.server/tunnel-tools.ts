@@ -1,9 +1,8 @@
-import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import {
   chmodSync,
   copyFileSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -11,10 +10,17 @@ import {
   rmSync,
   statSync,
   unlinkSync,
-  writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
+import { singleflight, TtlCache } from "./async-utils";
+import {
+  extractArchiveIsolated,
+  isSafeBinaryPathInput,
+  setDownloadProgress,
+  spawnTextAsync,
+  streamDownloadToFile,
+} from "./tool-exec-utils";
 import {
   TUNNEL_PROVIDERS,
   type DownloadTunnelToolResult,
@@ -132,8 +138,8 @@ function findOnSystemPath(names: string[]): string | null {
 }
 
 function resolveConfiguredPath(rawPath: string): string | null {
+  if (!isSafeBinaryPathInput(rawPath)) return null;
   const trimmed = rawPath.trim();
-  if (!trimmed) return null;
   const hasSep =
     trimmed.includes("/") || trimmed.includes("\\") || trimmed.startsWith(".");
   if (!hasSep) {
@@ -199,11 +205,10 @@ export function resolveTunnelBinary(
 type ProbeEntry = {
   ok: boolean;
   version: string | null;
-  expiresAt: number;
 };
 
-const PROBE_TTL_MS = 30_000;
-const probeCache = new Map<string, ProbeEntry>();
+const PROBE_TTL_MS = 300_000;
+const probeCache = new TtlCache<string, ProbeEntry>(64, PROBE_TTL_MS);
 
 export function clearTunnelProbeCache(): void {
   probeCache.clear();
@@ -227,10 +232,10 @@ function parseVersionOutput(tool: TunnelProviderId, output: string): string | nu
   return fallback ? fallback[1]! : null;
 }
 
-export function probeTunnelTool(
+export async function probeTunnelTool(
   tool: TunnelProviderId,
   resolvedPath: string,
-): { ok: boolean; version: string | null } {
+): Promise<{ ok: boolean; version: string | null }> {
   let cacheKey = `${tool}:${resolvedPath}`;
   try {
     const st = statSync(resolvedPath);
@@ -239,32 +244,24 @@ export function probeTunnelTool(
     return { ok: false, version: null };
   }
 
-  const now = Date.now();
   const cached = probeCache.get(cacheKey);
-  if (cached && cached.expiresAt > now) {
-    return { ok: cached.ok, version: cached.version };
-  }
+  if (cached) return cached;
 
-  let ok = false;
-  let version: string | null = null;
-  try {
-    const res = spawnSync(resolvedPath, BINARY_META[tool].versionArgs, {
-      stdio: ["ignore", "pipe", "pipe"],
-      encoding: "utf8",
-      timeout: 4_000,
-      windowsHide: true,
-    });
-    const combined = `${res.stdout ?? ""}\n${res.stderr ?? ""}`.trim();
-    ok = res.status === 0;
-    if (ok) {
-      version = parseVersionOutput(tool, combined);
-    }
-  } catch {
-    ok = false;
-  }
+  return await singleflight(`probe:tunnel:${cacheKey}`, async () => {
+    const recheck = probeCache.get(cacheKey);
+    if (recheck) return recheck;
 
-  probeCache.set(cacheKey, { ok, version, expiresAt: now + PROBE_TTL_MS });
-  return { ok, version };
+    const res = await spawnTextAsync(
+      resolvedPath,
+      BINARY_META[tool].versionArgs,
+      4_000,
+    );
+    const combined = `${res.stdout}\n${res.stderr}`.trim();
+    const version = res.ok ? parseVersionOutput(tool, combined) : null;
+    const entry = { ok: res.ok, version };
+    probeCache.set(cacheKey, entry);
+    return entry;
+  });
 }
 
 export function selectCloudflaredAssetCandidates(
@@ -397,10 +394,6 @@ export function parseFrpChecksumForAsset(
   return null;
 }
 
-function sha256Hex(buf: Uint8Array): string {
-  return createHash("sha256").update(buf).digest("hex");
-}
-
 function webHeaders(): Record<string, string> {
   return {
     "User-Agent": "uniroute-tunnel-downloader/1.1",
@@ -408,12 +401,19 @@ function webHeaders(): Record<string, string> {
 }
 
 function findFileRecursive(dir: string, targetNames: string[]): string | null {
+  const rootResolved = path.resolve(dir);
   const wanted = new Set(targetNames.map((n) => n.toLowerCase()));
-  const entries = readdirSync(dir, { withFileTypes: true });
+  const entries = readdirSync(rootResolved, { withFileTypes: true });
   for (const entry of entries) {
-    const full = path.join(dir, entry.name);
+    if (entry.isSymbolicLink()) continue;
+    const full = path.resolve(rootResolved, entry.name);
+    if (!full.startsWith(rootResolved + path.sep)) continue;
     if (entry.isFile() && wanted.has(entry.name.toLowerCase())) {
-      return full;
+      try {
+        if (!lstatSync(full).isSymbolicLink()) return full;
+      } catch {
+        /* skip */
+      }
     }
     if (entry.isDirectory()) {
       const nested = findFileRecursive(full, targetNames);
@@ -421,45 +421,6 @@ function findFileRecursive(dir: string, targetNames: string[]): string | null {
     }
   }
   return null;
-}
-
-function extractArchive(archivePath: string, destDir: string): void {
-  const tarArgs = archivePath.endsWith(".zip")
-    ? ["-xf", archivePath, "-C", destDir]
-    : ["-xzf", archivePath, "-C", destDir];
-  const res = spawnSync("tar", tarArgs, {
-    stdio: ["ignore", "pipe", "pipe"],
-    encoding: "utf8",
-    timeout: 30_000,
-    windowsHide: true,
-  });
-  if (res.status === 0) return;
-
-  if (process.platform === "win32" && archivePath.endsWith(".zip")) {
-    const ps = spawnSync(
-      "powershell",
-      [
-        "-NoProfile",
-        "-NonInteractive",
-        "-Command",
-        `Expand-Archive -LiteralPath '${archivePath.replace(/'/g, "''")}' -DestinationPath '${destDir.replace(/'/g, "''")}' -Force`,
-      ],
-      {
-        stdio: ["ignore", "pipe", "pipe"],
-        encoding: "utf8",
-        timeout: 30_000,
-        windowsHide: true,
-      },
-    );
-    if (ps.status === 0) return;
-    throw new Error(
-      `Failed to extract archive: ${(ps.stderr ?? "").trim() || "Expand-Archive failed"}`,
-    );
-  }
-
-  throw new Error(
-    `Failed to extract archive: ${(res.stderr ?? "").trim() || `tar exited ${res.status}`}`,
-  );
 }
 
 // Resolve latest GitHub release tag via redirect + Atom feed to avoid 60 req/hr API limits.
@@ -495,180 +456,317 @@ async function resolveGitHubTagNoApi(
   throw new Error(`Could not determine latest release tag for ${repo}.`);
 }
 
+function normalizeVer(raw: string | null | undefined): string {
+  return (raw ?? "").trim().replace(/^v/i, "").toLowerCase();
+}
+
 export async function downloadTunnelTool(
   tool: TunnelProviderId,
+  opts: { force?: boolean } = {},
 ): Promise<DownloadTunnelToolResult> {
+  return await singleflight(`download:tunnel:${tool}`, () =>
+    downloadTunnelToolImpl(tool, opts),
+  );
+}
+
+async function downloadTunnelToolImpl(
+  tool: TunnelProviderId,
+  opts: { force?: boolean } = {},
+): Promise<DownloadTunnelToolResult> {
+  const progressKey = `tunnel:${tool}`;
   const headers = webHeaders();
-  let tag = "custom";
-  let matchedAssetName = "";
-  let bytes: Uint8Array | null = null;
-  let checksumVerified = false;
-  let lastStatus = 0;
-
-  if (tool === "cloudflared") {
-    const customUrl = process.env.UNIROUTE_CLOUDFLARED_DOWNLOAD_URL?.trim();
-    const candidates = selectCloudflaredAssetCandidates();
-    if (!customUrl && candidates.length === 0) {
-      throw new Error(
-        `No prebuilt cloudflared binary for ${process.platform}/${process.arch}.`,
-      );
-    }
-    if (customUrl) {
-      const res = await fetch(customUrl, { headers, redirect: "follow" });
-      if (!res.ok) throw new Error(`Custom URL download failed (HTTP ${res.status}).`);
-      bytes = new Uint8Array(await res.arrayBuffer());
-      matchedAssetName = path.basename(new URL(customUrl).pathname) || candidates[0] || "cloudflared";
-    } else {
-      tag = await resolveGitHubTagNoApi(
-        "cloudflare/cloudflared",
-        process.env.UNIROUTE_CLOUDFLARED_VERSION?.trim(),
-      );
-      for (const candidate of candidates) {
-        const url = `https://github.com/cloudflare/cloudflared/releases/download/${encodeURIComponent(tag)}/${encodeURIComponent(candidate)}`;
-        const res = await fetch(url, { headers, redirect: "follow" });
-        lastStatus = res.status;
-        if (res.ok) {
-          bytes = new Uint8Array(await res.arrayBuffer());
-          matchedAssetName = candidate;
-          break;
-        }
-      }
-      if (!bytes) {
-        throw new Error(
-          `Failed to download cloudflared (${tag}, last HTTP ${lastStatus}).`,
-        );
-      }
-    }
-  } else if (tool === "ngrok") {
-    const customUrl = process.env.UNIROUTE_NGROK_DOWNLOAD_URL?.trim();
-    const candidates = selectNgrokAssetCandidates();
-    if (!customUrl && candidates.length === 0) {
-      throw new Error(
-        `No prebuilt ngrok binary for ${process.platform}/${process.arch}.`,
-      );
-    }
-    tag = "v3-stable";
-    if (customUrl) {
-      const res = await fetch(customUrl, { headers, redirect: "follow" });
-      if (!res.ok) throw new Error(`Custom URL download failed (HTTP ${res.status}).`);
-      bytes = new Uint8Array(await res.arrayBuffer());
-      matchedAssetName = path.basename(new URL(customUrl).pathname) || "ngrok.zip";
-    } else {
-      for (const candidate of candidates) {
-        const res = await fetch(candidate.url, { headers, redirect: "follow" });
-        lastStatus = res.status;
-        if (res.ok) {
-          bytes = new Uint8Array(await res.arrayBuffer());
-          matchedAssetName = candidate.assetName;
-          break;
-        }
-      }
-      if (!bytes) {
-        throw new Error(`Failed to download ngrok (last HTTP ${lastStatus}).`);
-      }
-    }
-  } else if (tool === "frpc") {
-    const customUrl = process.env.UNIROUTE_FRPC_DOWNLOAD_URL?.trim();
-    if (customUrl) {
-      const res = await fetch(customUrl, { headers, redirect: "follow" });
-      if (!res.ok) throw new Error(`Custom URL download failed (HTTP ${res.status}).`);
-      bytes = new Uint8Array(await res.arrayBuffer());
-      matchedAssetName = path.basename(new URL(customUrl).pathname) || "frpc.tar.gz";
-    } else {
-      tag = await resolveGitHubTagNoApi(
-        "fatedier/frp",
-        process.env.UNIROUTE_FRPC_VERSION?.trim(),
-        "v",
-      );
-      const candidates = selectFrpcAssetCandidates(tag);
-      if (candidates.length === 0) {
-        throw new Error(
-          `No prebuilt frpc binary for ${process.platform}/${process.arch}.`,
-        );
-      }
-      for (const candidate of candidates) {
-        const url = `https://github.com/fatedier/frp/releases/download/${encodeURIComponent(tag)}/${encodeURIComponent(candidate)}`;
-        const res = await fetch(url, { headers, redirect: "follow" });
-        lastStatus = res.status;
-        if (res.ok) {
-          bytes = new Uint8Array(await res.arrayBuffer());
-          matchedAssetName = candidate;
-          break;
-        }
-      }
-      if (!bytes) {
-        throw new Error(
-          `Failed to download frpc (${tag}, last HTTP ${lastStatus}).`,
-        );
-      }
-    }
-  } else {
-    const customUrl = process.env.UNIROUTE_BORE_DOWNLOAD_URL?.trim();
-    if (customUrl) {
-      const res = await fetch(customUrl, { headers, redirect: "follow" });
-      if (!res.ok) throw new Error(`Custom URL download failed (HTTP ${res.status}).`);
-      bytes = new Uint8Array(await res.arrayBuffer());
-      matchedAssetName = path.basename(new URL(customUrl).pathname) || "bore.tar.gz";
-    } else {
-      tag = await resolveGitHubTagNoApi(
-        "ekzhang/bore",
-        process.env.UNIROUTE_BORE_VERSION?.trim(),
-        "v",
-      );
-      const candidates = selectBoreAssetCandidates(tag);
-      if (candidates.length === 0) {
-        throw new Error(
-          `No prebuilt bore binary for ${process.platform}/${process.arch}.`,
-        );
-      }
-      for (const candidate of candidates) {
-        const url = `https://github.com/ekzhang/bore/releases/download/${encodeURIComponent(tag)}/${encodeURIComponent(candidate)}`;
-        const res = await fetch(url, { headers, redirect: "follow" });
-        lastStatus = res.status;
-        if (res.ok) {
-          bytes = new Uint8Array(await res.arrayBuffer());
-          matchedAssetName = candidate;
-          break;
-        }
-      }
-      if (!bytes) {
-        throw new Error(
-          `Failed to download bore (${tag}, last HTTP ${lastStatus}).`,
-        );
-      }
-    }
-  }
-
-  const actualSha = sha256Hex(bytes);
-
-  if (tool === "frpc" && tag !== "custom") {
-    try {
-      const csUrl = `https://github.com/fatedier/frp/releases/download/${encodeURIComponent(tag)}/frp_sha256_checksums.txt`;
-      const csRes = await fetch(csUrl, { headers, redirect: "follow" });
-      if (csRes.ok) {
-        const expected = parseFrpChecksumForAsset(await csRes.text(), matchedAssetName);
-        if (expected) {
-          if (expected !== actualSha) {
-            throw new Error(
-              `SHA-256 mismatch for ${matchedAssetName} (expected ${expected.slice(0, 12)}..., got ${actualSha.slice(0, 12)}...). Download aborted.`,
-            );
-          }
-          checksumVerified = true;
-        }
-      }
-    } catch (err) {
-      if (err instanceof Error && err.message.startsWith("SHA-256 mismatch")) {
-        throw err;
-      }
-    }
-  }
-
   const destDir = toolsDir();
   mkdirSync(destDir, { recursive: true });
   const targetPath = managedTunnelBinaryPath(tool);
+
+  let tag = "custom";
+  let matchedAssetName = "";
+  let actualSha = "";
+  let downloadedFilePath = "";
+  let checksumVerified = false;
+  let lastStatus = 0;
+
+  setDownloadProgress(progressKey, {
+    status: "resolving",
+    bytesDownloaded: 0,
+    totalBytes: null,
+    percent: null,
+  });
+
   const tmpDir = mkdtempSync(path.join(destDir, `.dl-${tool}-`));
 
+  const onProgress = (assetName: string) => (bytesDownloaded: number, totalBytes: number | null) => {
+    setDownloadProgress(progressKey, {
+      status: "downloading",
+      assetName,
+      bytesDownloaded,
+      totalBytes,
+    });
+  };
+
+  const checkUpToDate = async (resolvedTag: string, assetName: string): Promise<DownloadTunnelToolResult | null> => {
+    if (opts.force || !existsSync(targetPath)) return null;
+    const current = await probeTunnelTool(tool, targetPath);
+    const curVer = normalizeVer(current.version);
+    const targetVer = normalizeVer(resolvedTag);
+    if (current.ok && curVer && targetVer && curVer === targetVer) {
+      const sizeBytes = statSync(targetPath).size;
+      setDownloadProgress(progressKey, {
+        status: "done",
+        bytesDownloaded: sizeBytes,
+        totalBytes: sizeBytes,
+        percent: 100,
+      });
+      return {
+        tool,
+        tag: resolvedTag,
+        assetName,
+        binaryPath: targetPath,
+        version: current.version,
+        sha256: "",
+        checksumVerified: tool === "frpc",
+        sizeBytes,
+        upToDate: true,
+      };
+    }
+    return null;
+  };
+
   try {
+    if (tool === "cloudflared") {
+      const customUrl = process.env.UNIROUTE_CLOUDFLARED_DOWNLOAD_URL?.trim();
+      const candidates = selectCloudflaredAssetCandidates();
+      if (!customUrl && candidates.length === 0) {
+        throw new Error(
+          `No prebuilt cloudflared binary for ${process.platform}/${process.arch}.`,
+        );
+      }
+      if (customUrl) {
+        matchedAssetName =
+          path.basename(new URL(customUrl).pathname) || candidates[0] || "cloudflared";
+        const destFile = path.join(tmpDir, path.basename(matchedAssetName));
+        const dl = await streamDownloadToFile(
+          customUrl,
+          destFile,
+          headers,
+          256 * 1024 * 1024,
+          onProgress(matchedAssetName),
+        );
+        if (!dl.ok) throw new Error(`Custom URL download failed (HTTP ${dl.status}).`);
+        actualSha = dl.sha256;
+        downloadedFilePath = destFile;
+      } else {
+        tag = await resolveGitHubTagNoApi(
+          "cloudflare/cloudflared",
+          process.env.UNIROUTE_CLOUDFLARED_VERSION?.trim(),
+        );
+        const already = await checkUpToDate(tag, candidates[0]!);
+        if (already) return already;
+        for (const candidate of candidates) {
+          const url = `https://github.com/cloudflare/cloudflared/releases/download/${encodeURIComponent(tag)}/${encodeURIComponent(candidate)}`;
+          const destFile = path.join(tmpDir, path.basename(candidate));
+          const dl = await streamDownloadToFile(
+            url,
+            destFile,
+            headers,
+            256 * 1024 * 1024,
+            onProgress(candidate),
+          );
+          lastStatus = dl.status;
+          if (dl.ok) {
+            actualSha = dl.sha256;
+            downloadedFilePath = destFile;
+            matchedAssetName = candidate;
+            break;
+          }
+        }
+        if (!downloadedFilePath) {
+          throw new Error(
+            `Failed to download cloudflared (${tag}, last HTTP ${lastStatus}).`,
+          );
+        }
+      }
+    } else if (tool === "ngrok") {
+      const customUrl = process.env.UNIROUTE_NGROK_DOWNLOAD_URL?.trim();
+      const candidates = selectNgrokAssetCandidates();
+      if (!customUrl && candidates.length === 0) {
+        throw new Error(
+          `No prebuilt ngrok binary for ${process.platform}/${process.arch}.`,
+        );
+      }
+      tag = "v3-stable";
+      if (customUrl) {
+        matchedAssetName = path.basename(new URL(customUrl).pathname) || "ngrok.zip";
+        const destFile = path.join(tmpDir, path.basename(matchedAssetName));
+        const dl = await streamDownloadToFile(
+          customUrl,
+          destFile,
+          headers,
+          256 * 1024 * 1024,
+          onProgress(matchedAssetName),
+        );
+        if (!dl.ok) throw new Error(`Custom URL download failed (HTTP ${dl.status}).`);
+        actualSha = dl.sha256;
+        downloadedFilePath = destFile;
+      } else {
+        for (const candidate of candidates) {
+          const destFile = path.join(tmpDir, path.basename(candidate.assetName));
+          const dl = await streamDownloadToFile(
+            candidate.url,
+            destFile,
+            headers,
+            256 * 1024 * 1024,
+            onProgress(candidate.assetName),
+          );
+          lastStatus = dl.status;
+          if (dl.ok) {
+            actualSha = dl.sha256;
+            downloadedFilePath = destFile;
+            matchedAssetName = candidate.assetName;
+            break;
+          }
+        }
+        if (!downloadedFilePath) {
+          throw new Error(`Failed to download ngrok (last HTTP ${lastStatus}).`);
+        }
+      }
+    } else if (tool === "frpc") {
+      const customUrl = process.env.UNIROUTE_FRPC_DOWNLOAD_URL?.trim();
+      if (customUrl) {
+        matchedAssetName = path.basename(new URL(customUrl).pathname) || "frpc.tar.gz";
+        const destFile = path.join(tmpDir, path.basename(matchedAssetName));
+        const dl = await streamDownloadToFile(
+          customUrl,
+          destFile,
+          headers,
+          256 * 1024 * 1024,
+          onProgress(matchedAssetName),
+        );
+        if (!dl.ok) throw new Error(`Custom URL download failed (HTTP ${dl.status}).`);
+        actualSha = dl.sha256;
+        downloadedFilePath = destFile;
+      } else {
+        tag = await resolveGitHubTagNoApi(
+          "fatedier/frp",
+          process.env.UNIROUTE_FRPC_VERSION?.trim(),
+          "v",
+        );
+        const candidates = selectFrpcAssetCandidates(tag);
+        if (candidates.length === 0) {
+          throw new Error(
+            `No prebuilt frpc binary for ${process.platform}/${process.arch}.`,
+          );
+        }
+        const already = await checkUpToDate(tag, candidates[0]!);
+        if (already) return already;
+        for (const candidate of candidates) {
+          const url = `https://github.com/fatedier/frp/releases/download/${encodeURIComponent(tag)}/${encodeURIComponent(candidate)}`;
+          const destFile = path.join(tmpDir, path.basename(candidate));
+          const dl = await streamDownloadToFile(
+            url,
+            destFile,
+            headers,
+            256 * 1024 * 1024,
+            onProgress(candidate),
+          );
+          lastStatus = dl.status;
+          if (dl.ok) {
+            actualSha = dl.sha256;
+            downloadedFilePath = destFile;
+            matchedAssetName = candidate;
+            break;
+          }
+        }
+        if (!downloadedFilePath) {
+          throw new Error(
+            `Failed to download frpc (${tag}, last HTTP ${lastStatus}).`,
+          );
+        }
+      }
+    } else {
+      const customUrl = process.env.UNIROUTE_BORE_DOWNLOAD_URL?.trim();
+      if (customUrl) {
+        matchedAssetName = path.basename(new URL(customUrl).pathname) || "bore.tar.gz";
+        const destFile = path.join(tmpDir, path.basename(matchedAssetName));
+        const dl = await streamDownloadToFile(
+          customUrl,
+          destFile,
+          headers,
+          256 * 1024 * 1024,
+          onProgress(matchedAssetName),
+        );
+        if (!dl.ok) throw new Error(`Custom URL download failed (HTTP ${dl.status}).`);
+        actualSha = dl.sha256;
+        downloadedFilePath = destFile;
+      } else {
+        tag = await resolveGitHubTagNoApi(
+          "ekzhang/bore",
+          process.env.UNIROUTE_BORE_VERSION?.trim(),
+          "v",
+        );
+        const candidates = selectBoreAssetCandidates(tag);
+        if (candidates.length === 0) {
+          throw new Error(
+            `No prebuilt bore binary for ${process.platform}/${process.arch}.`,
+          );
+        }
+        const already = await checkUpToDate(tag, candidates[0]!);
+        if (already) return already;
+        for (const candidate of candidates) {
+          const url = `https://github.com/ekzhang/bore/releases/download/${encodeURIComponent(tag)}/${encodeURIComponent(candidate)}`;
+          const destFile = path.join(tmpDir, path.basename(candidate));
+          const dl = await streamDownloadToFile(
+            url,
+            destFile,
+            headers,
+            256 * 1024 * 1024,
+            onProgress(candidate),
+          );
+          lastStatus = dl.status;
+          if (dl.ok) {
+            actualSha = dl.sha256;
+            downloadedFilePath = destFile;
+            matchedAssetName = candidate;
+            break;
+          }
+        }
+        if (!downloadedFilePath) {
+          throw new Error(
+            `Failed to download bore (${tag}, last HTTP ${lastStatus}).`,
+          );
+        }
+      }
+    }
+
+    if (tool === "frpc" && tag !== "custom") {
+      setDownloadProgress(progressKey, { status: "verifying" });
+      const requireChecksum = process.env.UNIROUTE_ALLOW_UNVERIFIED_DOWNLOAD !== "1";
+      const csUrl = `https://github.com/fatedier/frp/releases/download/${encodeURIComponent(tag)}/frp_sha256_checksums.txt`;
+      const csRes = await fetch(csUrl, {
+        headers,
+        redirect: "follow",
+        signal: AbortSignal.timeout(15_000),
+      });
+      if (csRes.ok) {
+        const expected = parseFrpChecksumForAsset(await csRes.text(), matchedAssetName);
+        if (!expected) {
+          throw new Error(
+            `Checksum entry missing for ${matchedAssetName} in ${tag}. Download aborted.`,
+          );
+        }
+        if (expected !== actualSha) {
+          throw new Error(
+            `SHA-256 mismatch for ${matchedAssetName} (expected ${expected.slice(0, 12)}..., got ${actualSha.slice(0, 12)}...). Download aborted.`,
+          );
+        }
+        checksumVerified = true;
+      } else if (requireChecksum) {
+        throw new Error(
+          `Failed to download checksum manifest for frpc (${tag}, HTTP ${csRes.status}).`,
+        );
+      }
+    }
+
     let sourceBinPath: string;
     const isArchive =
       matchedAssetName.endsWith(".zip") ||
@@ -676,11 +774,10 @@ export async function downloadTunnelTool(
       matchedAssetName.endsWith(".tgz");
 
     if (isArchive) {
-      const archivePath = path.join(tmpDir, matchedAssetName);
-      writeFileSync(archivePath, bytes);
+      setDownloadProgress(progressKey, { status: "extracting" });
       const extractDir = path.join(tmpDir, "extract");
       mkdirSync(extractDir, { recursive: true });
-      extractArchive(archivePath, extractDir);
+      await extractArchiveIsolated(downloadedFilePath, extractDir);
       const wanted =
         process.platform === "win32"
           ? [BINARY_META[tool].managedWinName, BINARY_META[tool].managedPosixName]
@@ -693,8 +790,7 @@ export async function downloadTunnelTool(
       }
       sourceBinPath = found;
     } else {
-      sourceBinPath = path.join(tmpDir, path.basename(targetPath));
-      writeFileSync(sourceBinPath, bytes);
+      sourceBinPath = downloadedFilePath;
     }
 
     const staging = `${targetPath}.tmp-${process.pid}`;
@@ -703,17 +799,35 @@ export async function downloadTunnelTool(
       chmodSync(staging, 0o755);
     }
     renameSync(staging, targetPath);
+  } catch (err) {
+    setDownloadProgress(progressKey, {
+      status: "error",
+      message: err instanceof Error ? err.message : "Download failed.",
+    });
+    throw err;
   } finally {
     rmSync(tmpDir, { recursive: true, force: true });
   }
 
   clearTunnelProbeCache();
-  const probed = probeTunnelTool(tool, targetPath);
+  const probed = await probeTunnelTool(tool, targetPath);
   if (!probed.ok) {
+    setDownloadProgress(progressKey, {
+      status: "error",
+      message: `Binary check failed at ${targetPath}.`,
+    });
     throw new Error(
       `Downloaded ${matchedAssetName}, but binary check failed at ${targetPath}.`,
     );
   }
+
+  const sizeBytes = statSync(targetPath).size;
+  setDownloadProgress(progressKey, {
+    status: "done",
+    bytesDownloaded: sizeBytes,
+    totalBytes: sizeBytes,
+    percent: 100,
+  });
 
   return {
     tool,
@@ -723,7 +837,7 @@ export async function downloadTunnelTool(
     version: probed.version ?? tag.replace(/^v/i, ""),
     sha256: actualSha,
     checksumVerified,
-    sizeBytes: statSync(targetPath).size,
+    sizeBytes,
   };
 }
 
@@ -740,44 +854,46 @@ export function uninstallTunnelTool(tool: TunnelProviderId): {
   return { removed: true, path: target };
 }
 
-export function getAllTunnelToolsStatus(
+export async function getAllTunnelToolsStatus(
   configuredPaths: Partial<Record<TunnelProviderId, string>> = {},
-): TunnelToolStatus[] {
-  return TUNNEL_PROVIDERS.map((provider) => {
-    const meta = BINARY_META[provider.id];
-    const configuredPath = (configuredPaths[provider.id] ?? "").trim();
-    const managedPath = managedTunnelBinaryPath(provider.id);
-    const { resolvedPath, source, isManaged } = resolveTunnelBinary(
-      provider.id,
-      configuredPath,
-    );
+): Promise<TunnelToolStatus[]> {
+  return await Promise.all(
+    TUNNEL_PROVIDERS.map(async (provider) => {
+      const meta = BINARY_META[provider.id];
+      const configuredPath = (configuredPaths[provider.id] ?? "").trim();
+      const managedPath = managedTunnelBinaryPath(provider.id);
+      const { resolvedPath, source, isManaged } = resolveTunnelBinary(
+        provider.id,
+        configuredPath,
+      );
 
-    let installed = false;
-    let version: string | null = null;
-    let sizeBytes: number | null = null;
+      let installed = false;
+      let version: string | null = null;
+      let sizeBytes: number | null = null;
 
-    if (resolvedPath) {
-      const probed = probeTunnelTool(provider.id, resolvedPath);
-      installed = probed.ok;
-      version = probed.version;
-      try {
-        sizeBytes = statSync(resolvedPath).size;
-      } catch {
-        sizeBytes = null;
+      if (resolvedPath) {
+        const probed = await probeTunnelTool(provider.id, resolvedPath);
+        installed = probed.ok;
+        version = probed.version;
+        try {
+          sizeBytes = statSync(resolvedPath).size;
+        } catch {
+          sizeBytes = null;
+        }
       }
-    }
 
-    return {
-      ...provider,
-      installed,
-      isManaged,
-      source,
-      resolvedPath,
-      configuredPath,
-      managedPath,
-      version,
-      sizeBytes,
-      installCommands: meta.installCommands,
-    };
-  });
+      return {
+        ...provider,
+        installed,
+        isManaged,
+        source,
+        resolvedPath,
+        configuredPath,
+        managedPath,
+        version,
+        sizeBytes,
+        installCommands: meta.installCommands,
+      };
+    }),
+  );
 }

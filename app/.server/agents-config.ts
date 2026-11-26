@@ -13,6 +13,7 @@ import {
 } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
+import { TtlCache } from "./async-utils";
 import { query } from "./db";
 
 /**
@@ -116,7 +117,7 @@ function backupDir(id: HarnessId, home?: string): string {
 /* ------------------------------ value escaping ---------------------------- */
 
 function tomlEscape(value: string): string {
-	return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+	return JSON.stringify(value).slice(1, -1);
 }
 
 function jsonClone<T>(value: T): T {
@@ -222,9 +223,11 @@ export function mergeCodexConfig(existing: string, input: GenerateInput): string
 
 type JsonPatch = Record<string, unknown>;
 
-/** Deep merge sederhana: object digabung, nilai scalar/array ditimpa. */
+const BLOCKED_MERGE_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+
 function deepMerge(target: Record<string, unknown>, patch: JsonPatch): void {
 	for (const [k, v] of Object.entries(patch)) {
+		if (BLOCKED_MERGE_KEYS.has(k)) continue;
 		if (
 			v && typeof v === "object" && !Array.isArray(v) &&
 			target[k] && typeof target[k] === "object" && !Array.isArray(target[k])
@@ -801,8 +804,10 @@ export function removeMcp(
   return { removed: true };
 }
 
-export function isMcpInstalled(id: McpHarnessId, home?: string): boolean {
-  const raw = readConfig(id, home);
+export function detectMcpInstalled(
+  id: McpHarnessId,
+  raw: string | null,
+): boolean {
   if (!raw || raw.trim() === "") return false;
   if (id === "codex") return /^\[mcp_servers\.uniroute\]/m.test(raw);
   const meta = parseJsonMeta(raw);
@@ -813,6 +818,10 @@ export function isMcpInstalled(id: McpHarnessId, home?: string): boolean {
   }
   const mcp = meta.mcp as { servers?: Record<string, unknown> } | undefined;
   return !!mcp?.servers?.uniroute;
+}
+
+export function isMcpInstalled(id: McpHarnessId, home?: string): boolean {
+  return detectMcpInstalled(id, readConfig(id, home));
 }
 
 /* -------------------------------- write & read ------------------------------ */
@@ -870,9 +879,15 @@ const HARNESS_BINS: Record<HarnessId, string[]> = {
 	opencode: ["opencode", "opencode2"],
 };
 
-/** Cari executable di PATH (tanpa spawn proses; mendukung PATHEXT di Windows). */
+const cliPathCache = new TtlCache<string, { hit: string | null }>(16, 300_000);
+
 function findOnPath(names: string[]): string | null {
-	const dirs = (process.env.PATH ?? "").split(path.delimiter).filter(Boolean);
+	const pathEnv = process.env.PATH ?? "";
+	const cacheKey = `${pathEnv}|${names.join(",")}`;
+	const cached = cliPathCache.get(cacheKey);
+	if (cached) return cached.hit;
+
+	const dirs = pathEnv.split(path.delimiter).filter(Boolean);
 	const isWin = process.platform === "win32";
 	const exts = isWin
 		? (process.env.PATHEXT ?? ".EXE;.CMD;.BAT;.COM")
@@ -880,7 +895,8 @@ function findOnPath(names: string[]): string | null {
 				.filter(Boolean)
 				.map((e) => e.toLowerCase())
 		: [];
-	for (const dir of dirs) {
+	let resolved: string | null = null;
+	outer: for (const dir of dirs) {
 		for (const name of names) {
 			const candidates = isWin
 				? [name, ...exts.map((ext) => `${name}${ext}`)]
@@ -889,14 +905,18 @@ function findOnPath(names: string[]): string | null {
 				const full = path.join(dir, candidate);
 				try {
 					accessSync(full, isWin ? fsConstants.F_OK : fsConstants.X_OK);
-					if (statSync(full).isFile()) return full;
+					if (statSync(full).isFile()) {
+						resolved = full;
+						break outer;
+					}
 				} catch {
 					/* not here */
 				}
 			}
 		}
 	}
-	return null;
+	cliPathCache.set(cacheKey, { hit: resolved });
+	return resolved;
 }
 
 function detectCli(id: HarnessId): { installed: boolean; bin: string | null } {
@@ -943,6 +963,7 @@ export type HarnessStatus = HarnessMeta & {
 	/** Apakah binary CLI harness terdeteksi di PATH. */
 	cliInstalled: boolean;
 	cliBin: string | null;
+	mcpInstalled: boolean;
 };
 
 function getStatus(id: HarnessId, home?: string): HarnessStatus {
@@ -975,6 +996,7 @@ function getStatus(id: HarnessId, home?: string): HarnessStatus {
 		backups: listBackups(id, home),
 		cliInstalled: cli.installed,
 		cliBin: cli.bin,
+		mcpInstalled: detectMcpInstalled(id, raw),
 	};
 }
 

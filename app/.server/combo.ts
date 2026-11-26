@@ -1,4 +1,4 @@
-import { query } from "./db";
+import { exec, getTableVersion, onBeforeRead, onDbReset, onShutdownFlush, query } from "./db";
 
 /**
  * Combo Engine — model layer (MVP: `priority` fallback chain & `pipeline`
@@ -135,58 +135,127 @@ function parseAccountIds(row: StepRow): number[] {
   }
   return [];
 }
-function stepsFor(comboId: number): ComboStep[] {
-  const rows = (
-    query(
-      `SELECT id, combo_id, step_order, provider_id, model_id, model_ids, account_id, account_ids, weight, prompt
-       FROM combo_steps WHERE combo_id = ? ORDER BY step_order ASC, id ASC`,
-    ).all(comboId) as unknown as StepRow[]
-  ) ?? [];
-  return rows.map((r) => ({
-    id: r.id,
-    comboId: r.combo_id,
-    stepOrder: r.step_order,
-    providerId: r.provider_id ?? null,
-    modelIds: parseModelIds(r),
-    accountId: r.account_id ?? null,
-    accountIds: parseAccountIds(r),
-    weight: r.weight ?? 1,
-    prompt: r.prompt ?? null,
-  }));
-}
+let comboCacheVer = -1;
+let comboByNameCache = new Map<string, Combo>();
+let comboByIdCache = new Map<number, Combo>();
 
-function rowToCombo(row: ComboRow): Combo {
-  return {
-    id: row.id,
-    name: row.name,
-    strategy: row.strategy === "pipeline" ? "pipeline" : "priority",
-    config: parseConfig(row.config),
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-    steps: stepsFor(row.id),
-  };
-}
+const comboMetricQueue: ComboMetric[] = [];
+let comboMetricTimer: ReturnType<typeof setTimeout> | null = null;
 
-export function listCombos(): Combo[] {
+function ensureComboCache(): void {
+  const ver = getTableVersion("combos") + getTableVersion("combo_steps");
+  if (ver === comboCacheVer) return;
   const rows = (
     query("SELECT id, name, strategy, config, created_at, updated_at FROM combos ORDER BY name ASC").all() as unknown as ComboRow[]
   ) ?? [];
-  return rows.map(rowToCombo);
+  const stepRows = (
+    query(
+      `SELECT id, combo_id, step_order, provider_id, model_id, model_ids, account_id, account_ids, weight, prompt
+       FROM combo_steps ORDER BY combo_id ASC, step_order ASC, id ASC`,
+    ).all() as unknown as StepRow[]
+  ) ?? [];
+  const stepsByCombo = new Map<number, ComboStep[]>();
+  for (const r of stepRows) {
+    let arr = stepsByCombo.get(r.combo_id);
+    if (!arr) {
+      arr = [];
+      stepsByCombo.set(r.combo_id, arr);
+    }
+    arr.push({
+      id: r.id,
+      comboId: r.combo_id,
+      stepOrder: r.step_order,
+      providerId: r.provider_id ?? null,
+      modelIds: parseModelIds(r),
+      accountId: r.account_id ?? null,
+      accountIds: parseAccountIds(r),
+      weight: r.weight ?? 1,
+      prompt: r.prompt ?? null,
+    });
+  }
+  const nextByName = new Map<string, Combo>();
+  const nextById = new Map<number, Combo>();
+  for (const r of rows) {
+    const c: Combo = {
+      id: r.id,
+      name: r.name,
+      strategy: r.strategy === "pipeline" ? "pipeline" : "priority",
+      config: parseConfig(r.config),
+      createdAt: r.created_at,
+      updatedAt: r.updated_at,
+      steps: stepsByCombo.get(r.id) ?? [],
+    };
+    nextByName.set(c.name, c);
+    nextById.set(c.id, c);
+  }
+  comboByNameCache = nextByName;
+  comboByIdCache = nextById;
+  comboCacheVer = ver;
+}
+
+export function flushComboMetrics(): void {
+  if (comboMetricTimer) {
+    clearTimeout(comboMetricTimer);
+    comboMetricTimer = null;
+  }
+  if (comboMetricQueue.length === 0) return;
+  const items = comboMetricQueue.splice(0);
+  exec("BEGIN");
+  try {
+    const stmt = query(
+      `INSERT INTO combo_metrics
+         (combo_id, combo_name, strategy, step_index, model_id, provider_id, latency_ms, cost, success, tokens_used, error)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    for (const m of items) {
+      stmt.run(
+        m.comboId,
+        m.comboName,
+        m.strategy,
+        m.stepIndex,
+        m.modelId,
+        m.providerId ?? null,
+        m.latencyMs ?? null,
+        m.cost ?? null,
+        m.success ? 1 : 0,
+        m.tokensUsed ?? null,
+        m.error ?? null,
+      );
+    }
+    exec("COMMIT");
+  } catch (err) {
+    exec("ROLLBACK");
+    throw err;
+  }
+}
+
+onBeforeRead("combo_metrics", flushComboMetrics);
+onShutdownFlush(flushComboMetrics);
+onDbReset(() => {
+  comboCacheVer = -1;
+  comboByNameCache.clear();
+  comboByIdCache.clear();
+  comboMetricQueue.length = 0;
+  if (comboMetricTimer) {
+    clearTimeout(comboMetricTimer);
+    comboMetricTimer = null;
+  }
+});
+
+export function listCombos(): Combo[] {
+  ensureComboCache();
+  return [...comboByNameCache.values()];
 }
 
 export function getComboByName(name: string): Combo | undefined {
   if (!name) return undefined;
-  const row = query(
-    "SELECT id, name, strategy, config, created_at, updated_at FROM combos WHERE name = ?",
-  ).get(name) as ComboRow | undefined;
-  return row ? rowToCombo(row) : undefined;
+  ensureComboCache();
+  return comboByNameCache.get(name);
 }
 
 export function getComboById(id: number): Combo | undefined {
-  const row = query(
-    "SELECT id, name, strategy, config, created_at, updated_at FROM combos WHERE id = ?",
-  ).get(id) as ComboRow | undefined;
-  return row ? rowToCombo(row) : undefined;
+  ensureComboCache();
+  return comboByIdCache.get(id);
 }
 
 /** Resolve model name → combo (hanya `combo:` prefix; tanpa bentrok dgn model asli). */
@@ -230,14 +299,21 @@ export function createCombo(input: ComboInput): Combo {
   const strategy = input.strategy === "pipeline" ? "pipeline" : "priority";
   const config = JSON.stringify(input.config && typeof input.config === "object" ? input.config : {});
   const now = Math.floor(Date.now() / 1000);
-  query(
-    "INSERT INTO combos (name, strategy, config, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
-  ).run(name, strategy, config, now, now);
-  const row = query(
-    "SELECT id, name, strategy, config, created_at, updated_at FROM combos WHERE name = ?",
-  ).get(name) as ComboRow;
-  insertSteps(row.id, input.steps);
-  return rowToCombo(row);
+  exec("BEGIN");
+  try {
+    query(
+      "INSERT INTO combos (name, strategy, config, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+    ).run(name, strategy, config, now, now);
+    const row = query(
+      "SELECT id FROM combos WHERE name = ?",
+    ).get(name) as { id: number };
+    insertSteps(row.id, input.steps);
+    exec("COMMIT");
+  } catch (err) {
+    exec("ROLLBACK");
+    throw err;
+  }
+  return getComboByName(name)!;
 }
 
 function insertSteps(comboId: number, steps: ComboStepInput[]): void {
@@ -282,15 +358,22 @@ export function updateCombo(id: number, input: ComboInput): Combo | undefined {
   }
   const now = Math.floor(Date.now() / 1000);
   const merged = { ...(existing.config ?? {}), ...(input.config ?? {}) };
-  query("UPDATE combos SET name = ?, strategy = ?, config = ?, updated_at = ? WHERE id = ?").run(
-    input.name.trim(),
-    input.strategy === "pipeline" ? "pipeline" : "priority",
-    JSON.stringify(merged),
-    now,
-    id,
-  );
-  query("DELETE FROM combo_steps WHERE combo_id = ?").run(id);
-  insertSteps(id, input.steps);
+  exec("BEGIN");
+  try {
+    query("UPDATE combos SET name = ?, strategy = ?, config = ?, updated_at = ? WHERE id = ?").run(
+      input.name.trim(),
+      input.strategy === "pipeline" ? "pipeline" : "priority",
+      JSON.stringify(merged),
+      now,
+      id,
+    );
+    query("DELETE FROM combo_steps WHERE combo_id = ?").run(id);
+    insertSteps(id, input.steps);
+    exec("COMMIT");
+  } catch (err) {
+    exec("ROLLBACK");
+    throw err;
+  }
   return getComboById(id);
 }
 
@@ -313,23 +396,18 @@ export type ComboMetric = {
 };
 
 export function recordComboMetric(m: ComboMetric): void {
-  query(
-    `INSERT INTO combo_metrics
-       (combo_id, combo_name, strategy, step_index, model_id, provider_id, latency_ms, cost, success, tokens_used, error)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(
-    m.comboId,
-    m.comboName,
-    m.strategy,
-    m.stepIndex,
-    m.modelId,
-    m.providerId ?? null,
-    m.latencyMs ?? null,
-    m.cost ?? null,
-    m.success ? 1 : 0,
-    m.tokensUsed ?? null,
-    m.error ?? null,
-  );
+  if (comboMetricQueue.length >= 5000) {
+    comboMetricQueue.shift();
+  }
+  comboMetricQueue.push(m);
+  if (comboMetricQueue.length >= 64) {
+    flushComboMetrics();
+    return;
+  }
+  if (!comboMetricTimer) {
+    comboMetricTimer = setTimeout(flushComboMetrics, 50);
+    comboMetricTimer.unref?.();
+  }
 }
 
 export function listComboMetrics(comboId: number, limit = 100): {
@@ -347,6 +425,7 @@ export function listComboMetrics(comboId: number, limit = 100): {
   tokensUsed: number | null;
   error: string | null;
 }[] {
+  flushComboMetrics();
   return (
     query(
       `SELECT id, combo_id, combo_name, strategy, step_index, model_id, provider_id,

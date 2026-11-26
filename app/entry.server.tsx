@@ -42,6 +42,13 @@ export default async function handleRequest(
   }
 
   responseHeaders.set("Content-Type", "text/html");
+  if (!responseHeaders.has("Cache-Control")) {
+    responseHeaders.set("Cache-Control", "no-store");
+  }
+  responseHeaders.set("X-Content-Type-Options", "nosniff");
+  responseHeaders.set("X-Frame-Options", "DENY");
+  responseHeaders.set("Referrer-Policy", "no-referrer");
+  responseHeaders.set("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
   return new Response(body, {
     status: responseStatusCode,
     headers: responseHeaders,

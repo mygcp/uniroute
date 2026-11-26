@@ -15,111 +15,282 @@ type StatementApi = {
 
 const require = createRequire(import.meta.url);
 
-let db!: SqliteApi;
-let opened = false;
+const DB_STATE_SYMBOL = Symbol.for("uniroute.dbState");
+type DbState = {
+	db: SqliteApi | undefined;
+	opened: boolean;
+	seeded: boolean;
+	stmtCache: Map<string, StatementApi>;
+	columnCache: Map<string, Set<string>>;
+	resetCallbacks: Set<() => void>;
+	tableVersions: Map<string, number>;
+	beforeReadHooks: Map<string, Set<() => void>>;
+	shutdownFlushers: Set<() => void>;
+};
+const gDb = globalThis as Record<symbol, DbState | undefined>;
+const dbState: DbState =
+	gDb[DB_STATE_SYMBOL] ??
+	(gDb[DB_STATE_SYMBOL] = {
+		db: undefined,
+		opened: false,
+		seeded: false,
+		stmtCache: new Map<string, StatementApi>(),
+		columnCache: new Map<string, Set<string>>(),
+		resetCallbacks: new Set<() => void>(),
+		tableVersions: new Map<string, number>(),
+		beforeReadHooks: new Map<string, Set<() => void>>(),
+		shutdownFlushers: new Set<() => void>(),
+	});
 
-/**
- * Prepared-statement cache untuk driver tanpa cache internal (node:sqlite).
- * bun:sqlite sudah meng-cache `.query()`, jadi jalur itu tidak disentuh.
- * Semua SQL di aplikasi adalah literal statis — ukuran cache terbatas.
- */
-const stmtCache = new Map<string, StatementApi>();
+const stmtCache = dbState.stmtCache;
+const columnCache = dbState.columnCache;
+const resetCallbacks = dbState.resetCallbacks;
+
+export function onDbReset(fn: () => void): void {
+	resetCallbacks.add(fn);
+}
+
+export function onShutdownFlush(fn: () => void): void {
+	dbState.shutdownFlushers.add(fn);
+}
+
+export function runShutdownFlushers(): void {
+	for (const fn of dbState.shutdownFlushers) {
+		try {
+			fn();
+		} catch {
+			/* ignore */
+		}
+	}
+}
+
+function getTableColumns(table: string): Set<string> {
+	if (!/^[a-z_][a-z0-9_]*$/i.test(table)) {
+		throw new Error("invalid sql identifier: " + table);
+	}
+	const cached = columnCache.get(table);
+	if (cached) return cached;
+	const cols = new Set(
+		(query("PRAGMA table_info(" + table + ")").all() as { name: string }[]).map(
+			(c) => c.name,
+		),
+	);
+	columnCache.set(table, cols);
+	return cols;
+}
+
+export function hasColumn(table: string, column: string): boolean {
+	ensureDb();
+	if (!/^[a-z_][a-z0-9_]*$/i.test(column)) return false;
+	return getTableColumns(table).has(column);
+}
 
 function openDb(): void {
 	const dbPath = process.env.DATABASE_URL ?? "./data/uniroute.db";
 	mkdirSync(path.dirname(dbPath), { recursive: true });
+	let conn: SqliteApi;
 	try {
-		// Bun runtime
 		const { Database } = require("bun:sqlite") as {
 			Database: new (p: string, opts: { create: boolean }) => SqliteApi;
 		};
-		db = new Database(dbPath, { create: true });
+		conn = new Database(dbPath, { create: true });
 	} catch {
-		// Node runtime (dev server / vite SSR)
 		const { DatabaseSync } = require("node:sqlite") as {
 			DatabaseSync: new (p: string) => SqliteApi;
 		};
-		db = new DatabaseSync(dbPath);
+		conn = new DatabaseSync(dbPath);
 	}
-	db.exec("PRAGMA journal_mode = WAL;");
-	// WAL + NORMAL: write jauh lebih cepat dan tetap aman (durable di checkpoint).
-	db.exec("PRAGMA synchronous = NORMAL;");
-	db.exec("PRAGMA foreign_keys = ON;");
-	opened = true;
+	conn.exec("PRAGMA journal_mode = WAL;");
+	conn.exec("PRAGMA synchronous = NORMAL;");
+	conn.exec("PRAGMA foreign_keys = ON;");
+	conn.exec("PRAGMA busy_timeout = 5000;");
+	conn.exec("PRAGMA cache_size = -4000;");
+	conn.exec("PRAGMA temp_store = MEMORY;");
+	try {
+		conn.exec("PRAGMA mmap_size = 0;");
+	} catch {
+		/* ignore */
+	}
+	dbState.db = conn;
+	dbState.opened = true;
+	columnCache.clear();
 	try {
 		initSchema();
 	} catch (err) {
-		opened = false;
+		dbState.opened = false;
 		throw err;
 	}
 }
 
 function ensureDb(): SqliteApi {
-	if (!opened) {
+	if (!dbState.opened || !dbState.db) {
 		openDb();
 	}
-	return db;
+	return dbState.db!;
 }
 
-/**
- * Statement factory compatible with bun:sqlite (`.query`) and node:sqlite
- * (`.prepare`). Statement results are normalized to `Record<string, unknown>[]`.
- */
+const TRACKED_TABLES = [
+	"providers",
+	"models",
+	"model_allowlist",
+	"routing_rules",
+	"load_balancing",
+	"compression_settings",
+	"provider_credentials",
+	"client_api_keys",
+	"settings",
+	"model_pricing",
+	"combos",
+	"combo_steps",
+	"outbound_proxies",
+	"proxy_pools",
+	"proxy_pool_assignments",
+	"key_groups",
+	"key_group_members",
+	"request_logs",
+] as const;
+
+const tableVersions = dbState.tableVersions;
+const beforeReadHooks = dbState.beforeReadHooks;
+
+export function getTableVersion(table: string): number {
+	ensureDb();
+	return tableVersions.get(table) ?? 0;
+}
+
+export function bumpTableVersion(table: string): void {
+	tableVersions.set(table, (tableVersions.get(table) ?? 0) + 1);
+}
+
+export function onBeforeRead(table: string, fn: () => void): void {
+	let set = beforeReadHooks.get(table);
+	if (!set) {
+		set = new Set();
+		beforeReadHooks.set(table, set);
+	}
+	set.add(fn);
+}
+
+function detectWrittenTables(sql: string): string[] {
+	if (!/^\s*(?:INSERT|UPDATE|DELETE|REPLACE)\b/i.test(sql)) return [];
+	const lower = sql.toLowerCase();
+	const hit: string[] = [];
+	for (const t of TRACKED_TABLES) {
+		if (lower.includes(t)) hit.push(t);
+	}
+	return hit;
+}
+
+const READ_BARRIER_TABLES = ["request_logs", "proxy_logs", "combo_metrics", "key_usage_daily", "key_audit_logs", "outbound_proxies"] as const;
+
+function detectReadTables(sql: string): string[] {
+	if (!/^\s*SELECT\b/i.test(sql)) return [];
+	const lower = sql.toLowerCase();
+	const hit: string[] = [];
+	for (const t of READ_BARRIER_TABLES) {
+		if (lower.includes(t)) hit.push(t);
+	}
+	return hit;
+}
+
+function runReadBarriers(tables: string[]): void {
+	for (const t of tables) {
+		const hooks = beforeReadHooks.get(t);
+		if (!hooks) continue;
+		for (const fn of hooks) fn();
+	}
+}
+
+function wrapStatement(stmt: StatementApi, writeTables: string[], readTables: string[]): StatementApi {
+	if (writeTables.length === 0 && readTables.length === 0) return stmt;
+	return {
+		get: (...params: unknown[]) => {
+			if (readTables.length > 0) runReadBarriers(readTables);
+			return stmt.get(...params);
+		},
+		all: (...params: unknown[]) => {
+			if (readTables.length > 0) runReadBarriers(readTables);
+			return stmt.all(...params);
+		},
+		run: (...params: unknown[]) => {
+			const res = stmt.run(...params);
+			for (const t of writeTables) bumpTableVersion(t);
+			return res;
+		},
+	};
+}
+
 export function query(sql: string): StatementApi {
 	const conn = ensureDb();
-	const q = (conn as { query?: (sql: string) => unknown }).query;
-	if (typeof q === "function") {
-		return q.call(conn, sql) as StatementApi;
-	}
 	const cached = stmtCache.get(sql);
 	if (cached) return cached;
+
+	const q = (conn as { query?: (sql: string) => unknown }).query;
 	const prepare = (conn as { prepare?: (sql: string) => unknown }).prepare;
-	if (typeof prepare === "function") {
-		const stmt = prepare.call(conn, sql) as StatementApi;
-		stmtCache.set(sql, stmt);
-		return stmt;
+	let stmt: StatementApi | undefined;
+	if (typeof q === "function") {
+		stmt = q.call(conn, sql) as StatementApi;
+	} else if (typeof prepare === "function") {
+		stmt = prepare.call(conn, sql) as StatementApi;
 	}
-	throw new Error("sqlite API not available");
+	if (!stmt) throw new Error("sqlite API not available");
+
+	const writeTables = detectWrittenTables(sql);
+	const readTables = detectReadTables(sql);
+	const wrapped = wrapStatement(stmt, writeTables, readTables);
+	stmtCache.set(sql, wrapped);
+	return wrapped;
 }
 
-export const exec = (sql: string): void => ensureDb().exec(sql);
+export const exec = (sql: string): void => {
+	ensureDb().exec(sql);
+	for (const t of detectWrittenTables(sql)) {
+		bumpTableVersion(t);
+	}
+};
 
-/** Tutup koneksi SQLite — dipanggil saat graceful shutdown. */
 export function closeDb(): void {
 	try {
-		if (opened) db.close();
+		if (dbState.opened && dbState.db) dbState.db.close();
 	} catch {
 		/* already closed */
 	}
-	opened = false;
-	// Statement lama terikat ke koneksi yang sudah ditutup — jangan dipakai ulang.
+	dbState.db = undefined;
+	dbState.opened = false;
+	dbState.seeded = false;
 	stmtCache.clear();
+	columnCache.clear();
+	tableVersions.clear();
+	for (const fn of resetCallbacks) {
+		try {
+			fn();
+		} catch {
+			/* ignore */
+		}
+	}
 }
 
-/** Re-open the connection from the current DATABASE_URL on next use. */
 export function resetDb(): void {
 	closeDb();
 }
 
-/** Idempotent ALTER TABLE: tambah kolom hanya bila belum ada (migrasi DB lama). */
 function ensureColumn(table: string, column: string, ddl: string): void {
-	// Identifiers are allowlisted to avoid interpolating arbitrary input into DDL.
 	if (
 		!/^[a-z_][a-z0-9_]*$/i.test(table) ||
 		!/^[a-z_][a-z0-9_]*$/i.test(column)
 	) {
 		throw new Error("invalid sql identifier: " + table + "." + column);
 	}
-	const cols = (
-		query("PRAGMA table_info(" + table + ")").all() as { name: string }[]
-	).map((c) => c.name);
-	if (!cols.includes(column)) {
-		db.exec("ALTER TABLE " + table + " ADD COLUMN " + ddl + ";");
+	const cols = getTableColumns(table);
+	if (!cols.has(column)) {
+		ensureDb().exec("ALTER TABLE " + table + " ADD COLUMN " + ddl + ";");
+		cols.add(column);
 	}
 }
 
 function initSchema(): void {
-	db.exec(`CREATE TABLE IF NOT EXISTS providers (
+	const conn = dbState.db!;
+	conn.exec(`CREATE TABLE IF NOT EXISTS providers (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
   base_url TEXT NOT NULL,
@@ -132,7 +303,7 @@ function initSchema(): void {
   created_at INTEGER DEFAULT (unixepoch())
 );`);
 
-	db.exec(`CREATE TABLE IF NOT EXISTS models (
+	conn.exec(`CREATE TABLE IF NOT EXISTS models (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   model_name TEXT NOT NULL,
   provider_id TEXT NOT NULL,
@@ -142,7 +313,7 @@ function initSchema(): void {
   UNIQUE(model_name, provider_id)
 );`);
 
-	db.exec(`CREATE TABLE IF NOT EXISTS model_allowlist (
+	conn.exec(`CREATE TABLE IF NOT EXISTS model_allowlist (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   model_name TEXT NOT NULL,
   action TEXT NOT NULL DEFAULT 'allow',
@@ -151,7 +322,7 @@ function initSchema(): void {
   UNIQUE(model_name, action)
 );`);
 
-	db.exec(`CREATE TABLE IF NOT EXISTS routing_rules (
+	conn.exec(`CREATE TABLE IF NOT EXISTS routing_rules (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL,
   source_model TEXT NOT NULL,
@@ -164,7 +335,7 @@ function initSchema(): void {
   created_at INTEGER DEFAULT (unixepoch())
 );`);
 
-	db.exec(`CREATE TABLE IF NOT EXISTS load_balancing (
+	conn.exec(`CREATE TABLE IF NOT EXISTS load_balancing (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   model_name TEXT NOT NULL UNIQUE,
   strategy TEXT NOT NULL DEFAULT 'round_robin',
@@ -176,7 +347,7 @@ function initSchema(): void {
   updated_at INTEGER DEFAULT (unixepoch())
 );`);
 
-	db.exec(`CREATE TABLE IF NOT EXISTS compression_settings (
+	conn.exec(`CREATE TABLE IF NOT EXISTS compression_settings (
   id INTEGER PRIMARY KEY CHECK (id = 1),
   rtk_enabled INTEGER NOT NULL DEFAULT 0,
   caveman_enabled INTEGER NOT NULL DEFAULT 0,
@@ -187,7 +358,7 @@ function initSchema(): void {
   updated_at INTEGER DEFAULT (unixepoch())
 );`);
 
-	db.exec(`CREATE TABLE IF NOT EXISTS request_logs (
+	conn.exec(`CREATE TABLE IF NOT EXISTS request_logs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   model TEXT,
   provider_id TEXT,
@@ -202,7 +373,7 @@ function initSchema(): void {
   created_at INTEGER DEFAULT (unixepoch())
 );`);
 
-	db.exec(`CREATE TABLE IF NOT EXISTS proxy_logs (
+	conn.exec(`CREATE TABLE IF NOT EXISTS proxy_logs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   level TEXT NOT NULL,
   source TEXT NOT NULL,
@@ -210,7 +381,7 @@ function initSchema(): void {
   metadata TEXT,
   created_at INTEGER DEFAULT (unixepoch())
 );`);
-	db.exec(`CREATE TABLE IF NOT EXISTS outbound_proxies (
+	conn.exec(`CREATE TABLE IF NOT EXISTS outbound_proxies (
   id           INTEGER PRIMARY KEY AUTOINCREMENT,
   name         TEXT NOT NULL,
   type         TEXT NOT NULL DEFAULT 'http-connect',  -- 'http-connect' | 'socks5'
@@ -228,7 +399,7 @@ function initSchema(): void {
   created_at   INTEGER DEFAULT (unixepoch()),
   updated_at   INTEGER DEFAULT (unixepoch())
 );`);
-	db.exec(`CREATE TABLE IF NOT EXISTS proxy_pools (
+	conn.exec(`CREATE TABLE IF NOT EXISTS proxy_pools (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
   name       TEXT NOT NULL,
   proxy_ids  TEXT NOT NULL,                          -- JSON array of outbound_proxies.id
@@ -236,7 +407,7 @@ function initSchema(): void {
   created_at INTEGER DEFAULT (unixepoch()),
   updated_at INTEGER DEFAULT (unixepoch())
 );`);
-	db.exec(`CREATE TABLE IF NOT EXISTS proxy_pool_assignments (
+	conn.exec(`CREATE TABLE IF NOT EXISTS proxy_pool_assignments (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
   proxy_pool_id INTEGER NOT NULL,
   target_type   TEXT NOT NULL,                        -- 'provider' | 'client_key'
@@ -245,7 +416,7 @@ function initSchema(): void {
   UNIQUE(proxy_pool_id, target_type, target_id)
 );`);
 
-	db.exec(`CREATE TABLE IF NOT EXISTS provider_credentials (
+	conn.exec(`CREATE TABLE IF NOT EXISTS provider_credentials (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   provider_id TEXT NOT NULL,
   label TEXT,
@@ -256,7 +427,7 @@ function initSchema(): void {
   updated_at INTEGER DEFAULT (unixepoch())
 );`);
 
-	db.exec(`CREATE TABLE IF NOT EXISTS client_api_keys (
+	conn.exec(`CREATE TABLE IF NOT EXISTS client_api_keys (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL,
   key_hash TEXT UNIQUE NOT NULL,
@@ -290,7 +461,7 @@ function initSchema(): void {
   scopes TEXT
 );`);
 
-	db.exec(`CREATE TABLE IF NOT EXISTS settings (
+	conn.exec(`CREATE TABLE IF NOT EXISTS settings (
   key TEXT PRIMARY KEY,
   value TEXT
 );`);
@@ -327,7 +498,7 @@ function initSchema(): void {
 		ensureColumn("request_logs", "api_key_id", "api_key_id INTEGER");
 	}
 
-	db.exec(`CREATE TABLE IF NOT EXISTS key_usage_daily (
+	conn.exec(`CREATE TABLE IF NOT EXISTS key_usage_daily (
   key_id INTEGER NOT NULL REFERENCES client_api_keys(id) ON DELETE CASCADE,
   date TEXT NOT NULL,
   requests INTEGER NOT NULL DEFAULT 0,
@@ -337,7 +508,7 @@ function initSchema(): void {
   PRIMARY KEY (key_id, date)
 );`);
 
-	db.exec(`CREATE TABLE IF NOT EXISTS key_audit_logs (
+	conn.exec(`CREATE TABLE IF NOT EXISTS key_audit_logs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   key_id INTEGER NOT NULL,
   action TEXT NOT NULL,
@@ -353,7 +524,7 @@ function initSchema(): void {
 );
 CREATE INDEX IF NOT EXISTS idx_audit_key ON key_audit_logs (key_id, created_at);`);
 
-	db.exec(`CREATE TABLE IF NOT EXISTS model_pricing (
+	conn.exec(`CREATE TABLE IF NOT EXISTS model_pricing (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   model TEXT NOT NULL,
   provider_id TEXT NOT NULL,
@@ -363,7 +534,7 @@ CREATE INDEX IF NOT EXISTS idx_audit_key ON key_audit_logs (key_id, created_at);
   UNIQUE (model, provider_id)
 );`);
 
-	db.exec(`CREATE TABLE IF NOT EXISTS key_templates (
+	conn.exec(`CREATE TABLE IF NOT EXISTS key_templates (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL,
   description TEXT,
@@ -371,7 +542,7 @@ CREATE INDEX IF NOT EXISTS idx_audit_key ON key_audit_logs (key_id, created_at);
   created_at INTEGER DEFAULT (unixepoch())
 );`);
 
-	db.exec(`CREATE TABLE IF NOT EXISTS key_groups (
+	conn.exec(`CREATE TABLE IF NOT EXISTS key_groups (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL UNIQUE,
   description TEXT,
@@ -379,13 +550,13 @@ CREATE INDEX IF NOT EXISTS idx_audit_key ON key_audit_logs (key_id, created_at);
   created_at INTEGER DEFAULT (unixepoch())
 );`);
 
-	db.exec(`CREATE TABLE IF NOT EXISTS key_group_members (
+	conn.exec(`CREATE TABLE IF NOT EXISTS key_group_members (
   group_id INTEGER NOT NULL REFERENCES key_groups(id) ON DELETE CASCADE,
   key_id INTEGER NOT NULL REFERENCES client_api_keys(id) ON DELETE CASCADE,
   PRIMARY KEY (group_id, key_id)
 );`);
 
-	db.exec(`CREATE TABLE IF NOT EXISTS webhook_events (
+	conn.exec(`CREATE TABLE IF NOT EXISTS webhook_events (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   key_id INTEGER REFERENCES client_api_keys(id) ON DELETE SET NULL,
   event TEXT NOT NULL,
@@ -397,7 +568,7 @@ CREATE INDEX IF NOT EXISTS idx_audit_key ON key_audit_logs (key_id, created_at);
   created_at INTEGER DEFAULT (unixepoch())
 );`);
 
-	db.exec(`CREATE TABLE IF NOT EXISTS combos (
+	conn.exec(`CREATE TABLE IF NOT EXISTS combos (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL UNIQUE,
   strategy TEXT NOT NULL DEFAULT 'priority',
@@ -405,7 +576,7 @@ CREATE INDEX IF NOT EXISTS idx_audit_key ON key_audit_logs (key_id, created_at);
   created_at INTEGER DEFAULT (unixepoch()),
   updated_at INTEGER DEFAULT (unixepoch())
 );`);
-	db.exec(`CREATE TABLE IF NOT EXISTS combo_steps (
+	conn.exec(`CREATE TABLE IF NOT EXISTS combo_steps (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   combo_id INTEGER NOT NULL REFERENCES combos(id) ON DELETE CASCADE,
   step_order INTEGER NOT NULL,
@@ -415,7 +586,7 @@ CREATE INDEX IF NOT EXISTS idx_audit_key ON key_audit_logs (key_id, created_at);
   prompt TEXT,
   created_at INTEGER DEFAULT (unixepoch())
 );`);
-	db.exec(`CREATE TABLE IF NOT EXISTS combo_metrics (
+	conn.exec(`CREATE TABLE IF NOT EXISTS combo_metrics (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   combo_id INTEGER NOT NULL REFERENCES combos(id) ON DELETE CASCADE,
   combo_name TEXT,
@@ -491,15 +662,15 @@ CREATE INDEX IF NOT EXISTS idx_audit_key ON key_audit_logs (key_id, created_at);
 	// Migrasi prefix legacy ("openai/" -> "openai"): prefix kini nama saja,
 	// "/" otomatis sebagai separator. Bersihkan sekaligus NULL-kan yang kosong.
 	try {
-		db.exec(
+		conn.exec(
 			"UPDATE providers SET prefix = TRIM(TRIM(prefix), '/') WHERE prefix IS NOT NULL;",
 		);
-		db.exec("UPDATE providers SET prefix = NULL WHERE prefix = '';");
+		conn.exec("UPDATE providers SET prefix = NULL WHERE prefix = '';");
 	} catch {
 		/* tabel providers mungkin belum ada saat fresh init */
 	}
 
-	db.exec(`CREATE TABLE IF NOT EXISTS chat_sessions (
+	conn.exec(`CREATE TABLE IF NOT EXISTS chat_sessions (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   provider_id TEXT NOT NULL,
   title TEXT NOT NULL DEFAULT 'New chat',
@@ -528,18 +699,40 @@ CREATE INDEX IF NOT EXISTS idx_chat_sessions_provider ON chat_sessions (provider
 	ensureColumn("outbound_proxies", "last_latency_ms", "last_latency_ms INTEGER");
 	ensureColumn("outbound_proxies", "last_error", "last_error TEXT");
 
-	// Indeks query panas: dashboard/usage/logs memfilter & memgrouping
-	// berdasarkan created_at/status terus-menerus.
-	db.exec(`CREATE INDEX IF NOT EXISTS idx_request_logs_created_at
+	conn.exec(`CREATE INDEX IF NOT EXISTS idx_request_logs_created_at
     ON request_logs (created_at);
 CREATE INDEX IF NOT EXISTS idx_request_logs_status_created
     ON request_logs (status, created_at);
+CREATE INDEX IF NOT EXISTS idx_request_logs_apikey_created
+    ON request_logs (api_key_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_request_logs_created_duration
+    ON request_logs (created_at, duration_ms);
 CREATE INDEX IF NOT EXISTS idx_proxy_logs_created_at
     ON proxy_logs (created_at);
 CREATE INDEX IF NOT EXISTS idx_combo_metrics_ts
     ON combo_metrics (timestamp);
+CREATE INDEX IF NOT EXISTS idx_combo_metrics_combo_ts
+    ON combo_metrics (combo_id, timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_combo_steps_combo
+    ON combo_steps (combo_id, step_order);
 CREATE INDEX IF NOT EXISTS idx_webhook_events_retry
-    ON webhook_events (status, next_retry_at);`);
+    ON webhook_events (status, next_retry_at);
+CREATE INDEX IF NOT EXISTS idx_models_provider_active
+    ON models (provider_id, is_active);
+CREATE INDEX IF NOT EXISTS idx_models_display_name
+    ON models (display_name) WHERE display_name IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_provider_creds_provider
+    ON provider_credentials (provider_id, is_active, is_routing);
+CREATE INDEX IF NOT EXISTS idx_routing_rules_source
+    ON routing_rules (source_model, is_active, priority DESC);
+CREATE INDEX IF NOT EXISTS idx_client_keys_prev_hash
+    ON client_api_keys (previous_key_hash) WHERE previous_key_hash IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_proxy_assign_target
+    ON proxy_pool_assignments (target_type, target_id);
+CREATE INDEX IF NOT EXISTS idx_key_group_members_key
+    ON key_group_members (key_id);
+CREATE INDEX IF NOT EXISTS idx_audit_key_action_created
+    ON key_audit_logs (key_id, action, created_at);`);
 
 	// Migrate legacy single-key table (provider_id PRIMARY KEY) to multi-key schema.
 	{
@@ -549,10 +742,10 @@ CREATE INDEX IF NOT EXISTS idx_webhook_events_retry
 			}[]
 		).map((c) => c.name);
 		if (cols.length > 0 && !cols.includes("id")) {
-			db.exec(
+			conn.exec(
 				"ALTER TABLE provider_credentials RENAME TO provider_credentials_legacy;",
 			);
-			db.exec(`CREATE TABLE provider_credentials (
+			conn.exec(`CREATE TABLE provider_credentials (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       provider_id TEXT NOT NULL,
       label TEXT,
@@ -562,9 +755,9 @@ CREATE INDEX IF NOT EXISTS idx_webhook_events_retry
       created_at INTEGER DEFAULT (unixepoch()),
       updated_at INTEGER DEFAULT (unixepoch())
     );`);
-			db.exec(`INSERT INTO provider_credentials (provider_id, api_key, is_routing, updated_at)
+			conn.exec(`INSERT INTO provider_credentials (provider_id, api_key, is_routing, updated_at)
              SELECT provider_id, api_key, 1, updated_at FROM provider_credentials_legacy;`);
-			db.exec("DROP TABLE provider_credentials_legacy;");
+			conn.exec("DROP TABLE provider_credentials_legacy;");
 		}
 	}
 
@@ -575,7 +768,7 @@ CREATE INDEX IF NOT EXISTS idx_webhook_events_retry
 			}[]
 		).map((c) => c.name);
 		if (modelCols.length > 0 && !modelCols.includes("is_public")) {
-			db.exec(
+			conn.exec(
 				"ALTER TABLE models ADD COLUMN is_public INTEGER NOT NULL DEFAULT 0",
 			);
 		}
@@ -602,7 +795,7 @@ export function seed() {
      VALUES (?, ?, ?, ?, ?)`,
 	);
 
-	db.exec("BEGIN");
+	exec("BEGIN");
 	try {
 		insertProvider.run(
 			"openai",
@@ -718,9 +911,9 @@ export function seed() {
 		for (const [name, provider, ctx, active, primary] of models) {
 			insertModel.run(name, provider, ctx, active, primary);
 		}
-		db.exec("COMMIT");
+		exec("COMMIT");
 	} catch (err) {
-		db.exec("ROLLBACK");
+		exec("ROLLBACK");
 		throw err;
 	}
 
@@ -804,8 +997,9 @@ export function ensureDahlProvider() {
 	}
 }
 
-seed();
-
-ensureOpenCodeProvider();
-
-ensureDahlProvider();
+if (!dbState.seeded) {
+	seed();
+	ensureOpenCodeProvider();
+	ensureDahlProvider();
+	dbState.seeded = true;
+}

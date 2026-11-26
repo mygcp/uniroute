@@ -1,47 +1,76 @@
 import type { Route } from "./+types/api.logs.stream";
 import { requireSession } from "../.server/auth";
-import { subscribe } from "../.server/log-stream";
+import { subscribe, subscriberCount } from "../.server/log-stream";
+
+const ENCODER = new TextEncoder();
+const CONNECTED_BYTES = ENCODER.encode(": connected\n\n");
+const PING_BYTES = ENCODER.encode(": ping\n\n");
+const MAX_SSE_CLIENTS = 50;
 
 export async function loader({ request }: Route.LoaderArgs) {
   const denied = requireSession(request);
   if (denied) return denied;
-  const encoder = new TextEncoder();
+
+  if (subscriberCount() >= MAX_SSE_CLIENTS) {
+    return Response.json(
+      { ok: false, error: "too many active log stream connections" },
+      { status: 429 },
+    );
+  }
+
+  let cleanup = (): void => {};
+
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
+      let cleaned = false;
       const send = (payload: unknown): void => {
+        if (cleaned) return;
         try {
           controller.enqueue(
-            encoder.encode(`data: ${JSON.stringify(payload)}\n\n`),
+            ENCODER.encode(`data: ${JSON.stringify(payload)}\n\n`),
           );
         } catch {
-          /* stream closed */
+          cleanup();
         }
       };
+
       const unsubscribe = subscribe(send);
-      // Flush headers + tanda hidup segera agar client tahu stream siap
-      // tanpa menunggu event log pertama / heartbeat.
       try {
-        controller.enqueue(encoder.encode(": connected\n\n"));
+        controller.enqueue(CONNECTED_BYTES);
       } catch {
         /* ignore */
       }
+
       const hb = setInterval(() => {
+        if (cleaned) return;
         try {
-          controller.enqueue(encoder.encode(": ping\n\n"));
+          controller.enqueue(PING_BYTES);
         } catch {
-          /* ignore */
+          cleanup();
         }
       }, 25_000);
 
-      request.signal.addEventListener("abort", () => {
+      cleanup = (): void => {
+        if (cleaned) return;
+        cleaned = true;
         clearInterval(hb);
         unsubscribe();
         try {
+          request.signal.removeEventListener("abort", cleanup);
+        } catch {
+          /* ignore */
+        }
+        try {
           controller.close();
         } catch {
-          /* already closed */
+          /* ignore */
         }
-      });
+      };
+
+      request.signal.addEventListener("abort", cleanup, { once: true });
+    },
+    cancel() {
+      cleanup();
     },
   });
 

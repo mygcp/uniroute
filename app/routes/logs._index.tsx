@@ -2,6 +2,7 @@ import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useSta
 import { useFetcher } from "react-router";
 import { ChevronDown, ChevronRight, Globe, Lock, ScrollText, Trash2, Unlock, Zap } from "lucide-react";
 import type { Route } from "./+types/logs._index";
+import { requireLoaderSession } from "../.server/auth";
 import { query } from "../.server/db";
 import { getPrice } from "../.server/pricing";
 import { Combobox } from "../components/ui/combobox";
@@ -43,7 +44,8 @@ export function meta() {
   return [{ title: "Request Logs | UniRoute" }];
 }
 
-export function loader() {
+export function loader({ request }: Route.LoaderArgs) {
+  requireLoaderSession(request);
   const reqRows = query(
     `SELECT ${REQUEST_COLS} FROM request_logs r
        LEFT JOIN client_api_keys k ON k.id = r.api_key_id
@@ -51,15 +53,27 @@ export function loader() {
       ORDER BY r.id DESC LIMIT 500`,
   ).all() as Record<string, unknown>[];
 
-  // Peta harga per kombinasi model::provider (untuk estimasi biaya di UI,
-  // termasuk untuk event realtime yang datang setelah halaman dimuat).
-  const combos = query(
-    `SELECT DISTINCT model, provider_id FROM request_logs WHERE model IS NOT NULL`,
-  ).all() as { model: string; provider_id: string | null }[];
   const prices: PriceMap = {};
-  for (const c of combos) {
-    const { input, output } = getPrice(c.model, c.provider_id);
-    prices[priceKeyOf(c.model, c.provider_id)] = { input, output };
+  const seenCombos = new Set<string>();
+  for (const r of reqRows) {
+    if (!r.model) continue;
+    const model = String(r.model);
+    const pid = r.provider_id ? String(r.provider_id) : null;
+    const key = priceKeyOf(model, pid);
+    if (seenCombos.has(key)) continue;
+    seenCombos.add(key);
+    const { input, output } = getPrice(model, pid);
+    prices[key] = { input, output };
+  }
+  const activeModels = query(
+    "SELECT model_name, provider_id FROM models WHERE is_active = 1",
+  ).all() as { model_name: string; provider_id: string }[];
+  for (const m of activeModels) {
+    const key = priceKeyOf(m.model_name, m.provider_id);
+    if (seenCombos.has(key)) continue;
+    seenCombos.add(key);
+    const { input, output } = getPrice(m.model_name, m.provider_id);
+    prices[key] = { input, output };
   }
 
   // Label api key agar detail menampilkan nama key, bukan hanya id numerik.
@@ -72,15 +86,14 @@ export function loader() {
       k.name?.trim() || k.key_prefix?.trim() || `#${k.id}`;
   }
 
-  const request: LogEvent[] = reqRows
+  const initial: LogEvent[] = reqRows
     .map((r) => ({
       type: "request" as const,
       created_at: Number(r.created_at),
       ...r,
     }));
-  // Terbaru di atas — SQL sudah ORDER BY r.id DESC.
 
-  return { initial: request, prices, keyLabels };
+  return { initial, prices, keyLabels };
 }
 
 const STATUS_TONE: Record<string, "success" | "warning" | "danger" | "neutral"> =

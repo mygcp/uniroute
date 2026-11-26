@@ -1,15 +1,10 @@
 import type { Route } from "./+types/api.logs.clear";
-import { getSessionToken, isValid } from "../.server/auth";
+import { requireSession } from "../.server/auth";
 import { exec } from "../.server/db";
 
-/**
- * POST /api/logs/clear — hapus semua log dari satu tabel.
- * Form fields: scope = "request" | "proxy".
- */
 export async function action({ request }: Route.ActionArgs) {
-  if (!isValid(getSessionToken(request))) {
-    return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
-  }
+  const denied = requireSession(request);
+  if (denied) return denied;
 
   const form = await request.formData();
   const scope = String(form.get("scope") ?? "");
@@ -23,6 +18,11 @@ export async function action({ request }: Route.ActionArgs) {
 
   const table = scope === "request" ? "request_logs" : "proxy_logs";
   exec(`DELETE FROM ${table}`);
+  try {
+    exec("PRAGMA wal_checkpoint(PASSIVE)");
+  } catch {
+    /* ignore */
+  }
 
   return Response.json({ ok: true, scope });
 }

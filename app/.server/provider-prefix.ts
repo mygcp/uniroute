@@ -1,8 +1,69 @@
-import { query } from "./db";
+import { getTableVersion, hasColumn, onDbReset, query } from "./db";
 
-// Prefix disimpan sebagai NAMA SAJA, tanpa "/".
-// Separator "/" ditambahkan otomatis saat display: `${prefix}/${model_name}`.
 export const PREFIX_PATTERN = /^[a-zA-Z0-9._-]{1,32}$/;
+
+type CachedDisplayHit = {
+  bare: string;
+  prefix: string | null;
+  providerId: string;
+};
+
+type CachedPrefixEntry = {
+  id: string;
+  prefix: string;
+  head: string;
+};
+
+let cachedModelsVer = -1;
+let cachedProvidersVer = -1;
+let displayLookup = new Map<string, CachedDisplayHit>();
+let sortedPrefixes: CachedPrefixEntry[] = [];
+
+onDbReset(() => {
+  cachedModelsVer = -1;
+  cachedProvidersVer = -1;
+  displayLookup.clear();
+  sortedPrefixes = [];
+});
+
+function ensurePrefixCache(): void {
+  const mVer = getTableVersion("models");
+  const pVer = getTableVersion("providers");
+  if (mVer === cachedModelsVer && pVer === cachedProvidersVer) return;
+
+  const provRows = query(
+    "SELECT id, prefix FROM providers WHERE prefix IS NOT NULL AND prefix != ''",
+  ).all() as unknown as { id: string; prefix: string }[];
+  const nextPrefixes: CachedPrefixEntry[] = [];
+  for (const r of provRows) {
+    const cleaned = cleanPrefix(r.prefix);
+    if (cleaned) {
+      nextPrefixes.push({ id: r.id, prefix: cleaned, head: `${cleaned}/` });
+    }
+  }
+  nextPrefixes.sort((a, b) => b.prefix.length - a.prefix.length);
+
+  const nextDisplay = new Map<string, CachedDisplayHit>();
+  if (hasDisplayColumn()) {
+    const dispRows = query(
+      "SELECT m.display_name AS disp, m.model_name AS bare, m.provider_id AS providerId, p.prefix AS prefix FROM models m JOIN providers p ON p.id = m.provider_id WHERE m.display_name IS NOT NULL AND m.display_name != '' AND m.is_active = 1",
+    ).all() as Array<{ disp: string; bare: string; providerId: string; prefix: string | null }>;
+    for (const r of dispRows) {
+      if (!nextDisplay.has(r.disp)) {
+        nextDisplay.set(r.disp, {
+          bare: r.bare,
+          prefix: cleanPrefix(r.prefix),
+          providerId: r.providerId,
+        });
+      }
+    }
+  }
+
+  sortedPrefixes = nextPrefixes;
+  displayLookup = nextDisplay;
+  cachedModelsVer = mVer;
+  cachedProvidersVer = pVer;
+}
 
 /** Bersihkan prefix legacy ("openai/" -> "openai") untuk jalur baca. */
 export function cleanPrefix(raw: string | null | undefined): string | null {
@@ -82,19 +143,11 @@ export function resolvePrefixedModel(model: string): {
   providerId: string | null;
 } {
   if (!model) return { bare: model, prefix: null, providerId: null };
-  const rows = query(
-    "SELECT id, prefix FROM providers WHERE prefix IS NOT NULL AND prefix != ''",
-  ).all() as unknown as { id: string; prefix: string }[];
-  const cleaned = rows
-    .map((r) => ({ id: r.id, prefix: cleanPrefix(r.prefix) }))
-    .filter((r): r is { id: string; prefix: string } => !!r.prefix);
-  // longest prefix first supaya "openai-gpt" > "openai" bila bentrok
-  cleaned.sort((a, b) => b.prefix.length - a.prefix.length);
-  for (const r of cleaned) {
-    const head = `${r.prefix}/`;
-    if (model === r.prefix) continue; // bukan model, hanya prefix saja
-    if (model.startsWith(head)) {
-      const bare = model.slice(head.length);
+  ensurePrefixCache();
+  for (const r of sortedPrefixes) {
+    if (model === r.prefix) continue;
+    if (model.startsWith(r.head)) {
+      const bare = model.slice(r.head.length);
       if (bare.length === 0) continue;
       return { bare, prefix: r.prefix, providerId: r.id };
     }
@@ -102,14 +155,6 @@ export function resolvePrefixedModel(model: string): {
   return { bare: model, prefix: null, providerId: null };
 }
 
-/**
- * Resolve display id APAPUN (custom display_name per-model ATAU prefix/bare)
- * ke { bare, providerId }.
- * - Cek dulu kolom models.display_name (custom override).
- * - Lalu fallback ke logika prefix/ (resolvePrefixedModel).
- * Dipakai proxy-handler, media-proxy, dan findModel agar custom display
- * tetap bisa di-request seperti model biasa.
- */
 export function resolveDisplayToBare(displayId: string): {
   bare: string;
   prefix: string | null;
@@ -117,18 +162,9 @@ export function resolveDisplayToBare(displayId: string): {
 } {
   const name = (displayId ?? "").trim();
   if (!name) return { bare: displayId, prefix: null, providerId: null };
-  try {
-    const hit = query(
-      "SELECT m.model_name AS bare, m.provider_id AS providerId, p.prefix AS prefix FROM models m JOIN providers p ON p.id = m.provider_id WHERE m.display_name = ? AND m.is_active = 1 LIMIT 1",
-    ).get(name) as
-      | { bare: string; providerId: string; prefix: string | null }
-      | undefined;
-    if (hit) {
-      return { bare: hit.bare, prefix: cleanPrefix(hit.prefix), providerId: hit.providerId };
-    }
-  } catch {
-    // kolom display_name belum ada (DB lama) -> fallback prefix
-  }
+  ensurePrefixCache();
+  const hit = displayLookup.get(name);
+  if (hit) return hit;
   return resolvePrefixedModel(name);
 }
 
@@ -228,14 +264,7 @@ export function unavailableReason(displayId: string): UnavailableReason | null {
 }
 
 function hasDisplayColumn(): boolean {
-  try {
-    const cols = (
-      query("PRAGMA table_info(models)").all() as { name: string }[]
-    ).map((c) => c.name);
-    return cols.includes("display_name");
-  } catch {
-    return false;
-  }
+  return hasColumn("models", "display_name");
 }
 
 /**

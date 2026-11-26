@@ -17,7 +17,7 @@ import {
   TrendingUp,
 } from "lucide-react";
 import type { Route } from "./+types/home";
-import { requireSession } from "../.server/auth";
+import { requireLoaderSession, requireSession } from "../.server/auth";
 import {
   getStats,
   getUsageLast7Days,
@@ -63,6 +63,7 @@ type ProviderSummary = {
 };
 
 export function loader({ request }: Route.LoaderArgs) {
+  requireLoaderSession(request);
   const origin = resolveGatewayOrigin(request);
   const tunnelStatus = getTunnelStatus();
   const active =

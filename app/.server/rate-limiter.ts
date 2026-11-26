@@ -1,60 +1,85 @@
 export type RateLimitOptions = { rpm?: number; tpm?: number };
 
-type ReqEntry = { atMs: number; count: number };
-type TokenEntry = { atMs: number; amount: number };
+type Entry = { atMs: number; val: number };
+
+type Bucket = {
+  items: Entry[];
+  head: number;
+  sum: number;
+};
 
 const WINDOW_MS = 60_000;
 
-const requests = new Map<string, ReqEntry[]>();
-const tokens = new Map<string, TokenEntry[]>();
+const requests = new Map<string, Bucket>();
+const tokens = new Map<string, Bucket>();
 const concurrent = new Map<string, number>();
 
-function pruneReq(scope: string, now: number): void {
-  const q = requests.get(scope);
-  if (!q) return;
-  const cutoff = now - WINDOW_MS;
-  let i = 0;
-  while (i < q.length && q[i].atMs < cutoff) i++;
-  if (i > 0) q.splice(0, i);
-  if (q.length === 0) requests.delete(scope);
+function pruneBucket(map: Map<string, Bucket>, scope: string, cutoff: number): Bucket | undefined {
+  const b = map.get(scope);
+  if (!b) return undefined;
+  const { items } = b;
+  let { head, sum } = b;
+  while (head < items.length && items[head].atMs < cutoff) {
+    sum -= items[head].val;
+    head += 1;
+  }
+  if (head >= items.length) {
+    map.delete(scope);
+    return undefined;
+  }
+  b.sum = sum > 0 ? sum : 0;
+  if (head > 64) {
+    b.items = items.slice(head);
+    b.head = 0;
+  } else {
+    b.head = head;
+  }
+  return b;
 }
 
-function pruneTokens(scope: string, now: number): void {
-  const q = tokens.get(scope);
-  if (!q) return;
-  const cutoff = now - WINDOW_MS;
-  let i = 0;
-  while (i < q.length && q[i].atMs < cutoff) i++;
-  if (i > 0) q.splice(0, i);
-  if (q.length === 0) tokens.delete(scope);
-}
+const sweepTimer = setInterval(() => {
+  const cutoff = Date.now() - WINDOW_MS;
+  for (const k of requests.keys()) pruneBucket(requests, k, cutoff);
+  for (const k of tokens.keys()) pruneBucket(tokens, k, cutoff);
+}, 60_000);
+sweepTimer.unref?.();
 
 export function checkRateLimit(
   scope: string,
   tokensUsed: number,
   opts: RateLimitOptions,
 ): { allowed: boolean; limit?: "rpm" | "tpm" } {
+  if (opts.rpm === undefined && opts.tpm === undefined) {
+    return { allowed: true };
+  }
+
   const now = Date.now();
-  pruneReq(scope, now);
-  pruneTokens(scope, now);
+  const cutoff = now - WINDOW_MS;
 
-  const reqQ = requests.get(scope) ?? [];
-  const tokenQ = tokens.get(scope) ?? [];
-
-  const reqCount = reqQ.reduce((sum, e) => sum + e.count, 0);
-  const tokenSum = tokenQ.reduce((sum, e) => sum + e.amount, 0);
-
+  const reqBucket = opts.rpm !== undefined ? pruneBucket(requests, scope, cutoff) : undefined;
+  const reqCount = reqBucket?.sum ?? 0;
   if (opts.rpm !== undefined && reqCount + 1 > opts.rpm) {
     return { allowed: false, limit: "rpm" };
   }
+
+  const tokenBucket = opts.tpm !== undefined ? pruneBucket(tokens, scope, cutoff) : undefined;
+  const tokenSum = tokenBucket?.sum ?? 0;
   if (opts.tpm !== undefined && tokenSum + tokensUsed > opts.tpm) {
     return { allowed: false, limit: "tpm" };
   }
 
-  reqQ.push({ atMs: now, count: 1 });
-  requests.set(scope, reqQ);
-  tokenQ.push({ atMs: now, amount: tokensUsed });
-  tokens.set(scope, tokenQ);
+  if (opts.rpm !== undefined) {
+    const b = reqBucket ?? { items: [], head: 0, sum: 0 };
+    b.items.push({ atMs: now, val: 1 });
+    b.sum += 1;
+    if (!reqBucket) requests.set(scope, b);
+  }
+  if (opts.tpm !== undefined) {
+    const b = tokenBucket ?? { items: [], head: 0, sum: 0 };
+    b.items.push({ atMs: now, val: tokensUsed });
+    b.sum += tokensUsed;
+    if (!tokenBucket) tokens.set(scope, b);
+  }
 
   return { allowed: true };
 }

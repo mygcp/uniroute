@@ -1,5 +1,6 @@
-import { query } from "./db";
+import { hasColumn, query } from "./db";
 import { displayName } from "./provider-prefix";
+import { getCachedSetting, setCachedSetting } from "./settings-cache";
 
 export type PublicModel = {
   id: number;
@@ -25,37 +26,19 @@ type PublicModelRow = {
 const MODELS_PUBLIC_SETTING = "models_public";
 
 export function isModelsPublic(): boolean {
-  const row = query("SELECT value FROM settings WHERE key = ?").get(
-    MODELS_PUBLIC_SETTING,
-  ) as { value: string } | undefined;
-  return row?.value === "1";
+  return getCachedSetting(MODELS_PUBLIC_SETTING) === "1";
 }
 
 export function setModelsPublic(enabled: boolean): void {
-  query(
-    "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-  ).run(MODELS_PUBLIC_SETTING, enabled ? "1" : "0");
+  setCachedSetting(MODELS_PUBLIC_SETTING, enabled ? "1" : "0");
 }
 
 export function setModelPublic(modelId: number, enabled: boolean): void {
   query("UPDATE models SET is_public = ? WHERE id = ?").run(enabled ? 1 : 0, modelId);
 }
 
-function columnOrNull(col: string): string {
-  // models.display_name mungkin belum ada di DB lama -> fallback NULL
-  try {
-    const cols = (query(`PRAGMA table_info(models)`).all() as { name: string }[]).map(
-      (c) => c.name,
-    );
-    if (cols.includes(col)) return `m.${col}`;
-  } catch {
-    /* ignore */
-  }
-  return "NULL";
-}
-
 export function listPublicModels(): PublicModel[] {
-  const customCol = columnOrNull("display_name");
+  const customCol = hasColumn("models", "display_name") ? "m.display_name" : "NULL";
   const rows = query(
     `SELECT m.id, m.model_name, m.provider_id, m.context_length,
             p.name AS owned_by, p.prefix AS prefix, ${customCol} AS custom_display

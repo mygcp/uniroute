@@ -4,11 +4,21 @@ import {
   isRequireApiKey,
   resolveClientKey,
   modelAllowed,
+  modelBlocked,
+  providerAllowed,
+  providerBlocked,
   type ClientKey,
 } from "../.server/client-key";
+import {
+  checkAccessHours,
+  checkIp,
+  checkScope,
+  clientIpFromRequest,
+  isKeyExpired,
+} from "../.server/key-enforce";
 import { isModelsPublic, listPublicModels } from "../.server/model-public";
-import { query } from "../.server/db";
-import { displayName, resolveDisplayToBare, modelNotFoundBody } from "../.server/provider-prefix";
+import { hasColumn, query } from "../.server/db";
+import { displayName, resolveDisplayToBare } from "../.server/provider-prefix";
 
 type ModelRow = {
   id: number;
@@ -38,15 +48,7 @@ function formatModel(m: ModelRow): Record<string, unknown> {
 }
 
 function customCol(): string {
-  try {
-    const cols = (query("PRAGMA table_info(models)").all() as { name: string }[]).map(
-      (c) => c.name,
-    );
-    if (cols.includes("display_name")) return "m.display_name";
-  } catch {
-    /* ignore */
-  }
-  return "NULL";
+  return hasColumn("models", "display_name") ? "m.display_name" : "NULL";
 }
 
 function toRow(r: Record<string, unknown>): ModelRow {
@@ -56,8 +58,7 @@ function toRow(r: Record<string, unknown>): ModelRow {
 
 function findModel(displayId: string): ModelRow | undefined {
   const cc = customCol();
-  // 1) custom display_name exact (per-model override)
-  try {
+  if (cc !== "NULL") {
     const hit = query(
       `SELECT m.id, m.model_name, m.provider_id, m.context_length,
               p.name AS owned_by, m.is_public, p.prefix AS prefix, ${cc} AS custom_display
@@ -66,12 +67,9 @@ function findModel(displayId: string): ModelRow | undefined {
        WHERE m.display_name = ? AND m.is_active = 1 LIMIT 1`,
     ).get(displayId) as unknown as (ModelRow & { custom_display: string | null }) | undefined;
     if (hit) return toRow(hit);
-  } catch {
-    /* kolom belum ada -> lanjut */
   }
 
   const { bare, providerId } = resolveDisplayToBare(displayId);
-  // bila prefix/custom menunjuk provider spesifik, cari tepat di provider itu
   if (providerId) {
     const row = query(
       `SELECT m.id, m.model_name, m.provider_id, m.context_length,
@@ -82,8 +80,7 @@ function findModel(displayId: string): ModelRow | undefined {
     ).get(bare, providerId) as unknown as (ModelRow & { custom_display: string | null }) | undefined;
     if (row) return toRow(row);
   }
-  // fallback: cari berdasar bare tanpa hint, atau bila prefix tidak match
-  // cari semua aktif dengan bare, lalu pilih yang prefix-nya cocok dengan displayId
+
   const rows = query(
     `SELECT m.id, m.model_name, m.provider_id, m.context_length,
             p.name AS owned_by, m.is_public, p.prefix AS prefix, ${cc} AS custom_display
@@ -97,7 +94,6 @@ function findModel(displayId: string): ModelRow | undefined {
       return { ...r, display_name: disp };
     }
   }
-  // bila tidak ketemu exact, kembalikan yang pertama (kompatibilitas bare)
   if (rows.length > 0) {
     const r = rows[0]!;
     return { ...r, display_name: displayName(r.prefix, r.model_name, r.custom_display) };
@@ -106,13 +102,30 @@ function findModel(displayId: string): ModelRow | undefined {
 }
 
 function isAllowedForKey(m: ModelRow, rule: ClientKey): boolean {
-  const isPublic =
+  if (m.is_public === 1) return true;
+  if (
     (listPublicModels() as unknown as { model_name: string; display_name: string }[]).some(
       (pm) => pm.model_name === m.model_name && pm.display_name === m.display_name,
-    ) || m.is_public === 1;
-  if (isPublic) return true;
+    )
+  ) {
+    return true;
+  }
+  if (!providerAllowed(rule, m.provider_id) || providerBlocked(rule, m.provider_id)) {
+    return false;
+  }
+  if (modelBlocked(rule, m.display_name) || modelBlocked(rule, m.model_name)) {
+    return false;
+  }
   if (rule.allowed_models === null) return true;
   return modelAllowed(rule, m.display_name) || modelAllowed(rule, m.model_name);
+}
+
+function extractApiToken(request: Request): string | null {
+  const auth = request.headers.get("authorization") ?? "";
+  const match = auth.match(/^Bearer\s+(.+)$/i);
+  if (match) return match[1].trim();
+  const xKey = request.headers.get("x-api-key")?.trim();
+  return xKey || null;
 }
 
 export async function loader({ request, params }: Route.LoaderArgs): Promise<Response> {
@@ -121,25 +134,31 @@ export async function loader({ request, params }: Route.LoaderArgs): Promise<Res
     return json({ error: { message: "model is required", type: "invalid_request_error" } }, 400);
   }
 
-  const row = findModel(modelId);
-  if (!row) {
-    return json({ error: modelNotFoundBody(modelId) }, 404);
-  }
-
   if (isValid(getSessionToken(request))) {
+    const row = findModel(modelId);
+    if (!row) {
+      return json({ error: { message: `model not found: ${modelId}`, type: "model_not_found" } }, 404);
+    }
     return json(formatModel(row));
   }
 
-  const header = request.headers.get("authorization") ?? "";
-  const match = header.match(/^Bearer\s+(.+)$/i);
-  const token = match ? match[1].trim() : null;
-
+  const token = extractApiToken(request);
   if (token) {
     const resolved = resolveClientKey(token);
     if (!resolved.ok) {
       return json({ error: { message: "invalid api key" } }, 401);
     }
-    if (!isAllowedForKey(row, resolved.key)) {
+    const key = resolved.key;
+    if (isKeyExpired(key)) return json({ error: { message: "api key expired" } }, 403);
+    const ipCheck = checkIp(key, clientIpFromRequest(request));
+    if (!ipCheck.ok) return json({ error: { message: ipCheck.error } }, ipCheck.status);
+    const hoursCheck = checkAccessHours(key);
+    if (!hoursCheck.ok) return json({ error: { message: hoursCheck.error } }, hoursCheck.status);
+    const scopeCheck = checkScope(key, "models");
+    if (!scopeCheck.ok) return json({ error: { message: scopeCheck.error } }, scopeCheck.status);
+
+    const row = findModel(modelId);
+    if (!row || !isAllowedForKey(row, key)) {
       return json(
         { error: { message: `model not found: ${modelId}`, type: "model_not_found" } },
         404,
@@ -149,7 +168,8 @@ export async function loader({ request, params }: Route.LoaderArgs): Promise<Res
   }
 
   if (isModelsPublic()) {
-    if (row.is_public !== 1) {
+    const row = findModel(modelId);
+    if (!row || row.is_public !== 1) {
       return json(
         { error: { message: `model not found: ${modelId}`, type: "model_not_found" } },
         404,
@@ -159,8 +179,15 @@ export async function loader({ request, params }: Route.LoaderArgs): Promise<Res
   }
 
   if (!isRequireApiKey()) {
+    const row = findModel(modelId);
+    if (!row) {
+      return json(
+        { error: { message: `model not found: ${modelId}`, type: "model_not_found" } },
+        404,
+      );
+    }
     return json(formatModel(row));
   }
 
-  return json({ error: { message: "api key required" } }, isRequireApiKey() ? 401 : 403);
+  return json({ error: { message: "api key required" } }, 401);
 }

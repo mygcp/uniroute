@@ -1,6 +1,6 @@
 import { transformRequest } from "./adapter";
 import { beginConnection, endConnection, selectProvider } from "./balancer";
-import { modelAllowed, type ClientKey } from "./client-key";
+import { providerAllowed, providerBlocked, type ClientKey } from "./client-key";
 import { listApiKeys, type ApiKeyRow } from "./credential";
 import {
 	comboProxyPoolId,
@@ -10,7 +10,8 @@ import {
 	type ComboStep,
 } from "./combo";
 import { executeJson, executeStreaming } from "./executor";
-import { clientIpFromRequest } from "./key-enforce";
+import { checkAllowlist } from "./guard";
+import { checkModelProviders, clientIpFromRequest } from "./key-enforce";
 import { recordRequestUsage } from "./key-ops";
 import { recordProxyLog, recordRequestLog, type RequestLog } from "./logger";
 import { getPoolForApiKey, getPoolForProvider } from "./outbound-proxy";
@@ -18,9 +19,9 @@ import { estimateCost } from "./pricing";
 import {
 	getAnyProvider,
 	getProviders,
-	reload,
 	type Provider,
 } from "./registry";
+import { evaluateRules } from "./rules";
 import {
 	composeStreamTransformer,
 	toProvider,
@@ -115,6 +116,11 @@ function resolveStepPool(
 ): Provider[] {
 	let pool = getProviders(model);
 	if (pool.length === 0) pool = getAnyProvider(model);
+	if (ctx.rule) {
+		pool = pool.filter(
+			(p) => providerAllowed(ctx.rule!, p.id) && !providerBlocked(ctx.rule!, p.id),
+		);
+	}
 	if (step.providerId) {
 		const pinned = pool.filter((p) => p.id === step.providerId);
 		if (pinned.length > 0) return pinned;
@@ -164,45 +170,68 @@ async function executeOneModel(
 	const started = Date.now();
 	const label = `${ctx.combo.name}[${index + 1}]`;
 
-	// Model yang tidak diizinkan oleh api key → dilewati (lanjut ke model/step lain).
-	if (ctx.rule && !modelAllowed(ctx.rule, model)) {
-		recordProxyLog({
-			level: "info",
-			source: "combo",
-			message: `${label}: model ${model} skipped (not allowed by api key)`,
-			metadata: { model },
-		});
-		return {
-			kind: "fail",
-			status: 0,
-			error: `model ${model} not allowed by api key`,
-		};
+	const allowCheck = checkAllowlist(model);
+	if (!allowCheck.ok) {
+		return { kind: "fail", status: 403, error: allowCheck.reason };
 	}
 
-	const pool = resolveStepPool(ctx, step, model);
+	let effectiveModel = model;
+	const ruleEval = evaluateRules(effectiveModel);
+	if (ruleEval.action === "deny") {
+		return { kind: "fail", status: 403, error: "model denied by routing rule" };
+	}
+	if (ruleEval.action === "rewrite") {
+		effectiveModel = ruleEval.targetModel;
+	}
+
+	if (ctx.rule) {
+		const preCheck = checkModelProviders(ctx.rule, effectiveModel, null);
+		if (!preCheck.ok) {
+			recordProxyLog({
+				level: "info",
+				source: "combo",
+				message: `${label}: model ${effectiveModel} skipped (${preCheck.error})`,
+				metadata: { model: effectiveModel },
+			});
+			return {
+				kind: "fail",
+				status: 0,
+				error: preCheck.error,
+			};
+		}
+	}
+
+	const pool = resolveStepPool(ctx, step, effectiveModel);
 	const provider = step.providerId
 		? (pool.find((p) => p.id === step.providerId) ?? pool[0])
-		: (selectProvider(pool, model) ?? pool[0]);
+		: (selectProvider(pool, effectiveModel) ?? pool[0]);
 
 	if (!provider) {
-		logFailure(ctx, model, `model ${model} not found`);
+		logFailure(ctx, effectiveModel, `model ${effectiveModel} not found`);
 		recordComboMetric({
 			comboId: ctx.combo.id,
 			comboName: ctx.combo.name,
 			strategy: ctx.combo.strategy,
 			stepIndex: index,
-			modelId: model,
+			modelId: effectiveModel,
 			providerId: step.providerId ?? null,
 			latencyMs: Date.now() - started,
 			success: false,
 			error: "model not found",
 		});
-		return { kind: "fail", status: 404, error: `model ${model} not found` };
+		return { kind: "fail", status: 404, error: `model ${effectiveModel} not found` };
+	}
+
+	if (ctx.rule) {
+		const provCheck = checkModelProviders(ctx.rule, effectiveModel, provider.id);
+		if (!provCheck.ok) {
+			return { kind: "fail", status: 0, error: provCheck.error };
+		}
 	}
 
 	const stepCanonical = buildStepCanonical(
 		ctx,
-		model,
+		effectiveModel,
 		step,
 		index,
 		carryText,
@@ -218,18 +247,18 @@ async function executeOneModel(
 	try {
 		providerBody = toProvider(providerFormat, stepCanonical);
 		transformed = transformRequest(providerBody, provider, {
-			model,
+			model: effectiveModel,
 			apiKey: apiKey?.api_key ?? null,
 		});
 	} catch (err) {
 		const error = err instanceof Error ? err.message : String(err);
-		logFailure(ctx, model, error);
+		logFailure(ctx, effectiveModel, error);
 		recordComboMetric({
 			comboId: ctx.combo.id,
 			comboName: ctx.combo.name,
 			strategy: ctx.combo.strategy,
 			stepIndex: index,
-			modelId: model,
+			modelId: effectiveModel,
 			providerId: provider.id,
 			latencyMs: Date.now() - started,
 			success: false,
@@ -388,7 +417,6 @@ export async function runComboEngine(
 	params: ComboRunParams,
 ): Promise<Response> {
 	const ctx: RunContext = params;
-	reload();
 
 	let carryText: string | null = null;
 	let lastFail = { status: 502, error: "all combo steps failed" };
@@ -402,8 +430,6 @@ export async function runComboEngine(
 
 		if (outcome.kind === "ok") {
 			if (ctx.combo.strategy === "pipeline" && !isFinal) {
-				// Chain output ke step berikutnya (step perantara non-stream dijamin
-				// punya text; stream hanya diizinkan di step final).
 				carryText = outcome.text || "(step menghasilkan output kosong)";
 				continue;
 			}
@@ -420,7 +446,6 @@ export async function runComboEngine(
 				{
 					error: {
 						message: `combo pipeline failed at step ${i + 1} (${label})`,
-						detail: outcome.error,
 					},
 				},
 				outcome.status || 502,
@@ -428,5 +453,5 @@ export async function runComboEngine(
 		}
 	}
 
-	return json({ error: { message: lastFail.error } }, lastFail.status);
+	return json({ error: { message: "all combo steps failed" } }, lastFail.status);
 }

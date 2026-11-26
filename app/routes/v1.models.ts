@@ -4,10 +4,20 @@ import {
   isRequireApiKey,
   resolveClientKey,
   modelAllowed,
+  modelBlocked,
+  providerAllowed,
+  providerBlocked,
   type ClientKey,
 } from "../.server/client-key";
+import {
+  checkAccessHours,
+  checkIp,
+  checkScope,
+  clientIpFromRequest,
+  isKeyExpired,
+} from "../.server/key-enforce";
 import { isModelsPublic, listPublicModels } from "../.server/model-public";
-import { query } from "../.server/db";
+import { hasColumn, query } from "../.server/db";
 import { displayName } from "../.server/provider-prefix";
 
 type ModelRow = {
@@ -21,15 +31,7 @@ type ModelRow = {
 };
 
 function customCol(): string {
-  try {
-    const cols = (query("PRAGMA table_info(models)").all() as { name: string }[]).map(
-      (c) => c.name,
-    );
-    if (cols.includes("display_name")) return "m.display_name";
-  } catch {
-    /* ignore */
-  }
-  return "NULL";
+  return hasColumn("models", "display_name") ? "m.display_name" : "NULL";
 }
 
 function allActiveModels(): ModelRow[] {
@@ -41,7 +43,15 @@ function allActiveModels(): ModelRow[] {
      JOIN providers p ON p.id = m.provider_id
      WHERE m.is_active = 1
      ORDER BY m.model_name`,
-  ).all() as unknown as { id: number; model_name: string; provider_id: string; context_length: number | null; owned_by: string; prefix: string | null; custom_display: string | null }[];
+  ).all() as unknown as {
+    id: number;
+    model_name: string;
+    provider_id: string;
+    context_length: number | null;
+    owned_by: string;
+    prefix: string | null;
+    custom_display: string | null;
+  }[];
   return rows.map((r) => ({
     ...r,
     display_name: displayName(r.prefix, r.model_name, r.custom_display),
@@ -49,12 +59,16 @@ function allActiveModels(): ModelRow[] {
 }
 
 function modelsAllowedByKey(rule: ClientKey): ModelRow[] {
-  return allActiveModels().filter(
-    (m) =>
-      rule.allowed_models === null ||
-      modelAllowed(rule, m.display_name) ||
-      modelAllowed(rule, m.model_name),
-  );
+  return allActiveModels().filter((m) => {
+    if (!providerAllowed(rule, m.provider_id) || providerBlocked(rule, m.provider_id)) {
+      return false;
+    }
+    if (modelBlocked(rule, m.display_name) || modelBlocked(rule, m.model_name)) {
+      return false;
+    }
+    if (rule.allowed_models === null) return true;
+    return modelAllowed(rule, m.display_name) || modelAllowed(rule, m.model_name);
+  });
 }
 
 function unionIds(...lists: ModelRow[][]): ModelRow[] {
@@ -87,30 +101,48 @@ function json(payload: unknown, status = 200): Response {
   });
 }
 
+function extractApiToken(request: Request): string | null {
+  const auth = request.headers.get("authorization") ?? "";
+  const match = auth.match(/^Bearer\s+(.+)$/i);
+  if (match) return match[1].trim();
+  const xKey = request.headers.get("x-api-key")?.trim();
+  return xKey || null;
+}
+
 export async function loader({ request }: Route.LoaderArgs): Promise<Response> {
   if (isValid(getSessionToken(request))) {
     return json({ object: "list", data: allActiveModels().map(formatModel) });
   }
 
-  const header = request.headers.get("authorization") ?? "";
-  const match = header.match(/^Bearer\s+(.+)$/i);
-  const token = match ? match[1].trim() : null;
-
+  const token = extractApiToken(request);
   if (token) {
     const resolved = resolveClientKey(token);
     if (!resolved.ok) {
       return json({ error: { message: "invalid api key" } }, 401);
     }
+    const key = resolved.key;
+    if (isKeyExpired(key)) {
+      return json({ error: { message: "api key expired" } }, 403);
+    }
+    const ipCheck = checkIp(key, clientIpFromRequest(request));
+    if (!ipCheck.ok) return json({ error: { message: ipCheck.error } }, ipCheck.status);
+    const hoursCheck = checkAccessHours(key);
+    if (!hoursCheck.ok) return json({ error: { message: hoursCheck.error } }, hoursCheck.status);
+    const scopeCheck = checkScope(key, "models");
+    if (!scopeCheck.ok) return json({ error: { message: scopeCheck.error } }, scopeCheck.status);
+
     const models = unionIds(
-      // listPublicModels already returns display_name aware, cast to ModelRow
       listPublicModels() as unknown as ModelRow[],
-      modelsAllowedByKey(resolved.key),
+      modelsAllowedByKey(key),
     );
     return json({ object: "list", data: models.map(formatModel) });
   }
 
   if (isModelsPublic()) {
-    return json({ object: "list", data: (listPublicModels() as unknown as ModelRow[]).map(formatModel) });
+    return json({
+      object: "list",
+      data: (listPublicModels() as unknown as ModelRow[]).map(formatModel),
+    });
   }
 
   return json({ error: { message: "api key required" } }, isRequireApiKey() ? 401 : 403);

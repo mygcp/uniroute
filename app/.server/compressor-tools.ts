@@ -1,9 +1,9 @@
-import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   chmodSync,
   copyFileSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -12,10 +12,17 @@ import {
   rmSync,
   statSync,
   unlinkSync,
-  writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
+import { singleflight, TtlCache } from "./async-utils";
+import {
+  extractArchiveIsolated,
+  isSafeBinaryPathInput,
+  setDownloadProgress,
+  spawnTextAsync,
+  streamDownloadToFile,
+} from "./tool-exec-utils";
 
 export type CompressorToolId = "rtk" | "caveman";
 
@@ -62,6 +69,7 @@ export type DownloadToolResult = {
   sha256: string;
   checksumVerified: boolean;
   sizeBytes: number;
+  upToDate?: boolean;
 };
 
 export {
@@ -201,8 +209,8 @@ function findOnSystemPath(names: string[]): string | null {
 }
 
 function resolveConfiguredPath(rawPath: string): string | null {
+  if (!isSafeBinaryPathInput(rawPath)) return null;
   const trimmed = rawPath.trim();
-  if (!trimmed) return null;
   const hasSep =
     trimmed.includes("/") || trimmed.includes("\\") || trimmed.startsWith(".");
   if (!hasSep) {
@@ -236,33 +244,24 @@ type ProbeCacheEntry = {
   version: string | null;
 };
 
-const probeCache = new Map<string, ProbeCacheEntry>();
+const probeCache = new TtlCache<string, ProbeCacheEntry>(64, 300_000);
 
 export function clearProbeCache(): void {
   probeCache.clear();
 }
 
-function runQuickProbe(
+async function runQuickProbe(
   binaryPath: string,
   args: string[],
-): { ok: boolean; stdout: string } {
-  try {
-    const res = spawnSync(binaryPath, args, {
-      stdio: ["ignore", "pipe", "pipe"],
-      encoding: "utf8",
-      timeout: 2_500,
-      windowsHide: true,
-    });
-    return { ok: res.status === 0, stdout: (res.stdout ?? "").trim() };
-  } catch {
-    return { ok: false, stdout: "" };
-  }
+): Promise<{ ok: boolean; stdout: string }> {
+  const res = await spawnTextAsync(binaryPath, args, 2_500);
+  return { ok: res.ok, stdout: res.stdout };
 }
 
-export function detectBinaryKind(
+export async function detectBinaryKind(
   tool: CompressorToolId,
   resolvedPath: string,
-): ProbeCacheEntry {
+): Promise<ProbeCacheEntry> {
   if (isMockStubFile(resolvedPath)) {
     return { kind: "stub", version: null };
   }
@@ -277,42 +276,47 @@ export function detectBinaryKind(
   const cached = probeCache.get(cacheKey);
   if (cached) return cached;
 
-  let entry: ProbeCacheEntry = { kind: "custom", version: null };
+  return await singleflight(`probe:compressor:${cacheKey}`, async () => {
+    const recheck = probeCache.get(cacheKey);
+    if (recheck) return recheck;
 
-  if (tool === "rtk") {
-    const res = runQuickProbe(resolvedPath, ["--version"]);
-    const m = res.stdout.match(/^rtk\s+v?([0-9]+\.[0-9]+\.[0-9]+[^\s]*)/i);
-    if (res.ok && m) {
-      entry = { kind: "rtk-cli", version: m[1]! };
-    }
-  } else {
-    const jsonRes = runQuickProbe(resolvedPath, ["version", "--json"]);
-    if (jsonRes.ok && jsonRes.stdout.startsWith("{")) {
-      try {
-        const parsed = JSON.parse(jsonRes.stdout) as {
-          version?: string;
-          schema?: string;
-          capabilities?: string[];
-        };
-        if (
-          parsed.schema?.startsWith("caveman.engine") ||
-          parsed.capabilities?.includes("compress")
-        ) {
-          entry = {
-            kind: "caveman-engine",
-            version: parsed.version
-              ? String(parsed.version).replace(/^(bin-)?v/i, "")
-              : null,
+    let entry: ProbeCacheEntry = { kind: "custom", version: null };
+
+    if (tool === "rtk") {
+      const res = await runQuickProbe(resolvedPath, ["--version"]);
+      const m = res.stdout.match(/^rtk\s+v?([0-9]+\.[0-9]+\.[0-9]+[^\s]*)/i);
+      if (res.ok && m) {
+        entry = { kind: "rtk-cli", version: m[1]! };
+      }
+    } else {
+      const jsonRes = await runQuickProbe(resolvedPath, ["version", "--json"]);
+      if (jsonRes.ok && jsonRes.stdout.startsWith("{")) {
+        try {
+          const parsed = JSON.parse(jsonRes.stdout) as {
+            version?: string;
+            schema?: string;
+            capabilities?: string[];
           };
+          if (
+            parsed.schema?.startsWith("caveman.engine") ||
+            parsed.capabilities?.includes("compress")
+          ) {
+            entry = {
+              kind: "caveman-engine",
+              version: parsed.version
+                ? String(parsed.version).replace(/^(bin-)?v/i, "")
+                : null,
+            };
+          }
+        } catch {
+          /* ignore malformed json */
         }
-      } catch {
-        /* ignore malformed json */
       }
     }
-  }
 
-  probeCache.set(cacheKey, entry);
-  return entry;
+    probeCache.set(cacheKey, entry);
+    return entry;
+  });
 }
 
 export function resolveToolBinary(
@@ -371,10 +375,10 @@ export function resolveToolBinary(
   return { resolvedPath: null, source: "missing" };
 }
 
-export function probeTool(
+export async function probeTool(
   tool: CompressorToolId,
   configuredPath: string | null | undefined,
-): ToolStatus {
+): Promise<ToolStatus> {
   const meta = TOOL_META[tool];
   const managed = managedBinaryPath(tool);
   const { resolvedPath, source } = resolveToolBinary(tool, configuredPath);
@@ -389,7 +393,7 @@ export function probeTool(
     } catch {
       sizeBytes = null;
     }
-    const probed = detectBinaryKind(tool, resolvedPath);
+    const probed = await detectBinaryKind(tool, resolvedPath);
     kind = probed.kind;
     version = probed.version;
   }
@@ -513,12 +517,19 @@ function sha256Hex(buf: Uint8Array): string {
 }
 
 function findFileRecursive(dir: string, targetNames: string[]): string | null {
+  const rootResolved = path.resolve(dir);
   const wanted = new Set(targetNames.map((n) => n.toLowerCase()));
-  const entries = readdirSync(dir, { withFileTypes: true });
+  const entries = readdirSync(rootResolved, { withFileTypes: true });
   for (const entry of entries) {
-    const full = path.join(dir, entry.name);
+    if (entry.isSymbolicLink()) continue;
+    const full = path.resolve(rootResolved, entry.name);
+    if (!full.startsWith(rootResolved + path.sep)) continue;
     if (entry.isFile() && wanted.has(entry.name.toLowerCase())) {
-      return full;
+      try {
+        if (!lstatSync(full).isSymbolicLink()) return full;
+      } catch {
+        /* skip */
+      }
     }
     if (entry.isDirectory()) {
       const nested = findFileRecursive(full, targetNames);
@@ -526,45 +537,6 @@ function findFileRecursive(dir: string, targetNames: string[]): string | null {
     }
   }
   return null;
-}
-
-function extractArchive(archivePath: string, destDir: string): void {
-  const tarArgs = archivePath.endsWith(".zip")
-    ? ["-xf", archivePath, "-C", destDir]
-    : ["-xzf", archivePath, "-C", destDir];
-  const res = spawnSync("tar", tarArgs, {
-    stdio: ["ignore", "pipe", "pipe"],
-    encoding: "utf8",
-    timeout: 30_000,
-    windowsHide: true,
-  });
-  if (res.status === 0) return;
-
-  if (process.platform === "win32" && archivePath.endsWith(".zip")) {
-    const ps = spawnSync(
-      "powershell",
-      [
-        "-NoProfile",
-        "-NonInteractive",
-        "-Command",
-        `Expand-Archive -LiteralPath '${archivePath.replace(/'/g, "''")}' -DestinationPath '${destDir.replace(/'/g, "''")}' -Force`,
-      ],
-      {
-        stdio: ["ignore", "pipe", "pipe"],
-        encoding: "utf8",
-        timeout: 30_000,
-        windowsHide: true,
-      },
-    );
-    if (ps.status === 0) return;
-    throw new Error(
-      `Failed to extract archive: ${(ps.stderr ?? "").trim() || "Expand-Archive failed"}`,
-    );
-  }
-
-  throw new Error(
-    `Failed to extract archive: ${(res.stderr ?? "").trim() || `tar exited ${res.status}`}`,
-  );
 }
 
 export function extractTagFromRedirect(location: string | null): string | null {
@@ -672,7 +644,22 @@ function directReleaseDownloadUrl(
  */
 export async function downloadTool(
   tool: CompressorToolId,
+  opts: { force?: boolean } = {},
 ): Promise<DownloadToolResult> {
+  return await singleflight(`download:compressor:${tool}`, () =>
+    downloadToolImpl(tool, opts),
+  );
+}
+
+function normalizeVer(raw: string | null | undefined): string {
+  return (raw ?? "").trim().replace(/^(bin-)?v/i, "").toLowerCase();
+}
+
+async function downloadToolImpl(
+  tool: CompressorToolId,
+  opts: { force?: boolean } = {},
+): Promise<DownloadToolResult> {
+  const progressKey = `compressor:${tool}`;
   const candidates =
     tool === "rtk"
       ? selectRtkAssetCandidates()
@@ -690,82 +677,164 @@ export async function downloadTool(
       ? process.env.UNIROUTE_RTK_DOWNLOAD_URL?.trim()
       : process.env.UNIROUTE_CAVEMAN_DOWNLOAD_URL?.trim();
 
+  const destDir = toolsDir();
+  mkdirSync(destDir, { recursive: true });
+  const targetPath = managedBinaryPath(tool);
+
   let tag = "custom";
   let matchedAssetName = candidates[0]!;
-  let bytes: Uint8Array | null = null;
+  let actualSha = "";
+  let downloadedFilePath = "";
+  let checksumVerified = false;
   let lastStatus = 0;
 
-  if (customUrl) {
-    const res = await fetch(customUrl, { headers, redirect: "follow" });
-    if (!res.ok) {
-      throw new Error(`Failed to download from custom URL (HTTP ${res.status}).`);
-    }
-    bytes = new Uint8Array(await res.arrayBuffer());
-    matchedAssetName = path.basename(new URL(customUrl).pathname) || matchedAssetName;
-  } else {
-    tag = await resolveLatestTagNoApi(tool);
-    for (const candidate of candidates) {
-      const url = directReleaseDownloadUrl(tool, tag, candidate);
-      const res = await fetch(url, { headers, redirect: "follow" });
-      lastStatus = res.status;
-      if (res.ok) {
-        bytes = new Uint8Array(await res.arrayBuffer());
-        matchedAssetName = candidate;
-        break;
+  setDownloadProgress(progressKey, {
+    status: "resolving",
+    bytesDownloaded: 0,
+    totalBytes: null,
+    percent: null,
+  });
+
+  const tmpDir = mkdtempSync(path.join(destDir, `.dl-${tool}-`));
+
+  try {
+    if (customUrl) {
+      matchedAssetName = path.basename(new URL(customUrl).pathname) || matchedAssetName;
+      const destFile = path.join(tmpDir, path.basename(matchedAssetName));
+      setDownloadProgress(progressKey, {
+        status: "downloading",
+        assetName: matchedAssetName,
+        bytesDownloaded: 0,
+        totalBytes: null,
+        percent: 0,
+      });
+      const dl = await streamDownloadToFile(
+        customUrl,
+        destFile,
+        headers,
+        256 * 1024 * 1024,
+        (bytesDownloaded, totalBytes) => {
+          setDownloadProgress(progressKey, {
+            status: "downloading",
+            assetName: matchedAssetName,
+            bytesDownloaded,
+            totalBytes,
+          });
+        },
+      );
+      if (!dl.ok) {
+        throw new Error(`Failed to download from custom URL (HTTP ${dl.status}).`);
+      }
+      actualSha = dl.sha256;
+      downloadedFilePath = destFile;
+    } else {
+      tag = await resolveLatestTagNoApi(tool);
+      if (!opts.force && existsSync(targetPath)) {
+        const current = await probeTool(tool, targetPath);
+        const curVer = normalizeVer(current.version);
+        const targetVer = normalizeVer(tag);
+        if (current.installed && curVer && targetVer && curVer === targetVer) {
+          setDownloadProgress(progressKey, {
+            status: "done",
+            bytesDownloaded: current.sizeBytes ?? 0,
+            totalBytes: current.sizeBytes ?? 0,
+            percent: 100,
+          });
+          return {
+            tool,
+            tag,
+            assetName: candidates[0]!,
+            binaryPath: targetPath,
+            version: current.version,
+            sha256: "",
+            checksumVerified: true,
+            sizeBytes: current.sizeBytes ?? statSync(targetPath).size,
+            upToDate: true,
+          };
+        }
+      }
+
+      for (const candidate of candidates) {
+        const url = directReleaseDownloadUrl(tool, tag, candidate);
+        const destFile = path.join(tmpDir, path.basename(candidate));
+        setDownloadProgress(progressKey, {
+          status: "downloading",
+          assetName: candidate,
+          bytesDownloaded: 0,
+          totalBytes: null,
+          percent: 0,
+        });
+        const dl = await streamDownloadToFile(
+          url,
+          destFile,
+          headers,
+          256 * 1024 * 1024,
+          (bytesDownloaded, totalBytes) => {
+            setDownloadProgress(progressKey, {
+              status: "downloading",
+              assetName: candidate,
+              bytesDownloaded,
+              totalBytes,
+            });
+          },
+        );
+        lastStatus = dl.status;
+        if (dl.ok) {
+          actualSha = dl.sha256;
+          downloadedFilePath = destFile;
+          matchedAssetName = candidate;
+          break;
+        }
+      }
+      if (!downloadedFilePath) {
+        throw new Error(
+          `Failed to download ${tool} (${tag}, tried ${candidates.join(", ")}, last HTTP ${lastStatus}).`,
+        );
       }
     }
-    if (!bytes) {
-      throw new Error(
-        `Failed to download ${tool} (${tag}, tried ${candidates.join(", ")}, last HTTP ${lastStatus}).`,
-      );
-    }
-  }
 
-  const actualSha = sha256Hex(bytes);
-
-  let checksumVerified = false;
-  if (!customUrl) {
-    try {
+    if (!customUrl) {
+      setDownloadProgress(progressKey, { status: "verifying" });
+      const requireChecksum =
+        tool === "rtk" && process.env.UNIROUTE_ALLOW_UNVERIFIED_DOWNLOAD !== "1";
       const csUrl = directReleaseDownloadUrl(tool, tag, "checksums.txt");
-      const csRes = await fetch(csUrl, { headers, redirect: "follow" });
+      const csRes = await fetch(csUrl, {
+        headers,
+        redirect: "follow",
+        signal: AbortSignal.timeout(15_000),
+      });
       if (csRes.ok) {
         const expected = parseChecksumForAsset(
           await csRes.text(),
           matchedAssetName,
         );
-        if (expected) {
-          if (expected !== actualSha) {
-            throw new Error(
-              `SHA-256 mismatch for ${matchedAssetName} (expected ${expected.slice(0, 12)}..., got ${actualSha.slice(0, 12)}...). Download aborted.`,
-            );
-          }
-          checksumVerified = true;
+        if (!expected) {
+          throw new Error(
+            `Checksum entry missing for ${matchedAssetName} in ${tag}. Download aborted.`,
+          );
         }
+        if (expected !== actualSha) {
+          throw new Error(
+            `SHA-256 mismatch for ${matchedAssetName} (expected ${expected.slice(0, 12)}..., got ${actualSha.slice(0, 12)}...). Download aborted.`,
+          );
+        }
+        checksumVerified = true;
+      } else if (requireChecksum) {
+        throw new Error(
+          `Failed to download checksum manifest for ${tool} (${tag}, HTTP ${csRes.status}).`,
+        );
       }
-    } catch (err) {
-      if (err instanceof Error && err.message.startsWith("SHA-256 mismatch")) {
-        throw err;
-      }
-      /* checksum file unreachable — continue only if no mismatch */
     }
-  }
 
-  const destDir = toolsDir();
-  mkdirSync(destDir, { recursive: true });
-  const targetPath = managedBinaryPath(tool);
-  const tmpDir = mkdtempSync(path.join(destDir, `.dl-${tool}-`));
-
-  try {
     let sourceBinPath: string;
     if (
       matchedAssetName.endsWith(".zip") ||
       matchedAssetName.endsWith(".tar.gz")
     ) {
-      const archivePath = path.join(tmpDir, matchedAssetName);
-      writeFileSync(archivePath, bytes);
+      setDownloadProgress(progressKey, { status: "extracting" });
       const extractDir = path.join(tmpDir, "extract");
       mkdirSync(extractDir, { recursive: true });
-      extractArchive(archivePath, extractDir);
+      await extractArchiveIsolated(downloadedFilePath, extractDir);
       const wanted =
         process.platform === "win32"
           ? [TOOL_META[tool].managedWinName, TOOL_META[tool].managedPosixName]
@@ -778,8 +847,7 @@ export async function downloadTool(
       }
       sourceBinPath = found;
     } else {
-      sourceBinPath = path.join(tmpDir, path.basename(targetPath));
-      writeFileSync(sourceBinPath, bytes);
+      sourceBinPath = downloadedFilePath;
     }
 
     const staging = `${targetPath}.tmp-${process.pid}`;
@@ -788,17 +856,35 @@ export async function downloadTool(
       chmodSync(staging, 0o755);
     }
     renameSync(staging, targetPath);
+  } catch (err) {
+    setDownloadProgress(progressKey, {
+      status: "error",
+      message: err instanceof Error ? err.message : "Download failed.",
+    });
+    throw err;
   } finally {
     rmSync(tmpDir, { recursive: true, force: true });
   }
 
   clearProbeCache();
-  const probed = probeTool(tool, targetPath);
+  const probed = await probeTool(tool, targetPath);
   if (!probed.installed) {
+    setDownloadProgress(progressKey, {
+      status: "error",
+      message: `Could not verify binary at ${targetPath}.`,
+    });
     throw new Error(
       `Downloaded ${matchedAssetName}, but could not verify binary at ${targetPath}.`,
     );
   }
+
+  const sizeBytes = statSync(targetPath).size;
+  setDownloadProgress(progressKey, {
+    status: "done",
+    bytesDownloaded: sizeBytes,
+    totalBytes: sizeBytes,
+    percent: 100,
+  });
 
   return {
     tool,
@@ -808,7 +894,7 @@ export async function downloadTool(
     version: probed.version ?? tag.replace(/^(bin-)?v/i, ""),
     sha256: actualSha,
     checksumVerified,
-    sizeBytes: statSync(targetPath).size,
+    sizeBytes,
   };
 }
 

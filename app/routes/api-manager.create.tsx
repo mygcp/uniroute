@@ -6,7 +6,7 @@ import { KeyRound } from "lucide-react";
 export function meta() {
 	return [{ title: "Create API Key | UniRoute" }];
 }
-import { requireSession } from "../.server/auth";
+import { requireLoaderSession, requireSession } from "../.server/auth";
 import {
 	createClientKey,
 	type CreateClientKeyInput,
@@ -27,7 +27,8 @@ import { CopyButton } from "../components/ui/copy-button";
 import { TagInput } from "../components/ui/tag-input";
 import { useToast } from "../components/ui/toast";
 
-export function loader() {
+export function loader({ request }: Route.LoaderArgs) {
+	requireLoaderSession(request);
 	return {
 		modelSuggestions: getModelSuggestions(),
 		providerSuggestions: getProviderSuggestions(),

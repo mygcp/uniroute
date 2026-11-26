@@ -6,6 +6,10 @@ import type {
 } from "./canonical";
 import { parseFrame, tokenizeSse } from "./parse-stream";
 
+const ENCODER = new TextEncoder();
+const EMPTY_BYTES = new Uint8Array(0);
+const DONE_BYTES = ENCODER.encode("data: [DONE]\n\n");
+
 function randomId(prefix: string): string {
   const bytes = crypto.getRandomValues(new Uint8Array(8));
   const hex = Array.from(bytes)
@@ -21,10 +25,11 @@ function frame(body: string, event?: string): string {
 export function createEventFormatter(
   clientFormat: ClientFormat,
 ): (ev: CanonicalStreamEvent) => string | null {
-  const responseId = randomId("resp_");
-  const itemId = randomId("msg_");
-  const reasonId = randomId("rs_");
-  const toolItemId = randomId("fc_");
+  const needResponsesIds = clientFormat === "openai-responses";
+  const responseId = needResponsesIds ? randomId("resp_") : "";
+  const itemId = needResponsesIds ? randomId("msg_") : "";
+  const reasonId = needResponsesIds ? randomId("rs_") : "";
+  const toolItemId = needResponsesIds ? randomId("fc_") : "";
   let blockIndex = 0;
   let thinkingBlockIndex: number | null = null;
   let finished = false;
@@ -345,19 +350,6 @@ export function formatEvent(
   return createEventFormatter(clientFormat)(ev);
 }
 
-function countTokensFor(clientFormat: ClientFormat, text: string): number {
-  const re =
-    clientFormat === "anthropic"
-      ? /"text":"((?:[^"\\]|\\.)*)"/g
-      : /"content":"((?:[^"\\]|\\.)*)"/g;
-  let tokens = 0;
-  let match: RegExpExecArray | null;
-  while ((match = re.exec(text)) !== null) {
-    tokens += Math.max(1, Math.ceil(match[1].length / 4));
-  }
-  return tokens;
-}
-
 export function composeStreamTransformer(
   providerFormat: ProviderFormat,
   clientFormat: ClientFormat,
@@ -368,28 +360,30 @@ export function composeStreamTransformer(
   let sawFinish = false;
   let startPrompt: number | null = null;
   let startCached: number | null = null;
+  let lastChunkTokens = 0;
   let lastUsage: {
     prompt_tokens: number;
     completion_tokens: number;
     cached_tokens?: number;
   } | null = null;
-  const enc = new TextEncoder();
-  // Decoder milik instance ini — aman untuk banyak stream paralel.
   const dec = new TextDecoder();
 
-  const process = (input: Uint8Array, rest: string): { out: string; rest: string } => {
+  const process = (input: Uint8Array, rest: string): { out: string; rest: string; tokens: number } => {
     const { frames, rest: r } = tokenizeSse(input, rest, dec);
     let out = "";
+    let tokens = 0;
     for (const frameText of frames) {
       const ev = parseFrame(providerFormat, frameText);
       if (!ev) continue;
-      // Delta teks kosong membawa nol informasi — jangan diformat/dikirim.
-      // Upstream tertentu mengirim puluhan frame ini per stream.
       if (ev.type === "content_delta" && ev.text === "") continue;
       if (ev.type === "reasoning_delta" && ev.text === "") continue;
+      if (ev.type === "content_delta" || ev.type === "reasoning_delta") {
+        tokens += Math.max(1, Math.ceil(ev.text.length / 4));
+      } else if (ev.type === "tool_calls_delta" && ev.arguments) {
+        tokens += Math.max(1, Math.ceil(ev.arguments.length / 4));
+      }
       if (ev.type === "done") streamDone = true;
       if (ev.type === "finish" && ev.finish_reason !== "") sawFinish = true;
-      // Kumpulkan usage dari seluruh aliran:
       if (ev.type === "message_start" && ev.usage) {
         startPrompt = ev.usage.prompt_tokens;
         startCached = ev.usage.cached_tokens ?? null;
@@ -399,7 +393,7 @@ export function composeStreamTransformer(
           lastUsage = {
             prompt_tokens: ev.usage.prompt_tokens ?? startPrompt ?? 0,
             completion_tokens: ev.usage.completion_tokens ?? 0,
-            ...( (ev.usage.cached_tokens ?? startCached) != null
+            ...((ev.usage.cached_tokens ?? startCached) != null
               ? { cached_tokens: ev.usage.cached_tokens ?? startCached! }
               : {}),
           };
@@ -411,43 +405,42 @@ export function composeStreamTransformer(
           };
         }
       }
-      // Finish sentinel khusus-usage (finish_reason kosong dari chunk
-      // usage-only OpenAI): usage sudah dicatat di atas, jangan diformat.
       if (ev.type === "finish" && ev.finish_reason === "") continue;
       const s = format(ev);
       if (s) out += s;
     }
-    return { out, rest: r };
+    return { out, rest: r, tokens };
   };
 
   return {
     transform(chunk: Uint8Array): Uint8Array {
-      const { out, rest } = process(chunk, pending);
+      const { out, rest, tokens } = process(chunk, pending);
       pending = rest;
-      if (out === "") return enc.encode("");
-      return enc.encode(out);
+      lastChunkTokens = tokens;
+      if (out === "") return EMPTY_BYTES;
+      return ENCODER.encode(out);
     },
-    /**
-     * Versi hemat: hasil bytes + teks ter-dekode dalam satu kali decode —
-     * executor memakai ini agar tidak mendekode ulang untuk hitung token.
-     */
     transformChunk(
       chunk: Uint8Array,
     ): { out: Uint8Array; text: string } {
-      const { out, rest } = process(chunk, pending);
+      const { out, rest, tokens } = process(chunk, pending);
       pending = rest;
+      lastChunkTokens = tokens;
       return {
-        out: out === "" ? enc.encode("") : enc.encode(out),
+        out: out === "" ? EMPTY_BYTES : ENCODER.encode(out),
         text: out,
       };
     },
     flush(): Uint8Array {
-      const { out, rest } = process(new Uint8Array(0), pending);
+      const { out, rest, tokens } = process(EMPTY_BYTES, pending);
       pending = rest;
-      return out === "" ? enc.encode("") : enc.encode(out);
+      lastChunkTokens = tokens;
+      return out === "" ? EMPTY_BYTES : ENCODER.encode(out);
     },
-    countTokens(text: string): number {
-      return countTokensFor(clientFormat, text);
+    countTokens(): number {
+      const n = lastChunkTokens;
+      lastChunkTokens = 0;
+      return n;
     },
     done(): boolean {
       return streamDone || sawFinish;
@@ -456,14 +449,10 @@ export function composeStreamTransformer(
       return lastUsage;
     },
     terminate(): Uint8Array {
-      // EOF bersih: sintesis sentinel seperti dulu (kompatibel dengan
-      // upstream yang lupa mengirim [DONE]). Kasus putus tengah jalan
-      // terdeteksi lewat read-error upstream → marker upstream_disconnect
-      // dari executor, bukan dari sini.
-      if (streamDone) return enc.encode("");
-      if (clientFormat === "openai-responses") return enc.encode("");
-      if (clientFormat === "openai-chat") return enc.encode("data: [DONE]\n\n");
-      return enc.encode(
+      if (streamDone) return EMPTY_BYTES;
+      if (clientFormat === "openai-responses") return EMPTY_BYTES;
+      if (clientFormat === "openai-chat") return DONE_BYTES;
+      return ENCODER.encode(
         frame(JSON.stringify({ type: "message_stop" }), "message_stop"),
       );
     },

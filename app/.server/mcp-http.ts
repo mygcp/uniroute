@@ -1,24 +1,24 @@
-import { randomBytes, timingSafeEqual } from "node:crypto";
+import { randomBytes } from "node:crypto";
+import { createLimiter } from "./async-utils";
+import { timingSafeStringEqual } from "./auth";
 import { query } from "./db";
+import { getCachedSetting, setCachedSetting } from "./settings-cache";
 import { TOOLS, executeTool } from "./mcp-tools";
 
 const KEY_ENABLED = "mcp_http_enabled";
 const KEY_TOKEN = "mcp_http_token";
 const KEY_REQUIRE_AUTH = "mcp_http_require_auth";
+const MAX_BATCH_REQUESTS = 20;
+const batchLimiter = createLimiter(6);
 
 export const MCP_SERVER_INFO = { name: "uniroute", version: "1.2.0" };
 
 function getSetting(key: string): string | null {
-  const row = query("SELECT value FROM settings WHERE key = ?").get(key) as
-    | { value?: string }
-    | undefined;
-  return row?.value ?? null;
+  return getCachedSetting(key);
 }
 
 function setSetting(key: string, value: string): void {
-  query(
-    "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-  ).run(key, value);
+  setCachedSetting(key, value);
 }
 
 function generateToken(): string {
@@ -184,21 +184,32 @@ export async function processMcpRpcMessage(
 
 /* -------------------------- HTTP Transport (/api/mcp) ---------------------- */
 
-function corsHeaders(): Record<string, string> {
-  return {
-    "Access-Control-Allow-Origin": "*",
+function corsHeaders(request?: Request): Record<string, string> {
+  const headers: Record<string, string> = {
     "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
     "Access-Control-Allow-Headers":
       "Authorization, Content-Type, Accept, Mcp-Session-Id, X-MCP-Token",
     "Cache-Control": "no-store",
+    "X-Content-Type-Options": "nosniff",
   };
+  const allowedOrigin = process.env.MCP_CORS_ORIGIN?.trim();
+  if (allowedOrigin) {
+    const reqOrigin = request?.headers.get("origin")?.trim();
+    if (allowedOrigin === "*") {
+      headers["Access-Control-Allow-Origin"] = "*";
+    } else if (reqOrigin) {
+      const list = allowedOrigin.split(",").map((s) => s.trim()).filter(Boolean);
+      if (list.includes(reqOrigin)) {
+        headers["Access-Control-Allow-Origin"] = reqOrigin;
+        headers["Vary"] = "Origin";
+      }
+    }
+  }
+  return headers;
 }
 
 function safeEqual(a: string, b: string): boolean {
-  const bufA = Buffer.from(a, "utf8");
-  const bufB = Buffer.from(b, "utf8");
-  if (bufA.length !== bufB.length) return false;
-  return timingSafeEqual(bufA, bufB);
+  return timingSafeStringEqual(a, b);
 }
 
 function isAuthorized(request: Request): boolean {
@@ -217,7 +228,7 @@ function isAuthorized(request: Request): boolean {
 export async function handleMcpHttpRequest(
   request: Request,
 ): Promise<Response> {
-  const headers = corsHeaders();
+  const headers = corsHeaders(request);
 
   if (request.method === "OPTIONS") {
     return new Response(null, { status: 204, headers });
@@ -287,17 +298,29 @@ export async function handleMcpHttpRequest(
     );
   }
 
-  const sessionHeader =
-    request.headers.get("mcp-session-id") || "uniroute-stateless";
+  const rawSessionHeader = request.headers.get("mcp-session-id") ?? "";
+  const sessionHeader = /^[A-Za-z0-9._-]{1,128}$/.test(rawSessionHeader)
+    ? rawSessionHeader
+    : "uniroute-stateless";
   const rpcHeaders = {
     ...headers,
     "Mcp-Session-Id": sessionHeader,
   };
 
   if (Array.isArray(body)) {
+    if (body.length > MAX_BATCH_REQUESTS) {
+      return Response.json(
+        {
+          jsonrpc: "2.0",
+          id: null,
+          error: { code: -32600, message: `Batch size exceeds limit of ${MAX_BATCH_REQUESTS}` },
+        },
+        { status: 400, headers: rpcHeaders },
+      );
+    }
     const results = (
       await Promise.all(
-        body.map((item) => processMcpRpcMessage(item as McpRpcRequest)),
+        body.map((item) => batchLimiter(() => processMcpRpcMessage(item as McpRpcRequest))),
       )
     ).filter((r): r is McpRpcResponse => r !== null);
     if (results.length === 0) {

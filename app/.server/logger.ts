@@ -1,5 +1,5 @@
-import { exec, query } from "./db";
-import { broadcast } from "./log-stream";
+import { exec, onBeforeRead, onDbReset, onShutdownFlush, query } from "./db";
+import { broadcast, hasSubscribers } from "./log-stream";
 
 export type RequestLog = {
   model: string;
@@ -11,15 +11,11 @@ export type RequestLog = {
   error_message?: string | null;
   prompt_tokens?: number | null;
   completion_tokens?: number | null;
-  /** Token yang dilayani dari cache provider (subset input). */
   cached_tokens?: number | null;
   api_key_id?: number | null;
-  /** 1 = lewat outbound proxy, 0 = direct. */
   via_proxy?: number | null;
   proxy_id?: number | null;
-  /** Jenis endpoint: chat-completions | messages | responses | combo. */
   endpoint?: string | null;
-  /** 1 = koneksi upstream memakai https. */
   upstream_tls?: number | null;
 };
 
@@ -42,85 +38,99 @@ type InsertedLog = {
   type: "request" | "proxy";
   log: RequestLog | ProxyLog;
   id: number;
-  /** Timestamp yang benar-benar disimpan ke DB (dipakai ulang saat broadcast). */
   created_at: number;
 };
+
+const MAX_QUEUE_SIZE = 10_000;
+const BATCH_FLUSH_COUNT = 64;
+const BATCH_FLUSH_MS = 50;
 
 const requestQueue: RequestLog[] = [];
 const proxyQueue: ProxyLog[] = [];
 let flushing = false;
+let flushTimer: ReturnType<typeof setTimeout> | null = null;
 
-/**
- * Wirte queued logs to the DB and return what was inserted (with real ids).
- * Logs are written BEFORE being broadcast so live events carry a usable id
- * (delete / detail views depend on it).
- */
 function flushInserted(): InsertedLog[] {
-  if (flushing) return [];
+  if (flushTimer) {
+    clearTimeout(flushTimer);
+    flushTimer = null;
+  }
+  if (flushing || (requestQueue.length === 0 && proxyQueue.length === 0)) {
+    return [];
+  }
   flushing = true;
   const inserted: InsertedLog[] = [];
+  const needEvents = hasSubscribers();
   try {
     exec("BEGIN");
     try {
-      const insertReq = query(
-        `INSERT INTO request_logs
-           (model, provider_id, strategy_used, rule_applied, duration_ms, status, error_message, prompt_tokens, completion_tokens, api_key_id, created_at, via_proxy, proxy_id, endpoint, upstream_tls, cached_tokens)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      );
-      for (const log of requestQueue.splice(0)) {
-        const createdAt = Date.now();
-        const res = insertReq.run(
-          log.model,
-          log.provider_id,
-          log.strategy_used ?? null,
-          log.rule_applied ?? null,
-          log.duration_ms ?? null,
-          log.status,
-          log.error_message ?? null,
-          log.prompt_tokens ?? null,
-          log.completion_tokens ?? null,
-          log.api_key_id ?? null,
-          createdAt,
-          log.via_proxy ?? 0,
-          log.proxy_id ?? null,
-          log.endpoint ?? null,
-          log.upstream_tls ?? null,
-          log.cached_tokens ?? null,
-        ) as InsertResult;
-        inserted.push({
-          type: "request",
-          log,
-          id: Number(res.lastInsertRowid),
-          created_at: createdAt,
-        });
+      if (requestQueue.length > 0) {
+        const insertReq = query(
+          `INSERT INTO request_logs
+             (model, provider_id, strategy_used, rule_applied, duration_ms, status, error_message, prompt_tokens, completion_tokens, api_key_id, created_at, via_proxy, proxy_id, endpoint, upstream_tls, cached_tokens)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        );
+        for (const log of requestQueue.splice(0)) {
+          const createdAt = Date.now();
+          const res = insertReq.run(
+            log.model,
+            log.provider_id,
+            log.strategy_used ?? null,
+            log.rule_applied ?? null,
+            log.duration_ms ?? null,
+            log.status,
+            log.error_message ?? null,
+            log.prompt_tokens ?? null,
+            log.completion_tokens ?? null,
+            log.api_key_id ?? null,
+            createdAt,
+            log.via_proxy ?? 0,
+            log.proxy_id ?? null,
+            log.endpoint ?? null,
+            log.upstream_tls ?? null,
+            log.cached_tokens ?? null,
+          ) as InsertResult;
+          if (needEvents) {
+            inserted.push({
+              type: "request",
+              log,
+              id: Number(res.lastInsertRowid),
+              created_at: createdAt,
+            });
+          }
+        }
       }
 
-      const insertProxy = query(
-        `INSERT INTO proxy_logs
-           (level, source, message, metadata, created_at, client_ip, api_key_id, provider_id, proxy_id, latency_ms, endpoint)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      );
-      for (const log of proxyQueue.splice(0)) {
-        const createdAt = Date.now();
-        const res = insertProxy.run(
-          log.level,
-          log.source,
-          log.message,
-          log.metadata ? JSON.stringify(log.metadata) : null,
-          createdAt,
-          log.client_ip ?? null,
-          log.api_key_id ?? null,
-          log.provider_id ?? null,
-          log.proxy_id ?? null,
-          log.latency_ms ?? null,
-          log.endpoint ?? null,
-        ) as InsertResult;
-        inserted.push({
-          type: "proxy",
-          log,
-          id: Number(res.lastInsertRowid),
-          created_at: createdAt,
-        });
+      if (proxyQueue.length > 0) {
+        const insertProxy = query(
+          `INSERT INTO proxy_logs
+             (level, source, message, metadata, created_at, client_ip, api_key_id, provider_id, proxy_id, latency_ms, endpoint)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        );
+        for (const log of proxyQueue.splice(0)) {
+          const createdAt = Date.now();
+          const res = insertProxy.run(
+            log.level,
+            log.source,
+            log.message,
+            log.metadata ? JSON.stringify(log.metadata) : null,
+            createdAt,
+            log.client_ip ?? null,
+            log.api_key_id ?? null,
+            log.provider_id ?? null,
+            log.proxy_id ?? null,
+            log.latency_ms ?? null,
+            log.endpoint ?? null,
+          ) as InsertResult;
+          if (needEvents) {
+            inserted.push({
+              type: "proxy",
+              log,
+              id: Number(res.lastInsertRowid),
+              created_at: createdAt,
+            });
+          }
+        }
       }
       exec("COMMIT");
     } catch (e) {
@@ -140,17 +150,46 @@ function flushAndBroadcast(): void {
   }
 }
 
+function scheduleFlush(): void {
+  if (requestQueue.length + proxyQueue.length >= BATCH_FLUSH_COUNT) {
+    flushAndBroadcast();
+    return;
+  }
+  if (!flushTimer) {
+    flushTimer = setTimeout(flushAndBroadcast, BATCH_FLUSH_MS);
+    flushTimer.unref?.();
+  }
+}
+
+onBeforeRead("request_logs", flushAndBroadcast);
+onBeforeRead("proxy_logs", flushAndBroadcast);
+onDbReset(() => {
+  requestQueue.length = 0;
+  proxyQueue.length = 0;
+  if (flushTimer) {
+    clearTimeout(flushTimer);
+    flushTimer = null;
+  }
+});
+
 export function recordRequestLog(log: RequestLog): void {
+  if (requestQueue.length >= MAX_QUEUE_SIZE) {
+    requestQueue.shift();
+  }
   requestQueue.push(log);
-  queueMicrotask(flushAndBroadcast);
+  scheduleFlush();
 }
 
 export function recordProxyLog(log: ProxyLog): void {
+  if (proxyQueue.length >= MAX_QUEUE_SIZE) {
+    proxyQueue.shift();
+  }
   proxyQueue.push(log);
-  queueMicrotask(flushAndBroadcast);
+  scheduleFlush();
 }
 
-/** Drain queued logs synchronously — dipanggil saat graceful shutdown. */
 export function flushLogs(): void {
   flushInserted();
 }
+
+onShutdownFlush(flushLogs);

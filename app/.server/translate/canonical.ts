@@ -106,3 +106,57 @@ export function messageText(message: CanonicalMessage): string | null {
   }
   return null;
 }
+
+export function extractMessageTextAll(message: CanonicalMessage): string {
+  if (typeof message.content === "string") return message.content;
+  if (!Array.isArray(message.content)) return "";
+  let out = "";
+  for (const part of message.content) {
+    if (part.type === "text" && part.text) {
+      out += (out ? "\n" : "") + part.text;
+    }
+  }
+  return out;
+}
+
+const RESERVED_EXTRA_KEYS = new Set([
+  "model",
+  "messages",
+  "system",
+  "contents",
+  "systemInstruction",
+  "generationConfig",
+  "stream",
+  "tools",
+  "tool_choice",
+  "max_tokens",
+  "max_completion_tokens",
+  "max_output_tokens",
+  "input",
+  "instructions",
+  "temperature",
+  "top_p",
+  "stop",
+  "stop_sequences",
+  "__proto__",
+  "constructor",
+  "prototype",
+]);
+
+export function sanitizeExtra(
+  extra: Record<string, unknown> | undefined,
+): Record<string, unknown> {
+  if (!extra) return {};
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(extra)) {
+    if (RESERVED_EXTRA_KEYS.has(k) || v === undefined) continue;
+    if (k === "n") {
+      if (typeof v === "number" && Number.isFinite(v)) {
+        out.n = Math.min(8, Math.max(1, Math.floor(v)));
+      }
+      continue;
+    }
+    out[k] = v;
+  }
+  return out;
+}

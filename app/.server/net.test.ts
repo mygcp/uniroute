@@ -62,4 +62,13 @@ describe("ipInList", () => {
     expect(ipInList("not-an-ip", list)).toBe(false);
     expect(() => ipInList("not-an-ip", list)).not.toThrow();
   });
+
+  test("matches IPv6 CIDRs and IPv4-mapped IPv6 addresses", () => {
+    expect(ipInCidr("2001:db8:1::42", "2001:db8::/32")).toBe(true);
+    expect(ipInCidr("2001:db9::1", "2001:db8::/32")).toBe(false);
+    expect(ipInCidr("::1", "::1/128")).toBe(true);
+    expect(ipInCidr("::2", "::/0")).toBe(true);
+    expect(ipInCidr("::ffff:192.168.1.50", "192.168.1.0/24")).toBe(true);
+    expect(ipInCidr("192.168.1.50", "::ffff:192.168.1.0/24")).toBe(true);
+  });
 });

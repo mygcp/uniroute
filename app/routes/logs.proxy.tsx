@@ -2,6 +2,7 @@ import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useSta
 import { useFetcher } from "react-router";
 import { ChevronDown, ChevronRight, Clock, FolderOpen, Globe, KeyRound, Trash2 } from "lucide-react";
 import type { Route } from "./+types/logs.proxy";
+import { requireLoaderSession } from "../.server/auth";
 import { query } from "../.server/db";
 import { Combobox } from "../components/ui/combobox";
 import {
@@ -33,7 +34,8 @@ export function meta() {
   return [{ title: "Proxy Logs | UniRoute" }];
 }
 
-export function loader() {
+export function loader({ request }: Route.LoaderArgs) {
+  requireLoaderSession(request);
   const rows = query(
     `SELECT ${COLS} FROM proxy_logs l
        LEFT JOIN client_api_keys k ON k.id = l.api_key_id

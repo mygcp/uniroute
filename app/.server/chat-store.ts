@@ -1,4 +1,4 @@
-import { query } from "./db";
+import { exec, query } from "./db";
 
 /**
  * Penyimpanan chat playground — tabel terpisah di SQLite yang sama
@@ -109,7 +109,6 @@ function appendMessages(
   touch(sessionId);
 }
 
-/** Simpan ulang seluruh percakapan (strategi replace sederhana). */
 export function saveSession(
   providerId: string,
   sessionId: number | null,
@@ -117,17 +116,24 @@ export function saveSession(
   model: string | null,
   msgs: AppendInput[],
 ): { sessionId: number } {
-  let id = sessionId ?? 0;
-  if (id && getSession(id)) {
-    query("DELETE FROM chat_messages WHERE session_id = ?").run(id);
-    query(
-      "UPDATE chat_sessions SET title = ?, model = ?, updated_at = unixepoch() WHERE id = ?",
-    ).run(title.slice(0, 120), model, id);
-  } else {
-    id = createSession(providerId, title, model);
+  exec("BEGIN");
+  try {
+    let id = sessionId ?? 0;
+    if (id && getSession(id)) {
+      query("DELETE FROM chat_messages WHERE session_id = ?").run(id);
+      query(
+        "UPDATE chat_sessions SET title = ?, model = ?, updated_at = unixepoch() WHERE id = ?",
+      ).run(title.slice(0, 120), model, id);
+    } else {
+      id = createSession(providerId, title, model);
+    }
+    appendMessages(id, msgs);
+    exec("COMMIT");
+    return { sessionId: id };
+  } catch (err) {
+    exec("ROLLBACK");
+    throw err;
   }
-  appendMessages(id, msgs);
-  return { sessionId: id };
 }
 
 export function deleteSession(id: number): void {

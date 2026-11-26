@@ -25,6 +25,7 @@ import {
   type TunnelStateStatus,
 } from "../lib/tunnel-options";
 import { query } from "./db";
+import { isLoopbackHost } from "./ssrf";
 import { resolveTunnelBinary } from "./tunnel-tools";
 
 const SETTINGS_KEY = "tunnel_settings";
@@ -64,6 +65,7 @@ export type ParsedTunnelOutput = {
   publicUrl?: string;
   connected?: boolean;
   error?: string;
+  fatal?: boolean;
 };
 
 type TunnelRuntimeInternal = {
@@ -138,6 +140,12 @@ export function normalizeLocalHost(raw: string): string {
   if (!/^[a-zA-Z0-9._:-]+$/.test(s)) {
     throw new Error(`Invalid local host "${s}".`);
   }
+  if (
+    !isLoopbackHost(s) &&
+    process.env.UNIROUTE_ALLOW_NONLOOPBACK_TUNNEL !== "1"
+  ) {
+    throw new Error(`Local host "${s}" must be a loopback address.`);
+  }
   return s;
 }
 
@@ -175,12 +183,14 @@ export async function resolveReachableLocalHost(
   else if (host.toLowerCase() === "localhost") candidates = ["127.0.0.1", "::1"];
 
   if (!candidates) return host;
-  for (const candidate of candidates) {
-    if (await canConnectTcp(candidate, port, timeoutMs)) {
-      return candidate;
-    }
-  }
-  return host;
+  const results = await Promise.all(
+    candidates.map(async (candidate) => ({
+      candidate,
+      ok: await canConnectTcp(candidate, port, timeoutMs),
+    })),
+  );
+  const hit = results.find((r) => r.ok);
+  return hit ? hit.candidate : host;
 }
 
 function normalizeHostToken(raw: string, fieldLabel: string): string {
@@ -369,6 +379,17 @@ export function saveTunnelSettings(patch: TunnelSettingsPatch): TunnelSettings {
   query(
     "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
   ).run(SETTINGS_KEY, JSON.stringify(next));
+
+  const rt = getRuntime();
+  if (
+    next.provider !== current.provider ||
+    next.ngrok_authtoken !== current.ngrok_authtoken
+  ) {
+    rt.lastError = null;
+    if (rt.status === "error") {
+      rt.status = "stopped";
+    }
+  }
 
   return next;
 }
@@ -590,6 +611,13 @@ export function parseTunnelOutputLine(
         }
         if (obj.lvl === "eror" || obj.lvl === "error" || typeof obj.err === "string") {
           const msg = String(obj.err || obj.msg || trimmed).trim();
+          if (/ERR_NGROK_4018|authentication failed/i.test(msg)) {
+            return {
+              error:
+                "ngrok requires an authtoken (ERR_NGROK_4018). Add your token below or switch to Cloudflared / Bore.",
+              fatal: true,
+            };
+          }
           return { error: msg };
         }
       } catch {
@@ -702,8 +730,12 @@ function isPidAlive(pid: number): boolean {
   }
 }
 
+const MISSING_DISK_CACHE_MS = 3_000;
+let lastMissingCheckAt = 0;
+
 function saveRuntimeToDisk(rt: TunnelRuntimeInternal): void {
   if (!canPersistRuntimeState() || !rt.pid) return;
+  lastMissingCheckAt = 0;
   try {
     const p = runtimeStatePath();
     mkdirSync(path.dirname(p), { recursive: true });
@@ -722,6 +754,7 @@ function saveRuntimeToDisk(rt: TunnelRuntimeInternal): void {
 
 function clearRuntimeOnDisk(): void {
   if (!canPersistRuntimeState()) return;
+  lastMissingCheckAt = Date.now();
   try {
     const p = runtimeStatePath();
     if (existsSync(p)) unlinkSync(p);
@@ -743,8 +776,14 @@ function hydrateRuntimeFromDisk(rt: TunnelRuntimeInternal): void {
   }
 
   if (rt.status !== "stopped" || !canPersistRuntimeState()) return;
+  const now = Date.now();
+  if (now - lastMissingCheckAt < MISSING_DISK_CACHE_MS) return;
+
   const p = runtimeStatePath();
-  if (!existsSync(p)) return;
+  if (!existsSync(p)) {
+    lastMissingCheckAt = now;
+    return;
+  }
   try {
     const raw = JSON.parse(readFileSync(p, "utf8")) as Partial<PersistedRuntimeState>;
     if (typeof raw.pid === "number" && isPidAlive(raw.pid)) {
@@ -778,10 +817,22 @@ function extractRequestOrigin(request?: Request): string {
   try {
     const url = new URL(request.url);
     const xfHost = request.headers.get("x-forwarded-host")?.split(",")[0]?.trim();
-    const xfProto = request.headers.get("x-forwarded-proto")?.split(",")[0]?.trim();
-    if (xfHost) {
-      const proto = xfProto || url.protocol.replace(/:$/, "");
-      return `${proto}://${xfHost}`.replace(/\/+$/, "");
+    const xfProtoRaw = request.headers
+      .get("x-forwarded-proto")
+      ?.split(",")[0]
+      ?.trim()
+      .toLowerCase();
+    if (xfHost && !/[\s/@\\?#]/.test(xfHost)) {
+      const proto =
+        xfProtoRaw === "http" || xfProtoRaw === "https"
+          ? xfProtoRaw
+          : url.protocol.replace(/:$/, "");
+      if (proto === "http" || proto === "https") {
+        const parsed = new URL(`${proto}://${xfHost}`);
+        if (parsed.host && parsed.pathname === "/") {
+          return parsed.origin.replace(/\/+$/, "");
+        }
+      }
     }
     return url.origin.replace(/\/+$/, "");
   } catch {
@@ -805,6 +856,15 @@ export function resolveGatewayOrigin(request?: Request): string {
 
 export function clearTunnelLogs(): void {
   getRuntime().logs = [];
+}
+
+export function clearTunnelError(): TunnelRuntimeStatus {
+  const rt = getRuntime();
+  rt.lastError = null;
+  if (rt.status === "error") {
+    rt.status = "stopped";
+  }
+  return getTunnelStatus();
 }
 
 export function getActiveTunnelUrl(): string | null {
@@ -846,6 +906,7 @@ export function stopTunnel(): TunnelRuntimeStatus {
   rt.publicUrl = null;
   rt.status = "stopped";
   rt.reconnectAttempts = 0;
+  rt.lastError = null;
   clearRuntimeOnDisk();
   killChildProcess(child);
   if (orphanPid) {
@@ -1003,6 +1064,7 @@ export async function startTunnel(opts?: {
   rt.pid = child.pid ?? null;
   saveRuntimeToDisk(rt);
 
+  let fatalError = false;
   let settleWait: (() => void) | null = null;
   const resolveWait = () => {
     if (settleWait) {
@@ -1042,6 +1104,9 @@ export async function startTunnel(opts?: {
         if (parsed.error) {
           rt.lastError = scrubSecrets(parsed.error, secrets);
         }
+        if (parsed.fatal) {
+          fatalError = true;
+        }
       }
     };
   };
@@ -1080,7 +1145,7 @@ export async function startTunnel(opts?: {
     resolveWait();
 
     const latest = getTunnelSettings();
-    if (latest.auto_reconnect) {
+    if (latest.auto_reconnect && !fatalError) {
       const attempt = rt.reconnectAttempts + 1;
       rt.reconnectAttempts = attempt;
       const delay =

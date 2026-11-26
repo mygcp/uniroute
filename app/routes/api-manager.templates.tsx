@@ -2,7 +2,7 @@ import { Form } from "react-router";
 import { useEffect, useRef } from "react";
 import type { Route } from "./+types/api-manager.templates";
 import { LayoutTemplate, Trash2 } from "lucide-react";
-import { requireSession } from "../.server/auth";
+import { requireLoaderSession, requireSession } from "../.server/auth";
 import {
 	listTemplates,
 	createTemplate,
@@ -21,7 +21,8 @@ export function meta() {
 	return [{ title: "API Key Templates | UniRoute" }];
 }
 
-export function loader() {
+export function loader({ request }: Route.LoaderArgs) {
+	requireLoaderSession(request);
 	return { templates: listTemplates() };
 }
 

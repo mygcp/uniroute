@@ -36,7 +36,7 @@ import { Input, Label, Select, Textarea } from "../components/ui/field";
 import { EmptyState } from "../components/ui/empty-state";
 import { useConfirm } from "../components/ui/confirm-dialog";
 import { useToast } from "../components/ui/toast";
-import { requireSession } from "../.server/auth";
+import { requireLoaderSession, requireSession } from "../.server/auth";
 import { query } from "../.server/db";
 
 type ProviderOption = { id: string; name: string };
@@ -44,7 +44,8 @@ type ModelOption = { model_name: string; provider_id: string };
 type AccountOption = { id: number; provider_id: string; label: string | null };
 type PoolOption = { id: number; name: string };
 
-export function loader() {
+export function loader({ request }: Route.LoaderArgs) {
+	requireLoaderSession(request);
 	const combos = listCombos();
 	const providers =
 		(query(

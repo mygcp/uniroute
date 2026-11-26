@@ -13,7 +13,7 @@ import {
   getPoolForProvider,
 } from "./outbound-proxy";
 import { testProviderConnection } from "./provider-test";
-import { getUsageData } from "./usage";
+import { getUsageData, getUsageSummaryOnly } from "./usage";
 import { getStats } from "./stats";
 import { handleProxy } from "./proxy-handler";
 import { createSession, SESSION_COOKIE } from "./auth";
@@ -29,8 +29,10 @@ function mcpAdminCookie(): string {
 }
 import {
   createClientKey,
+  getClientKeyById,
   listClientKeys,
   setClientKeyActive,
+  updateClientKey,
 } from "./client-key";
 import {
   addApiKey,
@@ -44,6 +46,11 @@ import {
   isEnabled as compressionEnabled,
   testCompression,
 } from "./compressor";
+import {
+  getPromptGuardSettings,
+  savePromptGuardSettings,
+  testPromptGuard,
+} from "./prompt-guard";
 import { checkAllowlist } from "./guard";
 import { evaluateRules } from "./rules";
 import { reload } from "./registry";
@@ -620,6 +627,36 @@ export const TOOLS: ToolDef[] = [
     description: "Stop the currently running public tunnel.",
     inputSchema: { type: "object", properties: {} },
   },
+  {
+    name: "get_prompt_guard",
+    description: "Get Prompt Guard filter configuration (off by default).",
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
+    name: "set_prompt_guard",
+    description: "Enable, disable, or configure Prompt Guard filter and system framing.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        enabled: { type: "boolean" },
+        mode: { type: "string", enum: ["block", "log_only"] },
+        scope: { type: "string", enum: ["user_and_tool", "all"] },
+        check_media: { type: "boolean" },
+        inject_system_guard: { type: "boolean" },
+        system_guard_prompt: { type: "string" },
+        custom_blocked_terms: { type: "array", items: { type: "string" } },
+      },
+    },
+  },
+  {
+    name: "test_prompt_guard",
+    description: "Evaluate a sample prompt against Prompt Guard rules.",
+    inputSchema: {
+      type: "object",
+      properties: { sample: { type: "string" } },
+      required: ["sample"],
+    },
+  },
 ];
 
 type ToolResult = unknown;
@@ -963,12 +1000,11 @@ const HANDLERS: Record<string, ToolHandler> = {
     )
       ? (args.range as "day")
       : "week";
-    const data = getUsageData({ range });
-    const s = data.summary;
+    const { summary: s, performance } = getUsageSummaryOnly(range);
     return {
       range,
-      requests: data.performance.requests,
-      success_rate: data.performance.successRate,
+      requests: performance.requests,
+      success_rate: performance.successRate,
       total_tokens: s.totalTokens,
       input_tokens: s.inputTokens,
       output_tokens: s.outputTokens,
@@ -1094,9 +1130,11 @@ const HANDLERS: Record<string, ToolHandler> = {
   },
 
   create_client_key(args) {
+    const usd = num(args.budget_usd_monthly);
     const created = createClientKey({
       name: str(args.name) || "MCP key",
       prefix: "sk-",
+      budget: usd > 0 ? { monthly: usd } : undefined,
     });
     return {
       ok: true,
@@ -1109,7 +1147,7 @@ const HANDLERS: Record<string, ToolHandler> = {
   toggle_client_key(args) {
     const id = num(args.id);
     const active = args.active === true;
-    const key = listClientKeys().find((k) => k.id === id);
+    const key = getClientKeyById(id);
     if (!key) return { ok: false, error: "key not found" };
     setClientKeyActive(id, active);
     return { ok: true, id, active };
@@ -1235,7 +1273,7 @@ const HANDLERS: Record<string, ToolHandler> = {
   },
 
   get_client_key(args) {
-    const key = listClientKeys().find((k) => k.id === num(args.id));
+    const key = getClientKeyById(num(args.id));
     if (!key) return { ok: false, error: "not found" };
     return {
       id: key.id,
@@ -1253,8 +1291,7 @@ const HANDLERS: Record<string, ToolHandler> = {
   set_key_budget(args) {
     const id = num(args.id);
     const usd = num(args.monthly_budget_usd);
-    const budget = usd > 0 ? JSON.stringify({ monthly_budget_usd: usd }) : null;
-    query("UPDATE client_api_keys SET budget = ? WHERE id = ?").run(budget, id);
+    updateClientKey(id, { budget: usd > 0 ? { monthly: usd } : null });
     return { ok: true, id, monthly_budget_usd: usd > 0 ? usd : null };
   },
 
@@ -1351,9 +1388,9 @@ const HANDLERS: Record<string, ToolHandler> = {
     return { ok: false, error: "scope must be request, proxy or all" };
   },
 
-  tunnel_status() {
+  async tunnel_status() {
     const raw = getTunnelSettings();
-    const binaries = getAllTunnelToolsStatus({
+    const binaries = await getAllTunnelToolsStatus({
       cloudflared: raw.cloudflared_binary_path,
       ngrok: raw.ngrok_binary_path,
       frpc: raw.frpc_binary_path,
@@ -1385,6 +1422,35 @@ const HANDLERS: Record<string, ToolHandler> = {
 
   stop_tunnel() {
     return stopTunnel();
+  },
+
+  get_prompt_guard() {
+    return getPromptGuardSettings();
+  },
+
+  set_prompt_guard(args) {
+    const rec = args && typeof args === "object" && !Array.isArray(args)
+      ? (args as Record<string, unknown>)
+      : {};
+    const patch: Record<string, unknown> = {};
+    if (typeof rec.enabled === "boolean") patch.enabled = rec.enabled;
+    if (rec.mode === "block" || rec.mode === "log_only") patch.mode = rec.mode;
+    if (rec.scope === "user_and_tool" || rec.scope === "all") patch.scope = rec.scope;
+    if (typeof rec.check_media === "boolean") patch.check_media = rec.check_media;
+    if (typeof rec.inject_system_guard === "boolean") {
+      patch.inject_system_guard = rec.inject_system_guard;
+    }
+    if (typeof rec.system_guard_prompt === "string") {
+      patch.system_guard_prompt = rec.system_guard_prompt;
+    }
+    if (Array.isArray(rec.custom_blocked_terms)) {
+      patch.custom_blocked_terms = rec.custom_blocked_terms.map((v) => String(v));
+    }
+    return savePromptGuardSettings(patch);
+  },
+
+  test_prompt_guard(args) {
+    return testPromptGuard(str(args.sample));
   },
 };
 

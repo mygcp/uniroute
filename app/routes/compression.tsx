@@ -15,7 +15,7 @@ import {
   Terminal,
   Trash2,
 } from "lucide-react";
-import { requireSession } from "../.server/auth";
+import { requireLoaderSession, requireSession } from "../.server/auth";
 import {
   getSettings,
   getToolsStatus,
@@ -44,6 +44,7 @@ import { Card } from "../components/ui/card";
 import { StatCard } from "../components/ui/stat-card";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
+import { DownloadProgressBar } from "../components/download-progress-bar";
 import { CopyButton } from "../components/ui/copy-button";
 import { Input, Label, Select, Textarea } from "../components/ui/field";
 import { Toggle } from "../components/ui/toggle";
@@ -55,9 +56,10 @@ export function meta() {
   return [{ title: "Compression | UniRoute" }];
 }
 
-export function loader() {
+export async function loader({ request }: Route.LoaderArgs) {
+  requireLoaderSession(request);
   const settings = getSettings();
-  const tools = getToolsStatus();
+  const tools = await getToolsStatus();
   return {
     settings,
     tools,
@@ -322,8 +324,12 @@ function ToolCard({
     const d = fetcher.data;
     if (d.ok && "downloaded" in d) {
       toast({
-        title: `${tool.name} downloaded`,
-        description: `${d.downloaded.tag} installed to ${d.downloaded.binaryPath}${d.downloaded.checksumVerified ? " (SHA-256 verified)" : ""}`,
+        title: d.downloaded.upToDate
+          ? `${tool.name} is already up to date`
+          : `${tool.name} downloaded`,
+        description: d.downloaded.upToDate
+          ? `Version ${d.downloaded.version ?? d.downloaded.tag} is already the latest release.`
+          : `${d.downloaded.tag} installed to ${d.downloaded.binaryPath}${d.downloaded.checksumVerified ? " (SHA-256 verified)" : ""}`,
         variant: "success",
       });
     } else if (d.ok && "uninstalled" in d) {
@@ -406,6 +412,10 @@ function ToolCard({
       </div>
 
       <div className="space-y-3 border-t border-border pt-3">
+        <DownloadProgressBar
+          progressKey={`compressor:${tool.id}`}
+          active={activeIntent === "download"}
+        />
         <div className="flex flex-wrap items-center gap-2">
           <fetcher.Form method="post">
             <input type="hidden" name="intent" value="download" />

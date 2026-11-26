@@ -6,7 +6,8 @@ import {
   providerBlocked,
 } from "./client-key";
 import { isWithinAccessHours } from "./time-access";
-import { ipInList } from "./net";
+import { ipInList, normalizeIpString } from "./net";
+import { isLoopbackHost } from "./ssrf";
 import { checkRateLimit, acquireSlot, releaseSlot } from "./rate-limiter";
 import {
   usageThisMonth,
@@ -20,6 +21,66 @@ export type CheckResult =
   | { ok: false; status: number; error: string };
 
 export type KeyStatus = "active" | "near_limit" | "suspended" | "expired";
+
+const ENFORCE_STATE_SYMBOL = Symbol.for("uniroute.keyEnforceState");
+type KeyEnforceState = {
+  peerIpMap: WeakMap<Request, string>;
+  inFlightBudgetReserved: Map<number, number>;
+};
+const gEnforce = globalThis as Record<symbol, KeyEnforceState | undefined>;
+const enforceState: KeyEnforceState =
+  gEnforce[ENFORCE_STATE_SYMBOL] ??
+  (gEnforce[ENFORCE_STATE_SYMBOL] = {
+    peerIpMap: new WeakMap<Request, string>(),
+    inFlightBudgetReserved: new Map<number, number>(),
+  });
+
+const peerIpMap = enforceState.peerIpMap;
+const inFlightBudgetReserved = enforceState.inFlightBudgetReserved;
+
+export function registerRequestPeerIp(request: Request, ip: string | null | undefined): void {
+  if (!ip) return;
+  peerIpMap.set(request, normalizeIpString(ip));
+}
+
+export function getRequestPeerIp(request: Request): string | null {
+  return peerIpMap.get(request) ?? null;
+}
+
+export function reserveInFlightBudget(keyId: number, amount: number): number {
+  if (!Number.isFinite(amount) || amount <= 0) return 0;
+  const prev = inFlightBudgetReserved.get(keyId) ?? 0;
+  inFlightBudgetReserved.set(keyId, prev + amount);
+  return amount;
+}
+
+export function releaseInFlightBudget(keyId: number, amount: number): void {
+  if (!Number.isFinite(amount) || amount <= 0) return;
+  const prev = inFlightBudgetReserved.get(keyId) ?? 0;
+  const next = prev - amount;
+  if (next <= 0) {
+    inFlightBudgetReserved.delete(keyId);
+  } else {
+    inFlightBudgetReserved.set(keyId, next);
+  }
+}
+
+export function getInFlightBudgetReserved(keyId: number): number {
+  return inFlightBudgetReserved.get(keyId) ?? 0;
+}
+
+function getTrustedProxies(): string[] {
+  const raw = process.env.TRUSTED_PROXIES?.trim();
+  if (!raw) return [];
+  return raw.split(",").map((s) => s.trim()).filter(Boolean);
+}
+
+function isTrustedForwarder(peerIp: string | null): boolean {
+  if (!peerIp) return true;
+  if (isLoopbackHost(peerIp)) return true;
+  const trusted = getTrustedProxies();
+  return trusted.length > 0 && ipInList(peerIp, trusted);
+}
 
 export function computeStatus(key: ClientKey, usage: UsageSummary): KeyStatus {
   const now = Math.floor(Date.now() / 1000);
@@ -42,21 +103,43 @@ export function isKeyBlocked(key: ClientKey): boolean {
   return key.blocked_at != null || key.is_active !== 1;
 }
 
-/** Ambil IP klien dari header, dengan X-Forwarded-For & CF. */
 export function clientIpFromRequest(request: Request): string | null {
+  const peerIp = getRequestPeerIp(request);
+  if (peerIp && !isTrustedForwarder(peerIp)) {
+    return peerIp;
+  }
+
   const cf = request.headers.get("cf-connecting-ip");
-  if (cf) return cf.trim();
+  if (cf) return normalizeIpString(cf);
+
   const forwarder = request.headers.get("x-forwarded-for");
   if (forwarder) {
-    const first = forwarder.split(",")[0]?.trim();
-    if (first) return first;
+    const parts = forwarder
+      .split(",")
+      .map((s) => normalizeIpString(s))
+      .filter(Boolean);
+    if (parts.length > 0) {
+      if (!peerIp) return parts[0];
+      const trusted = getTrustedProxies();
+      for (let i = parts.length - 1; i >= 0; i--) {
+        const candidate = parts[i];
+        if (!isLoopbackHost(candidate) && !(trusted.length > 0 && ipInList(candidate, trusted))) {
+          return candidate;
+        }
+      }
+      return parts[0];
+    }
   }
+
   const direct = request.headers.get("x-real-ip");
-  return direct?.trim() || null;
+  if (direct?.trim()) return normalizeIpString(direct);
+  return peerIp;
 }
 
 export function checkIp(key: ClientKey, ip: string | null): CheckResult {
-  if (!ip) return key.strict_ip === 1 ? { ok: false, status: 403, error: "ip not allowed" } : { ok: true };
+  if (!ip) {
+    return key.strict_ip === 1 ? { ok: false, status: 403, error: "ip not allowed" } : { ok: true };
+  }
   if (key.ip_blacklist && ipInList(ip, key.ip_blacklist)) {
     return { ok: false, status: 403, error: "ip blacklisted" };
   }
@@ -83,49 +166,51 @@ export type BudgetQuotaCheck = {
   monthlyBudget?: number;
 };
 
-/**
- * Cek budget & quota berbasis usage terakumulasi (hari & bulan). Tidak
- * menghitung per-request (tidak diketahui di pre-check); per_request dicek
- * setelah request jika tersedia.
- */
 export function checkBudgetQuota(key: ClientKey): BudgetQuotaCheck {
-  const now = Math.floor(Date.now() / 1000);
+  const needMonth =
+    (key.budget?.monthly != null && key.budget.monthly > 0) ||
+    (key.quota?.tokens_per_month != null && key.quota.tokens_per_month > 0);
+  const needToday =
+    (key.budget?.daily != null && key.budget.daily > 0) ||
+    (key.quota?.requests_per_day != null && key.quota.requests_per_day > 0);
+
+  const reserved = getInFlightBudgetReserved(key.id);
+  const month = needMonth ? usageThisMonth(key.id) : null;
+  const today = needToday ? usageToday(key.id) : null;
+
   if (key.budget) {
-    if (key.budget.monthly != null && key.budget.monthly > 0) {
-      const u = usageThisMonth(key.id);
-      if (u.cost >= key.budget.monthly) return { ok: false, reason: "budget exceeded" };
+    if (key.budget.monthly != null && key.budget.monthly > 0 && month) {
+      if (month.cost + reserved >= key.budget.monthly) {
+        return { ok: false, reason: "budget exceeded" };
+      }
     }
-    if (key.budget.daily != null && key.budget.daily > 0) {
-      const u = usageToday(key.id);
-      if (u.cost >= key.budget.daily) return { ok: false, reason: "daily budget exceeded" };
+    if (key.budget.daily != null && key.budget.daily > 0 && today) {
+      if (today.cost + reserved >= key.budget.daily) {
+        return { ok: false, reason: "daily budget exceeded" };
+      }
     }
   }
   if (key.quota) {
-    if (key.quota.tokens_per_month != null && key.quota.tokens_per_month > 0) {
-      const u = usageThisMonth(key.id);
-      if (u.promptTokens + u.completionTokens >= key.quota.tokens_per_month) {
+    if (key.quota.tokens_per_month != null && key.quota.tokens_per_month > 0 && month) {
+      if (month.promptTokens + month.completionTokens >= key.quota.tokens_per_month) {
         return { ok: false, reason: "token quota exceeded" };
       }
     }
-    if (key.quota.requests_per_day != null && key.quota.requests_per_day > 0) {
-      const u = usageToday(key.id);
-      if (u.requests >= key.quota.requests_per_day) {
+    if (key.quota.requests_per_day != null && key.quota.requests_per_day > 0 && today) {
+      if (today.requests >= key.quota.requests_per_day) {
         return { ok: false, reason: "request quota exceeded" };
       }
     }
   }
-  void now;
   return { ok: true };
 }
 
-/** Cek shared quota grup tempat key berada. */
 export function checkGroups(key: ClientKey): CheckResult {
   const groupCheck = checkGroupSharedQuota(key);
   if (!groupCheck.ok) return { ok: false, status: 429, error: groupCheck.reason };
   return { ok: true };
 }
 
-/** Cek model & provider terhadap daftar allow/block granular. */
 export function checkModelProviders(
   key: ClientKey,
   model: string,
@@ -142,6 +227,14 @@ export function checkModelProviders(
     }
   }
   return { ok: true };
+}
+
+export function checkScope(key: ClientKey, requiredScope: string): CheckResult {
+  if (!key.scopes || key.scopes.length === 0) return { ok: true };
+  if (key.scopes.includes("*") || key.scopes.includes(requiredScope)) {
+    return { ok: true };
+  }
+  return { ok: false, status: 403, error: "scope not allowed" };
 }
 
 export type RateCheck = {

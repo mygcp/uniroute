@@ -11,8 +11,13 @@ let createSession: () => string;
 let destroySession: (token: string) => void;
 let getSessionToken: (req: Request) => string | null;
 let isValid: (token: string | null | undefined) => boolean;
-let setSessionCookie: (res: Response, token: string) => void;
+let setSessionCookie: (res: Response, token: string, req?: Request) => void;
 let verifyPassword: (pw: string) => boolean;
+let verifyCsrfOrigin: (req: Request) => boolean;
+let requireLoaderSession: (req: Request) => void;
+let checkLoginRateLimit: (key: string) => { ok: boolean; retryAfterSec?: number };
+let recordLoginFailure: (key: string) => void;
+let clearLoginFailures: (key: string) => void;
 
 beforeAll(async () => {
   await resetTestDb();
@@ -25,6 +30,11 @@ beforeAll(async () => {
   isValid = auth.isValid;
   setSessionCookie = auth.setSessionCookie;
   verifyPassword = auth.verifyPassword;
+  verifyCsrfOrigin = auth.verifyCsrfOrigin;
+  requireLoaderSession = auth.requireLoaderSession;
+  checkLoginRateLimit = auth.checkLoginRateLimit;
+  recordLoginFailure = auth.recordLoginFailure;
+  clearLoginFailures = auth.clearLoginFailures;
 });
 
 afterAll(() => {
@@ -75,6 +85,38 @@ describe("session cookie", () => {
     clearSessionCookie(res);
     expect(res.headers.get("Set-Cookie")).toContain("Max-Age=0");
   });
+
+  test("setSessionCookie sets Secure only for HTTPS / forwarded HTTPS requests", () => {
+    const prevEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = "production";
+    try {
+      const httpRes = new Response();
+      setSessionCookie(httpRes, "tok", new Request("http://127.0.0.1:3000/login"));
+      expect(httpRes.headers.get("Set-Cookie")).not.toContain("; Secure");
+
+      const httpsRes = new Response();
+      setSessionCookie(
+        httpsRes,
+        "tok",
+        new Request("http://127.0.0.1:3000/login", {
+          headers: { "x-forwarded-proto": "https" },
+        }),
+      );
+      expect(httpsRes.headers.get("Set-Cookie")).toContain("; Secure");
+
+      const cfRes = new Response();
+      setSessionCookie(
+        cfRes,
+        "tok",
+        new Request("http://127.0.0.1:3000/login", {
+          headers: { "cf-visitor": '{"scheme":"https"}' },
+        }),
+      );
+      expect(cfRes.headers.get("Set-Cookie")).toContain("; Secure");
+    } finally {
+      process.env.NODE_ENV = prevEnv;
+    }
+  });
 });
 
 describe("verifyPassword", () => {
@@ -97,5 +139,51 @@ describe("verifyPassword", () => {
 
   test("rejects empty input", () => {
     expect(verifyPassword("")).toBe(false);
+  });
+});
+
+describe("CSRF, rate limit, and .data guard", () => {
+  test("verifyCsrfOrigin permits GET and same-origin POST, blocks cross-origin POST", () => {
+    expect(verifyCsrfOrigin(new Request("http://localhost:3000/providers"))).toBe(true);
+    expect(
+      verifyCsrfOrigin(
+        new Request("http://localhost:3000/providers", {
+          method: "POST",
+          headers: { origin: "http://localhost:3000" },
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      verifyCsrfOrigin(
+        new Request("http://localhost:3000/providers", {
+          method: "POST",
+          headers: { origin: "https://evil.example" },
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  test("login rate limiter locks after repeated failures and resets on clear", () => {
+    const key = "198.51.100.77";
+    clearLoginFailures(key);
+    for (let i = 0; i < 10; i++) {
+      expect(checkLoginRateLimit(key).ok).toBe(true);
+      recordLoginFailure(key);
+    }
+    const blocked = checkLoginRateLimit(key);
+    expect(blocked.ok).toBe(false);
+    clearLoginFailures(key);
+    expect(checkLoginRateLimit(key).ok).toBe(true);
+  });
+
+  test("requireLoaderSession rejects unauthenticated .data requests with 401", () => {
+    let thrown: unknown;
+    try {
+      requireLoaderSession(new Request("http://localhost:3000/providers.data"));
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeInstanceOf(Response);
+    expect((thrown as Response).status).toBe(401);
   });
 });

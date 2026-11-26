@@ -36,6 +36,7 @@ export function loader({ request, params }: Route.LoaderArgs) {
 }
 
 function csv(v: string | null | undefined): string {
-  const s = v ?? "";
-  return `"${s.replace(/"/g, '""')}"`;
+  const raw = v ?? "";
+  const safe = /^[=+\-@\t\r]/.test(raw) ? `'${raw}` : raw;
+  return `"${safe.replace(/"/g, '""')}"`;
 }

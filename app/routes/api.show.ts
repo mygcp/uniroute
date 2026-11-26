@@ -4,11 +4,21 @@ import {
   isRequireApiKey,
   resolveClientKey,
   modelAllowed,
+  modelBlocked,
+  providerAllowed,
+  providerBlocked,
   type ClientKey,
 } from "../.server/client-key";
+import {
+  checkAccessHours,
+  checkIp,
+  checkScope,
+  clientIpFromRequest,
+  isKeyExpired,
+} from "../.server/key-enforce";
 import { isModelsPublic, listPublicModels } from "../.server/model-public";
-import { query } from "../.server/db";
-import { displayName, resolveDisplayToBare, modelNotFoundBody } from "../.server/provider-prefix";
+import { hasColumn, query } from "../.server/db";
+import { displayName, resolveDisplayToBare } from "../.server/provider-prefix";
 
 type ModelRow = {
   id: number;
@@ -29,20 +39,12 @@ function json(payload: unknown, status = 200): Response {
 }
 
 function customCol(): string {
-  try {
-    const cols = (query("PRAGMA table_info(models)").all() as { name: string }[]).map(
-      (c) => c.name,
-    );
-    if (cols.includes("display_name")) return "m.display_name";
-  } catch {
-    /* ignore */
-  }
-  return "NULL";
+  return hasColumn("models", "display_name") ? "m.display_name" : "NULL";
 }
 
 function findModel(name: string): ModelRow | undefined {
   const cc = customCol();
-  try {
+  if (cc !== "NULL") {
     const hit = query(
       `SELECT m.id, m.model_name, m.provider_id, m.context_length,
               p.name AS owned_by, m.is_public, p.prefix AS prefix, ${cc} AS custom_display
@@ -53,8 +55,6 @@ function findModel(name: string): ModelRow | undefined {
     if (hit) {
       return { ...hit, display_name: displayName(hit.prefix, hit.model_name, hit.custom_display) };
     }
-  } catch {
-    /* ignore */
   }
   const { bare, providerId } = resolveDisplayToBare(name);
   if (providerId) {
@@ -86,11 +86,20 @@ function findModel(name: string): ModelRow | undefined {
 }
 
 function isAllowedForKey(m: ModelRow, rule: ClientKey): boolean {
-  const isPublic =
+  if (m.is_public === 1) return true;
+  if (
     (listPublicModels() as unknown as { model_name: string; display_name: string }[]).some(
       (pm) => pm.display_name === m.display_name,
-    ) || m.is_public === 1;
-  if (isPublic) return true;
+    )
+  ) {
+    return true;
+  }
+  if (!providerAllowed(rule, m.provider_id) || providerBlocked(rule, m.provider_id)) {
+    return false;
+  }
+  if (modelBlocked(rule, m.display_name) || modelBlocked(rule, m.model_name)) {
+    return false;
+  }
   if (rule.allowed_models === null) return true;
   return modelAllowed(rule, m.display_name) || modelAllowed(rule, m.model_name);
 }
@@ -114,7 +123,6 @@ function toOllamaShow(m: ModelRow): Record<string, unknown> {
         parameter_size: "",
       },
     },
-    // Extra fields for compatibility with clients expecting OpenAI shape too
     id: m.display_name,
     object: "model",
     owned_by: m.owned_by,
@@ -123,21 +131,27 @@ function toOllamaShow(m: ModelRow): Record<string, unknown> {
   };
 }
 
+function extractApiToken(request: Request): string | null {
+  const auth = request.headers.get("authorization") ?? "";
+  const match = auth.match(/^Bearer\s+(.+)$/i);
+  if (match) return match[1].trim();
+  const xKey = request.headers.get("x-api-key")?.trim();
+  return xKey || null;
+}
+
 async function handle(request: Request): Promise<Response> {
   let name: string | null = null;
 
-  // Try JSON body first (Ollama POST {"model":"..."} or {"name":"..."})
   if (request.method === "POST") {
     try {
       const body = (await request.json()) as Record<string, unknown>;
       const raw = body.model ?? body.name ?? body.model_name;
       if (typeof raw === "string" && raw.trim()) name = raw.trim();
     } catch {
-      // ignore, fallback to query param
+      /* ignore */
     }
   }
 
-  // Fallback: query param ?model= or URL search
   if (!name) {
     try {
       const url = new URL(request.url);
@@ -152,38 +166,43 @@ async function handle(request: Request): Promise<Response> {
     return json({ error: "model is required" }, 400);
   }
 
-  const row = findModel(name);
-  if (!row) {
-    const err = modelNotFoundBody(name);
-    return json({ error: err.message }, 404);
-  }
-
-  // Auth: mirror v1.models logic but permissive when not requiring key
   if (isValid(getSessionToken(request))) {
+    const row = findModel(name);
+    if (!row) return json({ error: `model '${name}' not found` }, 404);
     return json(toOllamaShow(row));
   }
 
-  const header = request.headers.get("authorization") ?? "";
-  const match = header.match(/^Bearer\s+(.+)$/i);
-  const token = match ? match[1].trim() : null;
-
+  const token = extractApiToken(request);
   if (token) {
     const resolved = resolveClientKey(token);
     if (!resolved.ok) return json({ error: "invalid api key" }, 401);
-    if (!isAllowedForKey(row, resolved.key)) {
+    const key = resolved.key;
+    if (isKeyExpired(key)) return json({ error: "api key expired" }, 403);
+    const ipCheck = checkIp(key, clientIpFromRequest(request));
+    if (!ipCheck.ok) return json({ error: ipCheck.error }, ipCheck.status);
+    const hoursCheck = checkAccessHours(key);
+    if (!hoursCheck.ok) return json({ error: hoursCheck.error }, hoursCheck.status);
+    const scopeCheck = checkScope(key, "models");
+    if (!scopeCheck.ok) return json({ error: scopeCheck.error }, scopeCheck.status);
+
+    const row = findModel(name);
+    if (!row || !isAllowedForKey(row, key)) {
       return json({ error: `model '${name}' not found` }, 404);
     }
     return json(toOllamaShow(row));
   }
 
   if (isModelsPublic()) {
-    if (row.is_public !== 1) {
+    const row = findModel(name);
+    if (!row || row.is_public !== 1) {
       return json({ error: `model '${name}' not found` }, 404);
     }
     return json(toOllamaShow(row));
   }
 
   if (!isRequireApiKey()) {
+    const row = findModel(name);
+    if (!row) return json({ error: `model '${name}' not found` }, 404);
     return json(toOllamaShow(row));
   }
 
@@ -195,7 +214,5 @@ export async function action({ request }: Route.ActionArgs): Promise<Response> {
 }
 
 export async function loader({ request }: Route.LoaderArgs): Promise<Response> {
-  // Ollama clients use POST, but support GET for browser/curl probing
-  if (request.method === "POST") return handle(request);
   return handle(request);
 }

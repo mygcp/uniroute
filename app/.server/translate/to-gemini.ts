@@ -1,4 +1,4 @@
-import type { CanonicalMessage, CanonicalRequest } from "./canonical";
+import { sanitizeExtra, type CanonicalMessage, type CanonicalRequest } from "./canonical";
 
 function toParts(
   message: CanonicalMessage,
@@ -103,5 +103,5 @@ export function build(c: CanonicalRequest): Record<string, unknown> {
     gc.stopSequences = Array.isArray(c.stop) ? c.stop : [c.stop];
   }
   if (Object.keys(gc).length > 0) body.generationConfig = gc;
-  return { ...body, ...c.extra };
+  return { ...sanitizeExtra(c.extra), ...body };
 }

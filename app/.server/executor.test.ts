@@ -1,7 +1,12 @@
 import "./test-env";
 import { randomUUID } from "node:crypto";
-import { beforeAll, describe, expect, test } from "bun:test";
+import { afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { resetTestDb } from "./test-db";
+
+const origFetch = globalThis.fetch;
+afterEach(() => {
+  globalThis.fetch = origFetch;
+});
 
 process.env.DATABASE_URL = `/tmp/uniroute-executor-test-${randomUUID()}.db`;
 
