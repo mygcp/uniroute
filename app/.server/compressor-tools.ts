@@ -559,8 +559,8 @@ export function extractLatestTagFromAtom(
 }
 
 /**
- * Resolve latest release tag TANPA api.github.com (nol auth, nol 60/jam IP limit di VPS).
- * Menggunakan HTTP redirect `/releases/latest` dan/atau RSS feed publik `/releases.atom`.
+ * Resolve latest release tag without api.github.com (no auth or IP rate limits)
+ * using HTTP redirect `/releases/latest` and public `/releases.atom` feed.
  */
 async function resolveLatestTagNoApi(tool: CompressorToolId): Promise<string> {
   const headers = webHeaders();
@@ -638,9 +638,8 @@ function directReleaseDownloadUrl(
 }
 
 /**
- * Download binary resmi langsung dari github.com Releases ke `~/.uniroute/bin/`
- * (terpisah dari aplikasi, tanpa api.github.com / tanpa OAuth / aman untuk VPS).
- * Selalu verifikasi SHA-256 terhadap `checksums.txt` dari rilis yang sama.
+ * Download official release binary from github.com Releases to `~/.uniroute/bin/`
+ * and verify SHA-256 against `checksums.txt` from the same release.
  */
 export async function downloadTool(
   tool: CompressorToolId,

@@ -41,7 +41,7 @@ import {
 } from "../lib/compression-options";
 import { PageHeader } from "../components/ui/page-header";
 import { Card } from "../components/ui/card";
-import { StatCard } from "../components/ui/stat-card";
+import { MetricStrip } from "../components/ui/stat-card";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { DownloadProgressBar } from "../components/download-progress-bar";
@@ -598,65 +598,45 @@ export default function Compression({
         subtitle="Download RTK and Caveman Engine directly (no GitHub API auth required, VPS-safe) and apply prompt + output compression globally."
       />
 
-      {/* Top Status KPIs */}
-      <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
-        <StatCard
-          title="Global Pipeline"
-          value={pipelineSummary}
-          accent={
-            activeStages.length > 0 ? "bg-success" : "bg-muted-foreground/40"
-          }
-          icon={<ShieldCheck size={16} />}
-          subline={`Applies globally · ${platform}/${arch} (not bundled)`}
-        />
-        <StatCard
-          title="RTK Binary"
-          value={
-            tools.rtk.installed
+      <MetricStrip
+        className="mb-6"
+        items={[
+          {
+            label: "Global pipeline",
+            value: pipelineSummary,
+            detail: `Applies globally · ${platform}/${arch}`,
+            tone: activeStages.length > 0 ? "success" : "default",
+          },
+          {
+            label: "RTK binary",
+            value: tools.rtk.installed
               ? tools.rtk.version
                 ? `v${tools.rtk.version}`
                 : "Installed"
               : tools.rtk.isStub
                 ? "Mock stub"
-                : "Not installed"
-          }
-          accent={
-            tools.rtk.installed
-              ? "bg-success"
-              : tools.rtk.isStub
-                ? "bg-warning"
-                : "bg-muted-foreground/40"
-          }
-          icon={<CheckCircle2 size={16} />}
-          subline={sourceLabel(tools.rtk)}
-        />
-        <StatCard
-          title="Caveman Engine"
-          value={
-            tools.caveman.installed
+                : "Not installed",
+            detail: sourceLabel(tools.rtk),
+            tone: tools.rtk.installed ? "success" : tools.rtk.isStub ? "warning" : "default",
+          },
+          {
+            label: "Caveman engine",
+            value: tools.caveman.installed
               ? tools.caveman.version
                 ? `v${tools.caveman.version}`
                 : "Installed"
               : tools.caveman.isStub
                 ? "Mock stub"
-                : "Not installed"
-          }
-          accent={
-            tools.caveman.installed
-              ? "bg-success"
-              : tools.caveman.isStub
-                ? "bg-warning"
-                : "bg-muted-foreground/40"
-          }
-          icon={<CheckCircle2 size={16} />}
-          subline={sourceLabel(tools.caveman)}
-        />
-      </div>
+                : "Not installed",
+            detail: sourceLabel(tools.caveman),
+            tone: tools.caveman.installed ? "success" : tools.caveman.isStub ? "warning" : "default",
+          },
+        ]}
+      />
 
-      {/* External Binaries Download & Management */}
       <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-        <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-          External Binaries (Direct Releases · No GitHub API / Auth · SHA-256 Verified)
+        <p className="text-xs font-medium text-muted-foreground">
+          External binaries (direct releases, SHA-256 verified)
         </p>
         <span className="font-mono text-[11px] text-muted-foreground">
           Managed dir: {tools.toolsDir}
@@ -703,11 +683,11 @@ export default function Compression({
 
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
             {/* Stage 1: RTK */}
-            <div className="space-y-3 rounded-xl border border-border bg-surface-2/35 p-4">
+            <div className="space-y-3 rounded-lg border border-border bg-surface-2/35 p-4">
               <div className="flex items-center justify-between gap-2">
                 <div>
-                  <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                    Stage 1 · Input Filter
+                  <p className="text-xs font-medium text-muted-foreground">
+                    Stage 1 · Input filter
                   </p>
                   <p className="text-sm font-semibold text-foreground">RTK Pipe Filter</p>
                 </div>
@@ -756,11 +736,11 @@ export default function Compression({
             </div>
 
             {/* Stage 2: Caveman */}
-            <div className="space-y-3 rounded-xl border border-border bg-surface-2/35 p-4">
+            <div className="space-y-3 rounded-lg border border-border bg-surface-2/35 p-4">
               <div className="flex items-center justify-between gap-2">
                 <div>
-                  <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                    Stage 2 · Context &amp; Output
+                  <p className="text-xs font-medium text-muted-foreground">
+                    Stage 2 · Context &amp; output
                   </p>
                   <p className="text-sm font-semibold text-foreground">Caveman Engine &amp; Voice</p>
                 </div>
@@ -829,9 +809,9 @@ export default function Compression({
           </div>
 
           {/* Global Scope & Guardrails */}
-          <div className="rounded-xl border border-border bg-surface-2/25 p-4">
-            <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-              Global Scope &amp; Guardrails
+          <div className="rounded-lg border border-border bg-surface-2/25 p-4">
+            <p className="mb-3 text-xs font-medium text-muted-foreground">
+              Global scope &amp; guardrails
             </p>
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
               <div className="sm:col-span-2">
@@ -962,7 +942,7 @@ export default function Compression({
         </testFetcher.Form>
 
         {testData ? (
-          <div className="mt-4 space-y-3 rounded-xl border border-border bg-surface-2/40 p-4">
+          <div className="mt-4 space-y-3 rounded-lg border border-border bg-surface-2/40 p-4">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="flex flex-wrap items-center gap-2">
                 {!testData.settings.rtk_enabled && !testData.settings.caveman_enabled ? (

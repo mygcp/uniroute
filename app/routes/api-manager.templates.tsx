@@ -208,7 +208,7 @@ export default function Templates({ loaderData, actionData }: Route.ComponentPro
 					/>
 				</Card>
 			) : (
-				<Card padded={false}>
+				<Card padded={false} className="overflow-hidden">
 					<Table className="min-w-[540px]">
 						<THead>
 							<tr>

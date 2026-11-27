@@ -8,9 +8,8 @@ type Usage = {
 export type ChatTurn = { role: "user" | "assistant"; content: string };
 
 /**
- * Streaming chat hook dengan update ber-batching rAF: delta SSE diakumulasi
- * di ref dan di-flush maksimal sekali per frame — jauh lebih halus daripada
- * setState per chunk (yang memicu render puluhan kali per detik).
+ * Streaming chat hook with rAF-batched updates: SSE deltas accumulate in a ref
+ * and flush at most once per animation frame instead of re-rendering per chunk.
  */
 export function useStreaming() {
 	const [response, setResponse] = useState("");
@@ -19,14 +18,12 @@ export function useStreaming() {
 	const [streaming, setStreaming] = useState(false);
 	const [done, setDone] = useState(false);
 	const [error, setError] = useState("");
-	// True bila stream tutup tanpa [DONE] (upstream putus tengah jalan).
-	// response tetap berisi potongan yang sudah diterima — UI bisa commit
-	// sebagai turn normal + tawarkan "Lanjutkan".
+	// True when the stream closes without [DONE]; partial response stays available.
 	const [truncated, setTruncated] = useState(false);
 	const [autoContinued, setAutoContinued] = useState(0);
 	const abortRef = useRef<AbortController | null>(null);
 
-	// Buffer delta + jadwal flush per frame (fallback timer saat tab hidden).
+	// Delta buffers and frame flush schedule (timer fallback when tab is hidden).
 	const bufRef = useRef("");
 	const thinkBufRef = useRef("");
 	const rafRef = useRef<number | null>(null);
@@ -54,7 +51,7 @@ export function useStreaming() {
 	const schedule = useCallback(() => {
 		if (rafRef.current != null || timerRef.current != null) return;
 		if (typeof document !== "undefined" && document.hidden) {
-			// rAF berhenti saat tab hidden — pakai timer agar stream tetap jalan.
+			// rAF pauses when tab is hidden; fall back to a short timer.
 			timerRef.current = setTimeout(flush, 32);
 		} else {
 			rafRef.current = requestAnimationFrame(flush);
@@ -91,9 +88,7 @@ export function useStreaming() {
 			{ role: "user" as const, content: prompt },
 		];
 
-		// Satu request stream → { sawDone, sawDisconnect, aborted, httpError }.
-		// Delta diakumulasi ke bufRef (di-flush per frame) + accum lokal agar
-		// resume tinggal menyambung tanpa me-reset response.
+		// Single stream attempt: accumulates deltas in bufRef (flushed per frame) and local accum for resume.
 		const runOnce = async (
 			messages: { role: string; content: string }[],
 			accum: { text: string },
@@ -201,14 +196,12 @@ export function useStreaming() {
 				if (err instanceof DOMException && err.name === "AbortError") {
 					return { sawDone: false, sawDisconnect: false, aborted: true, httpError: null };
 				}
-				// Network error tengah jalan = truncation bila sudah ada delta.
+				// Mid-stream network error counts as truncation when deltas were received.
 				return { sawDone: false, sawDisconnect: true, aborted: false, httpError: null };
 			}
 		};
 
-		// Percobaan awal + auto-lanjut (model+provider SAMA — model string
-		// tidak diubah, termasuk prefix provider bila ada). Resume memakai
-		// trailing assistant prefill berisi potongan, tanpa mengulang output.
+		// Initial attempt + auto-continue using the same model/provider and trailing assistant prefill.
 		const MAX_AUTO_CONTINUE = 2;
 		let messages: { role: string; content: string }[] = baseMessages;
 		const accum = { text: "" };
@@ -235,7 +228,7 @@ export function useStreaming() {
 				setAutoContinued(continued);
 				return;
 			}
-			// Truncation: lanjut otomatis bila ada potongan & sisa kuota.
+			// Auto-continue on truncation when partial output exists and budget remains.
 			if (accum.text.trim() !== "" && attempt < MAX_AUTO_CONTINUE) {
 				continued += 1;
 				setAutoContinued(continued);
@@ -255,7 +248,7 @@ export function useStreaming() {
 				];
 				continue;
 			}
-			// Potongan habis / kosong: tandai truncated, response dipertahankan.
+			// Truncated with no retries left: keep partial response and mark truncated.
 			flush();
 			setStreaming(false);
 			setDone(false);

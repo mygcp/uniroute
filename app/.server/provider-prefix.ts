@@ -65,7 +65,7 @@ function ensurePrefixCache(): void {
   cachedProvidersVer = pVer;
 }
 
-/** Bersihkan prefix legacy ("openai/" -> "openai") untuk jalur baca. */
+/** Strip legacy trailing slashes ("openai/" -> "openai") on read. */
 export function cleanPrefix(raw: string | null | undefined): string | null {
   if (raw == null) return null;
   const t = String(raw).trim().replace(/^\/+|\/+$/g, "").trim();
@@ -74,33 +74,29 @@ export function cleanPrefix(raw: string | null | undefined): string | null {
 }
 
 /**
- * Normalisasi prefix provider. Hanya berlaku di aplikasi (virtual).
- * - trim + buang "/" di depan/belakang
- * - kosong => null (tanpa prefix)
- * - hanya nama saja: huruf/angka . _ - (tanpa "/")
- * - return null bila kosong, throw bila invalid (untuk validasi UI)
+ * Normalize provider prefix (virtual, app-level only):
+ * - trim and strip leading/trailing "/"
+ * - empty -> null
+ * - name only: letters/digits . _ - (no "/")
  */
 export function normalizePrefix(raw: string | null | undefined): string | null {
   if (raw == null) return null;
   const cleaned = cleanPrefix(raw);
   if (!cleaned) return null;
   if (cleaned.includes("/")) {
-    throw new Error('prefix cukup nama saja tanpa "/" (contoh: openai)');
+    throw new Error('Prefix must be a single name without "/" (example: openai)');
   }
   if (!PREFIX_PATTERN.test(cleaned)) {
     throw new Error(
-      "prefix harus 1-32 karakter: huruf/angka . _ - (contoh: openai)",
+      "Prefix must be 1-32 characters using letters, digits, ., _, or - (example: openai)",
     );
   }
   return cleaned;
 }
 
 /**
- * Bentuk display id model: prefix + "/" + model_name.
- * - customDisplay bila diisi (per-model override) menang atas semuanya.
- * - prefix sengaja SELALU ditempel, tanpa dedupe. Jadi bila model bawaan
- *   sudah mengandung "/" (mis. "oc/muse1.3") + prefix "oc" => "oc/oc/muse1.3".
- * - model_name apa adanya dikirim ke upstream sebagai bare.
+ * Build model display ID: prefix + "/" + model_name.
+ * customDisplay overrides everything; prefix is always prepended so upstream bare names stay intact.
  */
 export function displayName(
   prefix: string | null | undefined,
@@ -114,7 +110,7 @@ export function displayName(
   return `${clean}/${modelName}`;
 }
 
-/** Helper untuk row { prefix, model_name, custom_display? } */
+/** Helper for row { prefix, model_name, custom_display? }. */
 export function displayNameForRow(row: {
   prefix: string | null | undefined;
   model_name: string;
@@ -129,13 +125,8 @@ export function displayNameForRow(row: {
 }
 
 /**
- * Cari prefix yang cocok untuk string model incoming.
- * Pilih prefix terpanjang yang cocok dengan pola "prefix/".
- * Return { bare, prefix, providerId }
- *
- * Contoh: prefix "oc", request "oc/oc/muse1.3" => bare "oc/muse1.3".
- * Bagian dalam ("oc/muse1.3") tetap utuh sebagai nama upstream — provider
- * yang memang sudah pakai prefix sendiri tidak terpengaruh.
+ * Match the longest configured "prefix/" for an incoming model string.
+ * Inner slashes stay intact as part of the upstream model name.
  */
 export function resolvePrefixedModel(model: string): {
   bare: string;
@@ -168,7 +159,7 @@ export function resolveDisplayToBare(displayId: string): {
   return resolvePrefixedModel(name);
 }
 
-/** Ambil prefix untuk provider id tertentu (sudah dibersihkan) */
+/** Get cleaned prefix for a provider ID. */
 export function prefixForProvider(providerId: string): string | null {
   const row = query("SELECT prefix FROM providers WHERE id = ?").get(
     providerId,
@@ -222,16 +213,13 @@ function toReason(r: AnyStateRow): UnavailableReason | null {
 }
 
 /**
- * Jelaskan KENAPA sebuah display id tidak bisa di-route padahal dikenal di DB
- * (model di-disable atau provider-nya di-disable). Return null bila model
- * memang tidak dikenal sama sekali (atau masih tersedia).
- * Dipakai untuk pesan error 404 yang jelas di chat/completions, media,
- * dan endpoint info model.
+ * Explain why a known model display ID cannot be routed (disabled model or provider).
+ * Returns null if the model is unknown or currently available.
  */
 export function unavailableReason(displayId: string): UnavailableReason | null {
   const name = (displayId ?? "").trim();
   if (!name) return null;
-  // 1) custom display_name exact (abaikan status aktif)
+  // 1) Exact custom display_name match (ignoring active status).
   try {
     const hit = query(
       `SELECT m.model_name, m.is_active AS model_active, m.display_name AS custom_display,
@@ -241,9 +229,9 @@ export function unavailableReason(displayId: string): UnavailableReason | null {
     ).get(name) as unknown as AnyStateRow | undefined;
     if (hit) return toReason(hit);
   } catch {
-    // kolom display_name belum ada (DB lama) -> lanjut ke prefix/bare
+    // display_name column missing on older DBs; fall through to prefix/bare.
   }
-  // 2) prefix/bare
+  // 2) Prefix/bare match.
   const { bare, providerId } = resolvePrefixedModel(name);
   const rows = query(
     `SELECT m.model_name, m.is_active AS model_active,
@@ -255,8 +243,7 @@ export function unavailableReason(displayId: string): UnavailableReason | null {
   if (rows.length === 0) return null;
   const hinted = providerId ? rows.find((r) => r.provider_id === providerId) : undefined;
   if (hinted) return toReason(hinted);
-  // tanpa hint jelas: bila SEMUA baris non-aktif, laporkan yang pertama;
-  // bila ada yang aktif, model sebenarnya tersedia (bukan urusan fungsi ini).
+  // Without a prefix hint, report only if every matching row is inactive.
   if (rows.every((r) => !r.model_active || !r.provider_active)) {
     return toReason(rows[0]!);
   }
@@ -267,12 +254,7 @@ function hasDisplayColumn(): boolean {
   return hasColumn("models", "display_name");
 }
 
-/**
- * Body error 404 yang jelas untuk model yang tidak bisa dipakai.
- * - provider di-disable -> "model 'X' is unavailable: provider 'Y' is disabled"
- * - model di-disable -> "model 'X' is disabled"
- * - tidak dikenal -> "model not found: 'X'"
- */
+/** Build a clear 404 body explaining why a model cannot be used. */
 export function modelNotFoundBody(displayId: string): {
   message: string;
   type: string;

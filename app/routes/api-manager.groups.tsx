@@ -319,7 +319,7 @@ export default function Groups({ loaderData, actionData }: Route.ComponentProps)
 								{editingGroupId === group.id ? (
 									<Form
 										method="post"
-										className="mb-4 grid grid-cols-1 items-end gap-3 rounded-xl border border-primary/25 bg-primary/5 p-3 sm:grid-cols-3"
+										className="mb-4 grid grid-cols-1 items-end gap-3 rounded-lg border border-primary/25 bg-primary/5 p-3 sm:grid-cols-3"
 									>
 										<input type="hidden" name="intent" value="update" />
 										<input type="hidden" name="id" value={group.id} />

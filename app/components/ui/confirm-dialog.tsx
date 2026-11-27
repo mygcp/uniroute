@@ -46,7 +46,7 @@ export function useConfirm() {
       ref={dialogRef}
       aria-labelledby={titleId}
       aria-describedby={pending.opts.description ? descId : undefined}
-      className="dialog-pop m-auto w-[min(92vw,440px)] overflow-hidden rounded-2xl border border-border-strong bg-surface p-0 text-foreground shadow-2xl backdrop:bg-black/65 backdrop:backdrop-blur-[2px]"
+      className="dialog-pop m-auto w-[min(92vw,440px)] overflow-hidden rounded-lg border border-border-strong bg-surface p-0 text-foreground shadow-2xl backdrop:bg-black/65"
       onCancel={(e) => {
         e.preventDefault();
         close(false);
@@ -55,21 +55,17 @@ export function useConfirm() {
         if (e.target === dialogRef.current) close(false);
       }}
     >
-      <div className="flex items-start gap-3.5 p-5">
-        <div
-          className={`grid h-10 w-10 shrink-0 place-items-center rounded-xl border ${
-            isDanger
-              ? "border-danger/30 bg-danger/12 text-danger"
-              : "border-primary/30 bg-primary/12 text-primary"
-          }`}
+      <div className="flex items-start gap-3 p-5">
+        <span
+          className={`mt-0.5 shrink-0 ${isDanger ? "text-danger" : "text-primary"}`}
         >
           {isDanger ? (
             <AlertTriangle size={18} aria-hidden="true" />
           ) : (
             <HelpCircle size={18} aria-hidden="true" />
           )}
-        </div>
-        <div className="min-w-0 flex-1 pt-0.5">
+        </span>
+        <div className="min-w-0 flex-1">
           <h3 id={titleId} className="text-base font-semibold leading-snug text-foreground">
             {pending.opts.title}
           </h3>

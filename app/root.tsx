@@ -10,7 +10,7 @@ import {
   useLocation,
   type ShouldRevalidateFunctionArgs,
 } from "react-router";
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { AlertTriangle, Home, RefreshCw } from "lucide-react";
 import type { Route } from "./+types/root";
 import { Header } from "./components/header";
@@ -31,7 +31,7 @@ export const links: Route.LinksFunction = () => [
   },
   {
     rel: "stylesheet",
-    href: "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap",
+    href: "https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap",
   },
 ];
 
@@ -88,32 +88,37 @@ export function Layout({ children }: { children: React.ReactNode }) {
 function AppShell() {
   const { pathname } = useLocation();
   const [sidebarOpen, setSidebarOpen] = useState(false);
-
-  const pageRef = useRef<HTMLDivElement>(null);
-  const prevPath = useRef(pathname);
-
-  useEffect(() => {
-    if (prevPath.current === pathname) return;
-    prevPath.current = pathname;
-    const el = pageRef.current;
-    if (!el) return;
-    el.classList.remove("animate-page-in");
-    void el.offsetHeight;
-    el.classList.add("animate-page-in");
-  }, [pathname]);
+  const menuButtonRef = useRef<HTMLButtonElement>(null);
 
   if (pathname === "/login") {
     return <Outlet />;
   }
   return (
     <div className="flex min-h-screen">
-      <Sidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:fixed focus:top-3 focus:left-3 focus:z-[100] focus:rounded-md focus:bg-primary-solid focus:px-3 focus:py-2 focus:text-xs focus:font-medium focus:text-primary-foreground"
+      >
+        Skip to main content
+      </a>
+      <Sidebar
+        open={sidebarOpen}
+        onClose={() => {
+          setSidebarOpen(false);
+          requestAnimationFrame(() => menuButtonRef.current?.focus());
+        }}
+      />
       <div className="flex min-w-0 flex-1 flex-col">
-        <Header onMenuClick={() => setSidebarOpen(true)} />
-        <main className="mx-auto w-full max-w-[1440px] flex-1 overflow-x-clip px-3 py-5 sm:px-5 md:px-7 md:py-6">
-          <div ref={pageRef} className="animate-page-in">
-            <Outlet />
-          </div>
+        <Header
+          menuButtonRef={menuButtonRef}
+          onMenuClick={() => setSidebarOpen(true)}
+        />
+        <main
+          id="main-content"
+          tabIndex={-1}
+          className="mx-auto w-full max-w-[1440px] flex-1 overflow-x-clip px-3 py-5 focus:outline-none sm:px-5 md:px-7 md:py-6"
+        >
+          <Outlet />
         </main>
       </div>
     </div>

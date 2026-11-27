@@ -1,5 +1,5 @@
-// Mock upstream OpenAI-compatible provider untuk E2E testing.
-// Jalankan: bun scripts/mock-upstream.ts  → listen localhost:8787
+// Mock OpenAI-compatible upstream provider for E2E testing.
+// Run: bun scripts/mock-upstream.ts (listens on localhost:8787)
 
 const WORDS = ["Hello", "from", "UniRoute", "mock", "upstream", "provider"];
 

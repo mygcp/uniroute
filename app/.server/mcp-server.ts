@@ -1,24 +1,21 @@
 /**
  * UniRoute MCP Server.
  *
- * Dua transport:
- *  1. stdio (default)      — JSON-RPC per baris di stdin/stdout, untuk agent
- *                            CLI yang men-spawn proses ini.
- *  2. bun mcp-server.ts --http [port]
- *                          — HTTP POST /mcp (JSON-RPC tunggal per request),
- *                            cocok untuk agent di mesin lain. Opsional bearer
- *                            token via env UNIROUTE_MCP_TOKEN.
+ * Two transports:
+ *  1. stdio (default): JSON-RPC per line on stdin/stdout for spawned agent CLIs.
+ *  2. HTTP POST /mcp (--http [port]): single JSON-RPC per request for remote agents.
+ *     Optional bearer token via UNIROUTE_MCP_TOKEN.
  *
- * Semua tool beroperasi langsung pada SQLite gateway yang sama.
+ * All tools operate directly on the shared gateway SQLite database.
  */
 
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
-// Pin data ke folder repo UniRoute apa pun CWD proses agent — tanpa ini,
-// spawn dari direktori lain membuat/membaca SQLite yang salah (ter-seed
-// kosong) dan semua tool melaporkan data palsu.
+// Pin data to the UniRoute root regardless of the agent process CWD so spawned
+// processes never open an empty SQLite file in another directory.
 import { timingSafeStringEqual } from "./auth";
+import { startHttpServer } from "./http-runtime";
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 process.env.DATABASE_URL ??= path.resolve(HERE, "../../data/uniroute.db");
 
@@ -42,7 +39,7 @@ class RpcError extends Error {
 	}
 }
 
-/** Proses satu pesan → hasil (atau RpcError). Null = notification. */
+/** Process one JSON-RPC message into a response or RpcError. Null means notification. */
 async function processMessage(
 	msg: RpcRequest,
 ): Promise<{ id: unknown; result?: unknown; error?: { code: number; message: string } } | null> {
@@ -157,7 +154,7 @@ async function runHttp(port: number): Promise<void> {
 		return m ? timingSafeStringEqual(m[1].trim(), token) : false;
 	};
 
-	const server = Bun.serve({
+	const server = startHttpServer({
 		port,
 		hostname,
 		async fetch(req) {

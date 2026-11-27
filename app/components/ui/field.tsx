@@ -6,9 +6,9 @@ import type {
 } from "react";
 
 const base =
-  "w-full rounded-lg border border-border bg-surface px-3 text-sm text-foreground transition-colors placeholder:text-muted-foreground/75 hover:border-border-strong focus:border-primary focus:outline-none focus:ring-2 focus:ring-ring/25 disabled:opacity-50";
+  "w-full rounded-md border border-border bg-surface px-3 text-sm text-foreground transition-colors placeholder:text-muted-foreground/75 hover:border-border-strong focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none disabled:opacity-50";
 const invalidBase =
-  "border-danger/65 data-[invalid=true]:border-danger data-[invalid=true]:focus:border-danger data-[invalid=true]:focus:ring-danger/25";
+  "border-danger/70 data-[invalid=true]:border-danger data-[invalid=true]:focus:border-danger";
 
 export function Label({
   className = "",
@@ -36,7 +36,10 @@ export function Input({
   className = "",
   ...rest
 }: InputProps) {
-  const sizeClass = controlSize === "sm" ? "h-8 text-xs" : "h-9 text-sm";
+  const sizeClass =
+    controlSize === "sm"
+      ? "min-h-[44px] sm:min-h-[32px] text-xs"
+      : "min-h-[44px] sm:min-h-[36px] text-sm";
   return (
     <input
       data-invalid={invalid ? "true" : undefined}
@@ -77,8 +80,8 @@ export function Select({
 }) {
   const sizeClass =
     controlSize === "sm"
-      ? "h-8 text-xs leading-[1.875rem]"
-      : "h-9 text-sm leading-[2.125rem]";
+      ? "min-h-[44px] sm:min-h-[32px] py-1 text-xs"
+      : "min-h-[44px] sm:min-h-[36px] py-1.5 text-sm";
   return (
     <select
       data-invalid={invalid ? "true" : undefined}
@@ -86,7 +89,7 @@ export function Select({
       className={[
         base,
         invalid ? invalidBase : "",
-        "ui-select py-0 bg-surface",
+        "ui-select bg-surface",
         sizeClass,
         className,
       ]
@@ -105,7 +108,7 @@ export function Checkbox({
     <input
       type="checkbox"
       className={[
-        "h-4 w-4 rounded border border-border-strong bg-surface accent-primary-solid",
+        "h-4 w-4 shrink-0 rounded-[4px] border border-border-strong bg-surface accent-primary-solid transition-colors",
         className,
       ].join(" ")}
       {...rest}

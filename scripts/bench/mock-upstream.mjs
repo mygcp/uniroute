@@ -1,10 +1,9 @@
-// Mock upstream OpenAI-compatible SSE yang DETERMINISTIK untuk benchmark
-// gateway: jumlah/pacing frame selalu sama, termasuk frame delta kosong di
-// awal (untuk menguji filter frame kosong + ekstraksi usage).
+// Deterministic OpenAI-compatible SSE mock upstream for gateway benchmarks:
+// fixed frame count/pacing including leading empty deltas.
 //
-// Jalankan:  node scripts/bench/mock-upstream.mjs
-// Env:       BENCH_PORT (default 8791), BENCH_EMPTY (default 100),
-//            BENCH_FRAMES (default 300), BENCH_PACE_MS (default 4)
+// Run: node scripts/bench/mock-upstream.mjs
+// Env: BENCH_PORT (default 8791), BENCH_EMPTY (default 100),
+//      BENCH_FRAMES (default 300), BENCH_PACE_MS (default 4)
 import { createServer } from "node:http";
 
 const PORT = Number(process.env.BENCH_PORT ?? 8791);

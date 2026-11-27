@@ -38,8 +38,8 @@ export function TimeSeriesChart({ data, metric, barHeight = 160, format }: Props
   const max = Math.max(1, ...data.map((d) => d.value));
   const fill =
     metric === "cost"
-      ? "bg-gradient-to-t from-success to-success/75"
-      : "bg-gradient-to-t from-primary to-info/90";
+      ? "bg-success"
+      : "bg-primary";
   const active =
     hovered != null && hovered >= 0 && hovered < data.length ? data[hovered] : null;
 
@@ -81,11 +81,15 @@ export function TimeSeriesChart({ data, metric, barHeight = 160, format }: Props
                   {fmtLabel(d.value)}
                 </span>
                 <div
-                  className="flex w-full max-w-[68px] items-end"
+                  className="relative flex w-full max-w-[68px] items-end border-b border-border/80"
                   style={{ height: barHeight }}
                 >
                   <div
-                    className={`bar-grow-y w-full rounded-t-md ${
+                    aria-hidden="true"
+                    className="pointer-events-none absolute inset-x-0 top-1/2 border-t border-dashed border-border/50"
+                  />
+                  <div
+                    className={`bar-grow-y relative w-full rounded-t-[2px] ${
                       d.value > 0 ? fill : "bg-track"
                     } ${isActive ? "ring-2 ring-primary/60" : ""}`}
                     style={{ height: `${h}px`, animationDelay: `${i * 20}ms` }}

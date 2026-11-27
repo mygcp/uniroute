@@ -466,7 +466,7 @@ function initSchema(): void {
   value TEXT
 );`);
 
-	// Migrasi DB lama: tambah kolom API Manager bila table sudah ada tanpa kolom baru.
+	// Legacy DB migration: add API Manager columns if the table predates them.
 	{
 		const keyCols: Array<[string, string]> = [
 			["description", "description TEXT"],
@@ -659,15 +659,14 @@ CREATE INDEX IF NOT EXISTS idx_audit_key ON key_audit_logs (key_id, created_at);
 		"never_worse",
 		"never_worse INTEGER NOT NULL DEFAULT 1",
 	);
-	// Migrasi prefix legacy ("openai/" -> "openai"): prefix kini nama saja,
-	// "/" otomatis sebagai separator. Bersihkan sekaligus NULL-kan yang kosong.
+	// Legacy prefix migration ("openai/" -> "openai"): clear empty values to NULL.
 	try {
 		conn.exec(
 			"UPDATE providers SET prefix = TRIM(TRIM(prefix), '/') WHERE prefix IS NOT NULL;",
 		);
 		conn.exec("UPDATE providers SET prefix = NULL WHERE prefix = '';");
 	} catch {
-		/* tabel providers mungkin belum ada saat fresh init */
+		/* providers table may not exist yet during fresh init */
 	}
 
 	conn.exec(`CREATE TABLE IF NOT EXISTS chat_sessions (
@@ -928,7 +927,7 @@ export function seed() {
 	if (allowlistCount === 0) {
 		query(
 			`INSERT INTO model_allowlist (model_name, action, reason)
-       VALUES ('nonexistent-model', 'deny', 'seed denylist contoh')`,
+       VALUES ('nonexistent-model', 'deny', 'sample denylist rule')`,
 		).run();
 	}
 

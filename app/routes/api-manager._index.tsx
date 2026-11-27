@@ -43,7 +43,8 @@ import { Input, Select, Label, Checkbox } from "../components/ui/field";
 import { CopyButton } from "../components/ui/copy-button";
 import { EmptyState } from "../components/ui/empty-state";
 import { Table, THead, THeadCell, TRow, TCell } from "../components/ui/table";
-import { StatCard } from "../components/ui/stat-card";
+import { FilterBar, FilterGroup, FilterActions, SearchInput } from "../components/ui/filter-bar";
+import { StatCard, MetricStrip } from "../components/ui/stat-card";
 import { UsageBar } from "../components/ui/usage-bar";
 import { Tooltip } from "../components/ui/tooltip";
 import { useConfirm } from "../components/ui/confirm-dialog";
@@ -348,7 +349,7 @@ export default function ApiManager({
 			/>
 
 			{rotated && rotated.length > 0 ? (
-				<div className="mb-4 rounded-xl border border-warning/35 bg-warning/10 p-4 text-sm">
+				<div className="mb-4 rounded-lg border border-warning/35 bg-warning/10 p-4 text-sm">
 					<p className="font-semibold text-foreground">
 						New keys below are shown only once. Copy them now:
 					</p>
@@ -364,7 +365,7 @@ export default function ApiManager({
 			) : null}
 
 			{reveal ? (
-				<div className="mb-4 rounded-xl border border-warning/35 bg-warning/10 p-4 text-sm">
+				<div className="mb-4 rounded-lg border border-warning/35 bg-warning/10 p-4 text-sm">
 					<p className="font-semibold text-foreground">
 						Full key (key #{reveal.id}):
 					</p>
@@ -377,57 +378,44 @@ export default function ApiManager({
 				</div>
 			) : null}
 
-			<div className="mb-6 grid grid-cols-2 gap-4 lg:grid-cols-4">
-				<StatCard title="Total Keys" value={counts.total} />
-				<StatCard
-					title="Active Keys"
-					value={counts.active}
-					accent="bg-success"
-				/>
-				<StatCard
-					title="Restricted Keys"
-					value={counts.restricted}
-					accent="bg-warning"
-				/>
-				<StatCard
-					title="Requests (month)"
-					value={counts.totalRequests.toLocaleString()}
-					accent="bg-info"
-				/>
-			</div>
+			<MetricStrip
+				className="mb-6"
+				items={[
+					{ label: "Total keys", value: counts.total },
+					{ label: "Active keys", value: counts.active, tone: "success" },
+					{ label: "Restricted keys", value: counts.restricted, tone: "warning" },
+					{ label: "Requests (month)", value: counts.totalRequests.toLocaleString(), tone: "info" },
+				]}
+			/>
 
-			<Card
-				padded={false}
-				className="mb-4 flex flex-wrap items-center gap-3 p-3"
-			>
-				<div className="relative w-full sm:w-64">
-					<Search
-						size={14}
-						className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-muted-foreground"
-					/>
-					<Input
+			<FilterBar>
+				<FilterGroup>
+					<SearchInput
 						value={query}
-						onChange={(e) => setQuery(e.target.value)}
-						placeholder="Search keys…"
+						onChange={setQuery}
+						placeholder="Search keys..."
 						aria-label="Search keys"
-						autoComplete="off"
-						className="pl-8"
+						clearLabel="Clear key search"
+						containerClassName="w-full sm:w-64"
 					/>
-				</div>
-				<Select
-					value={statusFilter}
-					onChange={(e) => setStatusFilter(e.target.value)}
-					aria-label="Filter by status"
-					className="w-full sm:w-44"
-				>
-					<option value="any">All status</option>
-					<option value="active">Active</option>
-					<option value="near_limit">Near Limit</option>
-					<option value="suspended">Locked</option>
-					<option value="expired">Expired</option>
-				</Select>
+					<Select
+						value={statusFilter}
+						onChange={(e) => setStatusFilter(e.target.value)}
+						aria-label="Filter by status"
+						className="w-full sm:w-44"
+					>
+						<option value="any">All status</option>
+						<option value="active">Active</option>
+						<option value="near_limit">Near Limit</option>
+						<option value="suspended">Locked</option>
+						<option value="expired">Expired</option>
+					</Select>
+					<span className="text-xs tabular-nums text-muted-foreground">
+						{filtered.length} of {keys.length}
+					</span>
+				</FilterGroup>
 
-				<div className="ml-auto flex flex-wrap items-center gap-2">
+				<FilterActions>
 					<Form method="post" className="flex items-center">
 						<input type="hidden" name="intent" value="require" />
 						<input
@@ -445,11 +433,11 @@ export default function ApiManager({
 						</Button>
 					</Form>
 					{keys.length > 0 ? <ExportDrawer /> : null}
-				</div>
-			</Card>
+				</FilterActions>
+			</FilterBar>
 
 			{selected.size > 0 ? (
-				<div className="mb-4 flex flex-wrap items-center gap-2 rounded-xl border border-primary/30 bg-primary/8 p-3 text-sm">
+				<div className="mb-4 flex flex-wrap items-center gap-2 rounded-lg border border-primary/30 bg-primary/8 p-3 text-sm">
 					<span className="font-medium text-foreground">
 						{selected.size} selected
 					</span>
@@ -494,7 +482,7 @@ export default function ApiManager({
 					)}
 				</Card>
 			) : (
-				<Card padded={false}>
+				<Card padded={false} className="overflow-hidden">
 					<Table className="min-w-[780px]">
 						<THead>
 							<tr>
@@ -517,9 +505,9 @@ export default function ApiManager({
 								<THeadCell>Name</THeadCell>
 								<THeadCell>Key</THeadCell>
 								<THeadCell>Status</THeadCell>
-								<THeadCell>Usage</THeadCell>
+								<THeadCell numeric>Usage</THeadCell>
 								<THeadCell>Budget</THeadCell>
-								<THeadCell>Actions</THeadCell>
+								<THeadCell align="right">Actions</THeadCell>
 							</tr>
 						</THead>
 						<tbody>
@@ -528,7 +516,7 @@ export default function ApiManager({
 								const usagePct =
 									budget && budget > 0 ? pct(r.month.cost, budget) : null;
 								return (
-									<TRow key={r.key.id}>
+									<TRow key={r.key.id} selected={selected.has(r.key.id)}>
 										<TCell className="pr-2">
 											<Checkbox
 												aria-label={`Select ${r.key.name}`}
@@ -558,7 +546,7 @@ export default function ApiManager({
 												{STATUS_LABEL[r.status]}
 											</Badge>
 										</TCell>
-										<TCell className="text-xs text-muted-foreground">
+										<TCell numeric className="text-xs text-muted-foreground">
 											{r.month.requests.toLocaleString()} req ·{" "}
 											{r.month.cost.toFixed(4)} USD
 										</TCell>
@@ -570,7 +558,7 @@ export default function ApiManager({
 														max={100}
 														tone={usageTone(usagePct)}
 													/>
-													<span className="text-xs text-muted-foreground">
+													<span className="text-xs tabular-nums text-muted-foreground">
 														{usagePct}%
 													</span>
 												</div>
@@ -578,8 +566,8 @@ export default function ApiManager({
 												<span className="text-xs text-muted-foreground">-</span>
 											)}
 										</TCell>
-										<TCell>
-											<div className="flex items-center gap-1">
+										<TCell align="right">
+											<div className="flex items-center justify-end gap-1">
 												<CopyButton text={masked(r.key)} label="Copy key prefix" />
 												<Form method="post">
 													<input type="hidden" name="intent" value="reveal" />
@@ -634,7 +622,7 @@ export default function ApiManager({
 													prefetch="intent"
 													title="Manage / Edit"
 													aria-label="Manage / Edit"
-													className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-glass-hover hover:text-foreground"
+													className={buttonClass("ghost", "icon")}
 												>
 													<Settings size={14} />
 												</Link>
@@ -826,7 +814,7 @@ function ExportDrawer() {
 				<Download size={14} /> Export
 			</Button>
 			{open ? (
-				<div className="dialog-pop absolute right-0 z-40 mt-2 w-72 rounded-xl border border-border-strong bg-surface p-4 shadow-xl">
+				<div className="dialog-pop absolute right-0 z-40 mt-2 w-72 rounded-lg border border-border-strong bg-surface p-4 shadow-xl">
 					<Form
 						method="get"
 						action="/api-manager/export"

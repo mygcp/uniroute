@@ -64,8 +64,15 @@ export function startMcpHttp(): { ok: boolean; message?: string; pid?: number } 
   }
   setMcpHttpEnabledSetting(true);
   const port = mcpHttpPort();
-  const cmd = ["bun", path.join(rootDir(), "app", ".server", "mcp-server.ts")];
-  const proc = spawn(cmd[0], [...cmd.slice(1), "--http", String(port)], {
+  const isBundled = process.env.UNIROUTE_INSTALL_MODE === "bundle";
+  const bundledEntry = path.join(
+    process.env.UNIROUTE_APP_DIR ?? rootDir(),
+    "mcp-server.mjs",
+  );
+  const entry = isBundled && path.isAbsolute(bundledEntry)
+    ? bundledEntry
+    : path.join(rootDir(), "app", ".server", "mcp-server.ts");
+  const proc = spawn(process.execPath, [entry, "--http", String(port)], {
     env: process.env,
     stdio: ["ignore", "ignore", "pipe"],
   });

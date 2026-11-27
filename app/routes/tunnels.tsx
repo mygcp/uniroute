@@ -52,7 +52,7 @@ import {
 } from "../lib/tunnel-options";
 import { PageHeader } from "../components/ui/page-header";
 import { Card } from "../components/ui/card";
-import { StatCard } from "../components/ui/stat-card";
+import { MetricStrip } from "../components/ui/stat-card";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { DownloadProgressBar } from "../components/download-progress-bar";
@@ -805,57 +805,47 @@ export default function TunnelsPage({
         }
       />
 
-      {/* Top KPI strip */}
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard
-          title="Tunnel Status"
-          value={badge.label}
-          accent={
-            liveStatus.status === "running"
-              ? "bg-success"
-              : liveStatus.status === "error"
-                ? "bg-danger"
-                : isActiveState
-                  ? "bg-warning"
-                  : "bg-primary"
-          }
-          icon={<Zap size={16} aria-hidden="true" />}
-          subline={
-            liveStatus.localTarget
+      <MetricStrip
+        items={[
+          {
+            label: "Tunnel status",
+            value: badge.label,
+            detail: liveStatus.localTarget
               ? `${liveStatus.provider} -> ${liveStatus.localTarget}`
-              : `${settings.provider} -> ${localHost}:${targetPortLabel}`
-          }
-        />
-        <StatCard
-          title="Public URL"
-          value={liveStatus.publicUrl ? "Active" : settings.custom_domain || "Not set"}
-          accent={liveStatus.publicUrl ? "bg-success" : "bg-info"}
-          icon={<Globe size={16} aria-hidden="true" />}
-          subline={
-            liveStatus.publicUrl
+              : `${settings.provider} -> ${localHost}:${targetPortLabel}`,
+            tone:
+              liveStatus.status === "running"
+                ? "success"
+                : liveStatus.status === "error"
+                  ? "danger"
+                  : isActiveState
+                    ? "warning"
+                    : "default",
+          },
+          {
+            label: "Public URL",
+            value: liveStatus.publicUrl ? "Active" : settings.custom_domain || "Not set",
+            detail: liveStatus.publicUrl
               ? liveStatus.publicUrl
               : settings.custom_domain
                 ? "Configured custom domain (tunnel stopped)"
-                : "Start quick or named tunnel"
-          }
-        />
-        <StatCard
-          title="Installed Binaries"
-          value={`${installedCount} / ${tools.length}`}
-          accent={installedCount > 0 ? "bg-primary" : "bg-warning"}
-          icon={<HardDrive size={16} aria-hidden="true" />}
-          subline="Downloaded separately to ~/.uniroute/bin"
-        />
-        <StatCard
-          title="Auto-Tunneling"
-          value={autoStart ? "Auto-start On" : "Manual start"}
-          accent={autoStart ? "bg-success" : "bg-primary"}
-          icon={<ShieldCheck size={16} aria-hidden="true" />}
-          subline={
-            autoReconnect ? "Auto-reconnect with backoff On" : "Auto-reconnect Off"
-          }
-        />
-      </div>
+                : "Start quick or named tunnel",
+            tone: liveStatus.publicUrl ? "success" : "default",
+          },
+          {
+            label: "Installed binaries",
+            value: `${installedCount} / ${tools.length}`,
+            detail: "Downloaded separately to ~/.uniroute/bin",
+            tone: installedCount > 0 ? "default" : "warning",
+          },
+          {
+            label: "Auto-tunneling",
+            value: autoStart ? "Auto-start On" : "Manual start",
+            detail: autoReconnect ? "Auto-reconnect with backoff On" : "Auto-reconnect Off",
+            tone: autoStart ? "success" : "default",
+          },
+        ]}
+      />
 
       {/* Live endpoints strip when public URL exists */}
       {liveStatus.publicUrl ? (
@@ -1035,7 +1025,7 @@ export default function TunnelsPage({
 
             {/* Auto-tunneling switches */}
             <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-              <div className="flex items-center justify-between gap-3 rounded-xl border border-border bg-surface-2/35 px-3.5 py-2.5">
+              <div className="flex items-center justify-between gap-3 rounded-lg border border-border bg-surface-2/35 px-3.5 py-2.5">
                 <div className="min-w-0">
                   <p className="text-xs font-semibold text-foreground">
                     Auto-start on boot
@@ -1051,7 +1041,7 @@ export default function TunnelsPage({
                 />
               </div>
 
-              <div className="flex items-center justify-between gap-3 rounded-xl border border-border bg-surface-2/35 px-3.5 py-2.5">
+              <div className="flex items-center justify-between gap-3 rounded-lg border border-border bg-surface-2/35 px-3.5 py-2.5">
                 <div className="min-w-0">
                   <p className="text-xs font-semibold text-foreground">
                     Auto-reconnect
@@ -1067,7 +1057,7 @@ export default function TunnelsPage({
                 />
               </div>
 
-              <div className="flex items-center justify-between gap-3 rounded-xl border border-border bg-surface-2/35 px-3.5 py-2.5">
+              <div className="flex items-center justify-between gap-3 rounded-lg border border-border bg-surface-2/35 px-3.5 py-2.5">
                 <div className="min-w-0">
                   <p className="text-xs font-semibold text-foreground">
                     HTTPS public URL
@@ -1085,7 +1075,7 @@ export default function TunnelsPage({
             </div>
 
             {/* Custom Domain */}
-            <div className="rounded-xl border border-border bg-surface-2/25 p-4">
+            <div className="rounded-lg border border-border bg-surface-2/25 p-4">
               <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                 <div>
                   <Label htmlFor="tunnel-custom-domain">
@@ -1135,7 +1125,7 @@ export default function TunnelsPage({
 
             {/* Provider-specific fields */}
             {provider === "cloudflared" ? (
-              <div className="space-y-4 rounded-xl border border-border bg-surface-2/25 p-4">
+              <div className="space-y-4 rounded-lg border border-border bg-surface-2/25 p-4">
                 <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                   <div>
                     <Label htmlFor="cf-mode">Cloudflare Tunnel Mode</Label>
@@ -1210,7 +1200,7 @@ export default function TunnelsPage({
             ) : null}
 
             {provider === "ngrok" ? (
-              <div className="grid grid-cols-1 gap-4 rounded-xl border border-border bg-surface-2/25 p-4 md:grid-cols-2">
+              <div className="grid grid-cols-1 gap-4 rounded-lg border border-border bg-surface-2/25 p-4 md:grid-cols-2">
                 <div>
                   <Label htmlFor="ngrok-region">ngrok Region</Label>
                   <Select
@@ -1260,7 +1250,7 @@ export default function TunnelsPage({
             ) : null}
 
             {provider === "frpc" ? (
-              <div className="space-y-4 rounded-xl border border-border bg-surface-2/25 p-4">
+              <div className="space-y-4 rounded-lg border border-border bg-surface-2/25 p-4">
                 <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
                   <div>
                     <Label htmlFor="frpc-server">FRP Server Address (frps host)</Label>
@@ -1344,7 +1334,7 @@ export default function TunnelsPage({
             ) : null}
 
             {provider === "bore" ? (
-              <div className="grid grid-cols-1 gap-4 rounded-xl border border-border bg-surface-2/25 p-4 md:grid-cols-3">
+              <div className="grid grid-cols-1 gap-4 rounded-lg border border-border bg-surface-2/25 p-4 md:grid-cols-3">
                 <div>
                   <Label htmlFor="bore-server">Bore Server</Label>
                   <Input

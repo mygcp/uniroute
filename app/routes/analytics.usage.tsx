@@ -2,8 +2,9 @@ import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router";
 import type { Route } from "./+types/analytics.usage";
 import { requireLoaderSession } from "../.server/auth";
-import { ArrowDown, ArrowUp, ArrowUpDown, ChevronDown, Search, TrendingUp, X } from "lucide-react";
+import { ArrowDown, ArrowUp, ArrowUpDown, ChevronDown, TrendingUp, X } from "lucide-react";
 import { Badge } from "../components/ui/badge";
+import { SearchInput } from "../components/ui/filter-bar";
 import {
   getUsageData,
   type BreakdownEntry,
@@ -14,7 +15,7 @@ import {
 } from "../.server/usage";
 import { TimeSeriesChart } from "../components/usage/time-series-chart";
 import { PageHeader } from "../components/ui/page-header";
-import { StatCard } from "../components/ui/stat-card";
+import { StatCard, MetricStrip } from "../components/ui/stat-card";
 import { Tabs } from "../components/ui/tabs";
 import { Card, CardHeader, CardTitle } from "../components/ui/card";
 
@@ -176,7 +177,7 @@ function InteractiveBreakdown({
                   ? "border-primary/60 bg-primary/10"
                   : isOther
                     ? "cursor-default border-transparent opacity-85"
-                    : "border-transparent hover:border-border hover:bg-glass-hover"
+                    : "border-transparent hover:border-border hover:bg-surface-2"
               }`}
             >
               <span className="flex items-center justify-between gap-2 md:w-40 md:shrink-0">
@@ -274,7 +275,7 @@ function ModelTable({
         <button
           type="button"
           onClick={() => toggleSort(col)}
-          className={`inline-flex items-center gap-1 text-[11px] font-semibold uppercase tracking-wider transition-colors hover:text-foreground ${
+          className={`inline-flex items-center gap-1 text-xs font-medium transition-colors hover:text-foreground ${
             active ? "text-primary" : "text-muted-foreground"
           }`}
         >
@@ -315,7 +316,7 @@ function ModelTable({
               <Fragment key={m.model}>
                 <tr
                   className={`transition-colors ${
-                    open ? "bg-primary/8" : "hover:bg-glass-hover"
+                    open ? "bg-primary/10" : "hover:bg-surface-2/55"
                   }`}
                 >
                   <td className="py-3 pl-4 pr-1">
@@ -537,47 +538,40 @@ export default function AnalyticsUsage({ loaderData }: Route.ComponentProps) {
         }
       />
 
-      {/* Primary stats: 2-col on mobile instead of a 9-card stacked wall */}
-      <div className="mb-4 grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-3">
-        <StatCard
-          title="Total Tokens"
-          value={fmtTokens(summary.totalTokens)}
-          delta={deltaProps(trends.totalTokens, true)}
-        />
-        <StatCard
-          title="Est. Cost"
-          value={fmtCost(summary.cost)}
-          accent="bg-success"
-          delta={deltaProps(trends.cost, false)}
-          subline={`Avg cost / request: ${fmtCostPrecise(performance.costPerReq)}`}
-        />
-        <StatCard
-          title="Requests"
-          value={fmtTokens(performance.requests)}
-          delta={deltaProps(trends.requests, true)}
-        />
-        <StatCard
-          title="Success Rate"
-          value={performance.requests > 0 ? performance.successRate : "-"}
-          suffix={performance.requests > 0 ? "%" : undefined}
-          accent="bg-success"
-          delta={deltaProps(trends.successRate, true)}
-          deltaSuffix=" pts"
-        />
-        <StatCard
-          title="Error Rate"
-          value={performance.requests > 0 ? errorPct : "-"}
-          suffix={performance.requests > 0 ? "%" : undefined}
-          accent="bg-danger"
-        />
-        <StatCard
-          title="Avg Latency"
-          value={performance.avgLatencyMs > 0 ? performance.avgLatencyMs.toLocaleString() : "-"}
-          suffix={performance.avgLatencyMs > 0 ? "ms" : undefined}
-          accent="bg-warning"
-          delta={deltaProps(trends.avgLatencyMs, false)}
-        />
-      </div>
+      <MetricStrip
+        className="mb-4"
+        items={[
+          {
+            label: "Total tokens",
+            value: fmtTokens(summary.totalTokens),
+            detail: trends.totalTokens != null ? `${trends.totalTokens >= 0 ? "+" : ""}${trends.totalTokens}% vs prev` : undefined,
+          },
+          {
+            label: "Estimated cost",
+            value: fmtCost(summary.cost),
+            detail: `Avg / req: ${fmtCostPrecise(performance.costPerReq)}`,
+            tone: "success",
+          },
+          {
+            label: "Requests",
+            value: fmtTokens(performance.requests),
+            detail: trends.requests != null ? `${trends.requests >= 0 ? "+" : ""}${trends.requests}% vs prev` : undefined,
+          },
+          {
+            label: "Success rate",
+            value: performance.requests > 0 ? performance.successRate : "-",
+            suffix: performance.requests > 0 ? "%" : undefined,
+            detail: errorPct != null ? `${errorPct}% error rate` : undefined,
+            tone: performance.requests > 0 && performance.successRate < 90 ? "warning" : "success",
+          },
+          {
+            label: "Average latency",
+            value: performance.avgLatencyMs > 0 ? performance.avgLatencyMs.toLocaleString() : "-",
+            suffix: performance.avgLatencyMs > 0 ? "ms" : undefined,
+            detail: trends.avgLatencyMs != null ? `${trends.avgLatencyMs >= 0 ? "+" : ""}${trends.avgLatencyMs}% vs prev` : undefined,
+          },
+        ]}
+      />
 
       {/* Secondary stats: collapsible on mobile, plain grid on desktop */}
       <details className="mb-6 lg:hidden">
@@ -647,7 +641,7 @@ export default function AnalyticsUsage({ loaderData }: Route.ComponentProps) {
               <button
                 type="button"
                 onClick={() => setSelected(null)}
-                className="flex cursor-pointer items-center gap-1 rounded-full border border-border bg-surface-2 px-2 py-0.5 text-xs text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+                className="flex cursor-pointer items-center gap-1 rounded-md border border-border bg-surface-2 px-2 py-0.5 text-xs text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
               >
                 <X size={12} /> Clear
               </button>
@@ -669,26 +663,15 @@ export default function AnalyticsUsage({ loaderData }: Route.ComponentProps) {
                 Click any column header to sort, or expand a row to inspect per-request metrics.
               </p>
             </div>
-            <label className="flex h-9 items-center gap-1.5 rounded-lg border border-border bg-surface px-2.5 text-sm transition-colors hover:border-border-strong focus-within:border-primary focus-within:ring-2 focus-within:ring-ring/25">
-              <Search size={14} className="shrink-0 text-muted-foreground" aria-hidden="true" />
-              <span className="sr-only">Filter models</span>
-              <input
-                value={modelQuery}
-                onChange={(e) => setModelQuery(e.target.value)}
-                placeholder="Filter models..."
-                className="w-36 bg-transparent text-sm text-foreground placeholder:text-muted-foreground focus:outline-none sm:w-52"
-              />
-              {modelQuery ? (
-                <button
-                  type="button"
-                  onClick={() => setModelQuery("")}
-                  aria-label="Clear model filter"
-                  className="text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
-                >
-                  <X size={14} aria-hidden="true" />
-                </button>
-              ) : null}
-            </label>
+            <SearchInput
+              controlSize="sm"
+              value={modelQuery}
+              onChange={setModelQuery}
+              placeholder="Filter models..."
+              aria-label="Filter models"
+              clearLabel="Clear model filter"
+              containerClassName="w-full sm:w-56"
+            />
           </div>
           {selected && dimension === "apikey" ? (
             <p className="px-4 pb-3 text-xs text-muted-foreground sm:px-5">
@@ -706,7 +689,7 @@ export default function AnalyticsUsage({ loaderData }: Route.ComponentProps) {
         <div className="space-y-5">
           <div>
             <div
-              className="flex h-4 w-full overflow-hidden rounded-full bg-track"
+              className="flex h-3 w-full overflow-hidden rounded-sm bg-track"
               role="img"
               aria-label={`${errors.success} success, ${errors.error} errors`}
             >
@@ -744,7 +727,7 @@ export default function AnalyticsUsage({ loaderData }: Route.ComponentProps) {
                         modelCardRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
                       }}
                       title={`${m.model}: ${m.errors} failures (${m.errorRate}%), click to inspect`}
-                      className="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2 py-1 text-left text-sm transition hover:bg-glass-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+                      className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1 text-left text-sm transition hover:bg-surface-2/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
                     >
                       <code className="flex-1 truncate text-xs text-muted-foreground">
                         {m.model}

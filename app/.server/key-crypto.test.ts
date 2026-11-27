@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 
 process.env.DATABASE_URL = `/tmp/uniroute-crypto-test-${randomUUID()}.db`;
 
-// Module di-load dinamis agar env API_KEY_SECRET dapat diubah per-case.
+// Load module dynamically so API_KEY_SECRET can vary per test case.
 async function loadWithSecret(secret: string | undefined) {
   if (secret === undefined) {
     delete process.env.API_KEY_SECRET;

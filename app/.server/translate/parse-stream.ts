@@ -32,9 +32,8 @@ function parseOpenAi(json: Record<string, unknown>): CanonicalStreamEvent | null
   if (typeof delta.content === "string") {
     return { type: "content_delta", text: delta.content };
   }
-  // Reasoning/thinking deltas (DeepSeek-style `reasoning_content`,
-  // OpenRouter-style `reasoning`) — diteruskan sebagai event sendiri agar
-  // bisa ditampilkan terpisah dari jawaban.
+  // Reasoning/thinking deltas (DeepSeek `reasoning_content`, OpenRouter `reasoning`)
+  // are emitted separately so clients can display them apart from the answer.
   if (typeof delta.reasoning_content === "string" && delta.reasoning_content !== "") {
     return { type: "reasoning_delta", text: delta.reasoning_content };
   }
@@ -59,7 +58,7 @@ function parseOpenAi(json: Record<string, unknown>): CanonicalStreamEvent | null
   return usageOnlyEvent(json);
 }
 
-/** Bangun event finish dari payload usage OpenAI (cached bila ada). */
+/** Build finish event from OpenAI usage payload. */
 function openAiFinish(
   finishReason: string,
   json: Record<string, unknown>,
@@ -87,7 +86,7 @@ function openAiFinish(
   };
 }
 
-/** Chunk tanpa choices tapi membawa usage → finish kosong khusus usage. */
+/** Chunk without choices that carries usage only. */
 function usageOnlyEvent(
   json: Record<string, unknown>,
 ): CanonicalStreamEvent | null {
@@ -150,7 +149,7 @@ function parseAnthropic(json: Record<string, unknown>): CanonicalStreamEvent | n
     if (delta.type === "thinking_delta" && typeof delta.thinking === "string") {
       return { type: "reasoning_delta", text: delta.thinking };
     }
-    // signature_delta hanya untuk validasi API Anthropic — tidak ditampilkan.
+    // signature_delta is only for Anthropic API verification; do not display.
     if (delta.type === "input_json_delta" && typeof delta.partial_json === "string") {
       return { type: "tool_calls_delta", arguments: delta.partial_json };
     }
@@ -191,7 +190,7 @@ function parseGemini(json: Record<string, unknown>): CanonicalStreamEvent | null
   const parts = Array.isArray(content.parts) ? content.parts : [];
   for (const raw of parts) {
     const part = raw as Record<string, unknown>;
-    // Thought parts (Gemini thinking) — pisahkan dari jawaban.
+    // Thought parts (Gemini thinking) are kept separate from text answers.
     if (part.thought === true && typeof part.text === "string") {
       return { type: "reasoning_delta", text: part.text };
     }

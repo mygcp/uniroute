@@ -154,8 +154,7 @@ describe("orderProxiesByStrategy", () => {
 	test("demotes slow proxies to the end regardless of strategy", () => {
 		const fast = createProxy({ name: "fast", type: "http-connect", host: "h", port: 1 });
 		const slow = createProxy({ name: "slow", type: "http-connect", host: "h", port: 2 });
-		// slow pernah dipakai paling baru (LRU menempatkannya pertama) dan
-		// latensinya di atas SLOW_PROXY_MS.
+		// Slow proxy was used most recently (LRU places it first) with latency above SLOW_PROXY_MS.
 		query(
 			"UPDATE outbound_proxies SET last_used_at = ?, last_latency_ms = ? WHERE id = ?",
 		).run(Date.now(), 29_640, slow.id);

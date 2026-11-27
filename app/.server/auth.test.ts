@@ -134,7 +134,7 @@ describe("verifyPassword", () => {
   });
 
   test("rejects wrong password", () => {
-    expect(verifyPassword("salah")).toBe(false);
+    expect(verifyPassword("wrong-password")).toBe(false);
   });
 
   test("rejects empty input", () => {

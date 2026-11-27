@@ -1,8 +1,7 @@
 import { exec, query } from "./db";
 
 /**
- * Penyimpanan chat playground — tabel terpisah di SQLite yang sama
- * (WAL: baca/tulis konkuren aman; backup tetap satu file).
+ * Chat playground storage in the shared SQLite database.
  */
 
 export type ChatSession = {
@@ -47,7 +46,7 @@ export function getMessages(sessionId: number): ChatMessage[] {
        FROM chat_messages WHERE session_id = ? ORDER BY id ASC`,
     ).all(sessionId) as unknown as ChatMessage[];
   } catch {
-    // DB lama belum punya kolom thinking
+    // Legacy DB without thinking column.
     return query(
       `SELECT id, session_id, role, content, model, latency_ms, created_at
        FROM chat_messages WHERE session_id = ? ORDER BY id ASC`,
@@ -87,8 +86,7 @@ function appendMessages(
   msgs: AppendInput[],
 ): void {
   if (msgs.length === 0) return;
-  // Kolom thinking ditambahkan via ensureColumn saat open — fallback di bawah
-  // hanya untuk koneksi DB yang dibuka sebelum migrasi sempat jalan.
+  // Fallback for connections opened before thinking column migration ran.
   try {
     const stmt = query(
       `INSERT INTO chat_messages (session_id, role, content, model, latency_ms, thinking)

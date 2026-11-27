@@ -4,52 +4,116 @@ import type {
   ThHTMLAttributes,
 } from "react";
 
-export function Table({ className = "", ...rest }: HTMLAttributes<HTMLTableElement>) {
+type CellAlign = "left" | "right" | "center";
+
+const ALIGN_CLASS: Record<CellAlign, string> = {
+  left: "text-left",
+  right: "text-right",
+  center: "text-center",
+};
+
+export function Table({
+  className = "",
+  containerClassName = "",
+  ...rest
+}: HTMLAttributes<HTMLTableElement> & { containerClassName?: string }) {
   return (
-    <div className="table-wrap">
+    <div className={["table-wrap", containerClassName].filter(Boolean).join(" ")}>
       <table className={["w-full text-left text-sm", className].join(" ")} {...rest} />
     </div>
   );
 }
 
-export function THead({ className = "", ...rest }: HTMLAttributes<HTMLTableSectionElement>) {
+export function THead({
+  sticky = false,
+  className = "",
+  ...rest
+}: HTMLAttributes<HTMLTableSectionElement> & { sticky?: boolean }) {
   return (
     <thead
       className={[
-        "border-b border-glass-border bg-surface-2/50 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground",
+        "border-b border-border bg-surface-2/70 text-xs font-medium text-muted-foreground",
+        sticky ? "sticky top-0 z-10 backdrop-blur-sm" : "",
         className,
-      ].join(" ")}
+      ]
+        .filter(Boolean)
+        .join(" ")}
       {...rest}
     />
   );
 }
 
-export function THeadCell({ className = "", ...rest }: ThHTMLAttributes<HTMLTableCellElement>) {
+export function THeadCell({
+  align,
+  numeric = false,
+  className = "",
+  ...rest
+}: ThHTMLAttributes<HTMLTableCellElement> & {
+  align?: CellAlign;
+  numeric?: boolean;
+}) {
+  const resolvedAlign = align ?? (numeric ? "right" : "left");
   return (
     <th
       scope="col"
-      className={["py-2.5 pr-4 font-semibold first:pl-4 last:pr-4", className].join(" ")}
+      className={[
+        "whitespace-nowrap px-3 py-2.5 font-medium first:pl-4 last:pr-4",
+        ALIGN_CLASS[resolvedAlign],
+        numeric ? "tabular-nums" : "",
+        className,
+      ]
+        .filter(Boolean)
+        .join(" ")}
       {...rest}
     />
   );
 }
 
-export function TRow({ className = "", ...rest }: HTMLAttributes<HTMLTableRowElement>) {
+export function TRow({
+  selected = false,
+  interactive = false,
+  className = "",
+  ...rest
+}: HTMLAttributes<HTMLTableRowElement> & {
+  selected?: boolean;
+  interactive?: boolean;
+}) {
   return (
     <tr
+      aria-selected={selected || undefined}
       className={[
-        "border-b border-glass-border/70 transition-colors last:border-b-0 hover:bg-glass-hover",
+        "border-b border-border/70 transition-colors last:border-b-0",
+        selected ? "bg-primary/10 hover:bg-primary/14" : "hover:bg-surface-2/55",
+        interactive ? "cursor-pointer" : "",
         className,
-      ].join(" ")}
+      ]
+        .filter(Boolean)
+        .join(" ")}
       {...rest}
     />
   );
 }
 
-export function TCell({ className = "", ...rest }: TdHTMLAttributes<HTMLTableCellElement>) {
+export function TCell({
+  align,
+  numeric = false,
+  className = "",
+  ...rest
+}: TdHTMLAttributes<HTMLTableCellElement> & {
+  align?: CellAlign;
+  numeric?: boolean;
+}) {
+  const resolvedAlign = align ?? (numeric ? "right" : "left");
   return (
     <td
-      className={["py-3 pr-4 first:pl-4 last:pr-4", className].join(" ")}
+      className={[
+        "px-3 py-2.5 align-middle first:pl-4 last:pr-4",
+        ALIGN_CLASS[resolvedAlign],
+        numeric ? "tabular-nums" : "",
+        className,
+      ]
+        .filter(Boolean)
+        .join(" ")}
       {...rest}
     />
   );

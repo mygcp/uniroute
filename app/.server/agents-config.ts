@@ -17,12 +17,12 @@ import { TtlCache } from "./async-utils";
 import { query } from "./db";
 
 /**
- * Konfigurasi harness AI agent CLI (Codex, Claude Code, OpenCode) agar
- * terhubung ke gateway UniRoute.
+ * Configure AI agent CLI harnesses (Codex, Claude Code, OpenCode) to route
+ * through UniRoute.
  *
- * Safety: setiap penulisan config otomatis mem-backup file lama ke
- * `~/.uniroute/backups/<harness>/` dan bisa di-restore kapan saja. File JSON
- * yang tidak valid tidak akan ditimpa (abort + pesan agar di-restore manual).
+ * Every write backs up the previous file to `~/.uniroute/backups/<harness>/`.
+ * Invalid JSON configs are never overwritten; an error is thrown so the user
+ * can fix or restore manually.
  */
 
 export type HarnessId = "codex" | "claude-code" | "opencode";
@@ -31,7 +31,7 @@ export type HarnessMeta = {
 	id: HarnessId;
 	name: string;
 	description: string;
-	/** Path config relatif terhadap home (atau XDG_CONFIG_HOME untuk opencode). */
+	/** Config path relative to home (or XDG_CONFIG_HOME for opencode). */
 	configPath: string;
 	format: "toml" | "json";
 	docsUrl: string;
@@ -76,13 +76,13 @@ export function isHarnessId(value: string): value is HarnessId {
 export class ConfigError extends Error {}
 
 export type GenerateInput = {
-	/** Base URL gateway, mis. http://192.168.1.10:3000 (tanpa /v1). */
+	/** Gateway base URL, e.g. http://192.168.1.10:3000 (without /v1). */
 	baseUrl: string;
-	/** API key client UniRoute dalam bentuk plaintext. */
+	/** Plaintext UniRoute client API key. */
 	apiKey: string;
-	/** Model default (opsional). */
+	/** Optional default model. */
 	model?: string | null;
-	/** Codex saja: token langsung di file ("token") atau via env var ("env"). */
+	/** Codex only: store token in file ("token") or use env var ("env"). */
 	authMode?: "token" | "env";
 };
 
@@ -146,7 +146,7 @@ function codexProviderSection(input: GenerateInput): string[] {
 	if (input.authMode === "env") {
 		lines.push(`env_key = "${UNIROUTE_ENV_KEY}"`);
 		lines.push(
-			`env_key_instructions = "Set ${UNIROUTE_ENV_KEY} dengan API key UniRoute Anda."`,
+			`env_key_instructions = "Set ${UNIROUTE_ENV_KEY} to your UniRoute API key."`,
 		);
 	} else {
 		lines.push(
@@ -158,8 +158,8 @@ function codexProviderSection(input: GenerateInput): string[] {
 
 export function buildCodexConfig(input: GenerateInput): string {
 	const lines = [
-		"# ~/.codex/config.toml — dikelola oleh UniRoute (halaman AI Agents).",
-		"# Backup file lama tersimpan di ~/.uniroute/backups/codex/",
+		"# ~/.codex/config.toml (managed by UniRoute AI Agents page).",
+		"# Backups are stored in ~/.uniroute/backups/codex/",
 	];
 	if (input.model) lines.push(`model = "${tomlEscape(input.model)}"`);
 	lines.push('model_provider = "uniroute"', "");
@@ -167,11 +167,11 @@ export function buildCodexConfig(input: GenerateInput): string {
 	return `${lines.join("\n")}\n`;
 }
 
-/** Merge level top-level + section `[model_providers.uniroute]` ke TOML lama. */
+/** Merge top-level keys and `[model_providers.uniroute]` into existing TOML. */
 export function mergeCodexConfig(existing: string, input: GenerateInput): string {
 	const srcLines = existing.replace(/\r\n/g, "\n").split("\n");
 
-	// 1) Top-level scalar keys (sebelum header section pertama).
+	// 1) Top-level scalar keys (before the first section header).
 	let firstSectionIdx = srcLines.findIndex((l) => /^\s*\[/.test(l));
 	if (firstSectionIdx === -1) firstSectionIdx = srcLines.length;
 	const scalars: Record<string, number> = {};
@@ -187,7 +187,7 @@ export function mergeCodexConfig(existing: string, input: GenerateInput): string
 		if (scalars[key] !== undefined) {
 			srcLines[scalars[key]] = line;
 		} else {
-			// Sisipkan setelah blok komentar/blank di awal file.
+			// Insert after leading comment/blank lines.
 			let insertAt = 0;
 			while (
 				insertAt < firstSectionIdx &&
@@ -204,7 +204,7 @@ export function mergeCodexConfig(existing: string, input: GenerateInput): string
 		}
 	}
 
-	// 2) Section [model_providers.uniroute]: ganti utuh bila ada.
+	// 2) Section [model_providers.uniroute]: replace whole block if present.
 	const sectionIdx = srcLines.findIndex((l) =>
 		/^\[model_providers\.uniroute\]\s*$/.test(l),
 	);
@@ -243,12 +243,12 @@ function parseJsonConfig(raw: string): Record<string, unknown> {
 	try {
 		const parsed: unknown = JSON.parse(raw.replace(/^\uFEFF/, ""));
 		if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-			throw new Error("bukan object");
+			throw new Error("not an object");
 		}
 		return parsed as Record<string, unknown>;
 	} catch {
 		throw new ConfigError(
-			"File config yang ada bukan JSON yang valid — perbaiki manual atau restore dari backup. UniRoute tidak akan menimpanya.",
+			"Existing config file is not valid JSON. Fix it manually or restore from backup; UniRoute will not overwrite it.",
 		);
 	}
 }
@@ -293,7 +293,7 @@ export function mergeJsonConfig(
 	return `${JSON.stringify(obj, null, 2)}\n`;
 }
 
-/** Konten final config untuk harness, dengan atau tanpa file lama. */
+/** Final config content for a harness, with or without an existing file. */
 export function buildConfig(
 	id: HarnessId,
 	input: GenerateInput,
@@ -335,18 +335,18 @@ function timestampToken(d = new Date()): string {
 
 function assertSafeBackupName(file: string): void {
 	if (!BACKUP_FILE_RE.test(file) || file.includes("..")) {
-		throw new ConfigError("Nama backup tidak valid.");
+		throw new ConfigError("Invalid backup filename.");
 	}
 }
 
-/** Salin config saat ini ke folder backup; return nama file backup. */
+/** Copy current config to the backup directory and return the backup filename. */
 export function createBackup(id: HarnessId, home?: string): string | null {
 	const cfgPath = resolveConfigAbsPath(id, home);
 	if (!existsSync(cfgPath)) return null;
 	const dir = backupDir(id, home);
 	mkdirSync(dir, { recursive: true });
 	const base = path.basename(cfgPath);
-	// Nama unik: operasi dalam detik yang sama tidak boleh saling menimpa.
+	// Disambiguate backups created within the same second.
 	let name = `${base}.${timestampToken()}${BACKUP_SUFFIX}`;
 	for (let n = 2; existsSync(path.join(dir, name)); n++) {
 		name = `${base}.${timestampToken()}-${n}${BACKUP_SUFFIX}`;
@@ -377,7 +377,7 @@ export function deleteBackup(id: HarnessId, file: string, home?: string): void {
 	unlinkSync(path.join(backupDir(id, home), file));
 }
 
-/** Restore backup → config. Config saat ini di-backup dulu (restore reversible). */
+/** Restore a backup to the active config after backing up the current file. */
 export function restoreBackup(
 	id: HarnessId,
 	file: string,
@@ -386,7 +386,7 @@ export function restoreBackup(
 	assertSafeBackupName(file);
 	const dir = backupDir(id, home);
 	const src = path.join(dir, file);
-	if (!existsSync(src)) throw new ConfigError("Backup tidak ditemukan.");
+	if (!existsSync(src)) throw new ConfigError("Backup not found.");
 	const target = resolveConfigAbsPath(id, home);
 	const safetyBackup = createBackup(id, home);
 	mkdirSync(path.dirname(target), { recursive: true });
@@ -408,7 +408,7 @@ function parseTomlQuotedValue(line: string): string | null {
 	return m[1]!.replace(/\\"/g, '"').replace(/\\\\/g, "\\");
 }
 
-/** Deteksi apakah entri UniRoute benar-benar ada di dalam isi file config. */
+/** Detect whether UniRoute entries exist in the config content. */
 export function detectUniRouteConfig(
 	id: HarnessId,
 	raw: string | null,
@@ -524,22 +524,21 @@ function meaningfulToml(lines: string[]): boolean {
 	});
 }
 
-/** Buang semua jejak UniRoute dari config.toml Codex. */
+/** Remove all UniRoute entries from Codex config.toml. */
 function stripCodexConfig(existing: string): {
 	content: string;
 	meaningful: boolean;
 } {
 	const OUR_COMMENTS = [
 		"# ~/.codex/config.toml",
-		"# Backup file lama tersimpan",
+		"# Backups are stored",
 		"# --- added by UniRoute ---",
 	];
 	const rawLines = existing.replace(/\r\n/g, "\n").split("\n");
 	let firstSectionIdx = rawLines.findIndex((l) => /^\s*\[/.test(l));
 	if (firstSectionIdx === -1) firstSectionIdx = rawLines.length;
 
-	// Bila UniRoute adalah provider aktif di level top-level, nilai `model`
-	// top-level (sebelum section pertama) juga berasal dari Apply kami.
+	// If UniRoute is the active top-level provider, top-level `model` also came from Apply.
 	const hadOurProvider = rawLines
 		.slice(0, firstSectionIdx)
 		.some((l) => /^model_provider\s*=\s*"uniroute"\s*$/.test(l.trim()));
@@ -554,7 +553,7 @@ function stripCodexConfig(existing: string): {
 		return true;
 	});
 
-	// Buang blok section [model_providers.uniroute] (sampai header berikutnya).
+	// Remove [model_providers.uniroute] block up to the next section header.
 	const sectionIdx = lines.findIndex((l) => l.trim() === CODEX_SECTION_HEADER);
 	if (sectionIdx !== -1) {
 		let end = sectionIdx + 1;
@@ -607,15 +606,13 @@ function stripOpencode(existing: string): JsonStrip {
 export type RemoveResult = {
 	path: string;
 	safetyBackup: string | null;
-	/** true = file ikut dihapus karena tidak ada konten lain selain punya UniRoute. */
+	/** true when the file was deleted because only UniRoute entries remained. */
 	fileDeleted: boolean;
 };
 
 /**
- * Kembalikan config harness ke kondisi default: buang entri yang ditulis
- * UniRoute, pertahankan milik user. Bila setelah itu file tinggal kosong/
- * komentar saja, file dihapus (persis kondisi sebelum UniRoute menulis).
- * File saat ini selalu di-backup dulu.
+ * Remove UniRoute entries from the harness config while preserving user keys.
+ * Backs up the current file first and deletes it if no other content remains.
  */
 export function removeUniRouteFromConfig(
 	id: HarnessId,
@@ -668,10 +665,8 @@ export type McpHarnessId = "codex" | "claude-code" | "opencode";
 
 const MCP_NAME = "uniroute";
 
-/** Perintah default untuk spawn server MCP dari mesin yang sama. */
+/** Default command to spawn the local MCP server. */
 export function defaultMcpCommand(): string[] {
-  // Entri MCP server tinggal di dalam app/.server — resolusi terhadap root
-  // proyek (bukan process.argv[1], yang bergantung pada proses pemanggil).
   const root = process.env.UNIROUTE_ROOT ?? process.cwd();
   return ["bun", path.join(root, "app", ".server", "mcp-server.ts")];
 }
@@ -705,8 +700,7 @@ function removeTomlSection(srcLines: string[], header: string): string[] {
 }
 
 /**
- * Daftarkan MCP server UniRoute ke config harness (backup dulu).
- * Codex: [mcp_servers.uniroute]; Claude Code: mcpServers; OpenCode: mcp.servers.
+ * Register UniRoute MCP server in the harness config after creating a backup.
  */
 export function installMcp(
   id: McpHarnessId,
@@ -761,7 +755,7 @@ export function installMcp(
   return { path: target, safetyBackup, fileDeleted: false };
 }
 
-/** Copot registrasi MCP. Config saat ini di-backup dulu. */
+/** Unregister MCP from the harness config after creating a backup. */
 export function removeMcp(
   id: McpHarnessId,
   home?: string,
@@ -841,12 +835,12 @@ export function readConfig(id: HarnessId, home?: string): string | null {
 
 export type WriteResult = {
 	content: string;
-	/** Nama backup dari file yang tertimpa (null bila file baru). */
+	/** Backup filename of the overwritten file (null for new files). */
 	safetyBackup: string | null;
 	path: string;
 };
 
-/** Generate + tulis config dengan backup otomatis sebelum menimpa. */
+/** Generate and write harness config with automatic backup before overwriting. */
 export function writeHarnessConfig(
 	id: HarnessId,
 	input: GenerateInput,
@@ -855,7 +849,7 @@ export function writeHarnessConfig(
 	const target = resolveConfigAbsPath(id, home);
 	const existing = readConfig(id, home);
 
-	// Validasi lebih awal untuk JSON: jangan timpa file rusak.
+	// Validate JSON upfront so malformed configs are never overwritten.
 	if (existing !== null && existing.trim() !== "") {
 		const meta = HARNESS_REGISTRY[id];
 		if (meta.format === "json") parseJsonConfig(existing);
@@ -872,7 +866,7 @@ export function writeHarnessConfig(
 
 /* ------------------------- CLI detection & settings ------------------------ */
 
-/** Binary CLI yang dideteksi untuk tiap harness. */
+/** CLI binaries detected per harness. */
 const HARNESS_BINS: Record<HarnessId, string[]> = {
 	codex: ["codex"],
 	"claude-code": ["claude", "claude-code"],
@@ -930,10 +924,7 @@ export function isKeyRevealLockedByEnv(): boolean {
 	return process.env.ALLOW_API_KEY_REVEAL === "1";
 }
 
-/**
- * Reveal key diizinkan bila env `ALLOW_API_KEY_REVEAL=1` ATAU diaktifkan
- * lewat toggle web (tabel settings) — pola sama dengan require_api_key.
- */
+/** Key reveal is allowed when ALLOW_API_KEY_REVEAL=1 or enabled in settings. */
 export function isKeyRevealAllowed(): boolean {
 	if (isKeyRevealLockedByEnv()) return true;
 	const row = query("SELECT value FROM settings WHERE key = ?").get(
@@ -953,14 +944,14 @@ export function setKeyRevealAllowed(enabled: boolean): void {
 export type HarnessStatus = HarnessMeta & {
 	absPath: string;
 	exists: boolean;
-	/** true hanya jika entri konfigurasi UniRoute benar-benar ada di file config. */
+	/** true only when UniRoute entries exist in the config file. */
 	unirouteConfigured: boolean;
 	unirouteBaseUrl: string | null;
 	unirouteModel: string | null;
 	size: number | null;
 	updatedAt: number | null;
 	backups: BackupInfo[];
-	/** Apakah binary CLI harness terdeteksi di PATH. */
+	/** Whether the harness CLI binary is detected on PATH. */
 	cliInstalled: boolean;
 	cliBin: string | null;
 	mcpInstalled: boolean;

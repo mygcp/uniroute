@@ -1,11 +1,9 @@
-// Benchmark gateway streaming: bandingkan mock upstream DIAKSES LANGSUNG
-// vs LEWAT GATEWAY, bergantian N pasangan, lalu laporkan median.
+// Streaming gateway benchmark: compare direct mock upstream vs through gateway
+// across N alternating pairs, then report median latency.
 //
-// Jalankan (mock harus sudah jalan + provider bench terpasang + server
-// sudah di-restart):
+// Run (with mock upstream + bench provider registered + server restarted):
 //   node scripts/bench/mock-upstream.mjs &
 //   node scripts/bench/register-bench-provider.mjs
-//   ... restart server ...
 //   BASE=http://localhost:5173 PASSWORD=CHANGEME node scripts/bench/run-bench.mjs
 //
 // Env: BASE, PASSWORD, MODEL (default bench-test), PAIRS (default 7),
@@ -16,7 +14,7 @@ const MODEL = process.env.MODEL ?? "bench-test";
 const PAIRS = Number(process.env.PAIRS ?? 7);
 const DIRECT = process.env.DIRECT ?? "http://127.0.0.1:8791";
 
-// 1) Login → cookie sesi.
+// 1) Sign in for a session cookie.
 const loginRes = await fetch(`${BASE}/login`, {
 	method: "POST",
 	headers: { "content-type": "application/x-www-form-urlencoded" },
@@ -25,7 +23,7 @@ const loginRes = await fetch(`${BASE}/login`, {
 });
 const setCookie = loginRes.headers.get("set-cookie");
 if (!setCookie) {
-	console.error("login gagal — cek PASSWORD/BASE.");
+	console.error("login failed: check PASSWORD/BASE.");
 	process.exit(1);
 }
 const cookie = setCookie.split(";")[0];
@@ -54,7 +52,7 @@ async function once(base, pathPrefix, headers) {
 		const { done, value } = await reader.read();
 		if (done) break;
 		if (ttft === null && value.length) {
-			// Byte pertama yang berisi frame data (bukan komentar keep-alive).
+			// First byte containing a data frame (excluding keep-alive comments).
 			ttft = performance.now() - t0;
 		}
 		bytes += value.length;
@@ -81,20 +79,19 @@ for (let i = 0; i < PAIRS; i++) {
 
 const med = (arr) => [...arr].sort((a, b) => a - b)[Math.floor(arr.length / 2)];
 if (d.length === 0 || g.length === 0) {
-	console.error("tidak ada pasangan valid — periksa mock/server.");
+	console.error("no valid pairs: check mock/server.");
 	process.exit(1);
 }
 const mt = med(d.map((r) => r.ttft));
 const gt = med(g.map((r) => r.ttft));
 const mo = med(d.map((r) => r.total));
 const go = med(g.map((r) => r.total));
-console.log(`\n=== median ${Math.min(d.length, g.length)} pasangan (model: ${MODEL}) ===`);
+console.log(`\n=== median ${Math.min(d.length, g.length)} pairs (model: ${MODEL}) ===`);
 console.log(`direct : ttft=${mt.toFixed(1)}ms total=${mo.toFixed(1)}ms bytes=${d[0].bytes}`);
 console.log(`gateway: ttft=${gt.toFixed(1)}ms total=${go.toFixed(1)}ms bytes=${g[0].bytes}`);
 console.log(
 	`overhead: total=+${(go - mo).toFixed(1)}ms (${(((go - mo) / mo) * 100).toFixed(2)}%)`,
 );
 console.log(
-	"catatan: ttft gateway mencakup frame kosong yang difilter — bandingkan\n" +
-		"total & bytes untuk throughput; ttft direct termasuk frame kosong mock.",
+	"note: gateway ttft excludes filtered empty frames; compare total and bytes for throughput.",
 );

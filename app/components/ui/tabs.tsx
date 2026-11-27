@@ -29,7 +29,7 @@ export function Tabs({
     <div
       role="tablist"
       className={[
-        "tabs-scroll inline-flex max-w-full rounded-xl border border-border bg-surface-2/75 p-1",
+        "tabs-scroll inline-flex max-w-full rounded-md border border-border bg-surface-2 p-1",
         className,
       ].join(" ")}
     >
@@ -48,10 +48,10 @@ export function Tabs({
             onClick={() => onChange(tab)}
             onKeyDown={(e) => onKeyDown(e, i)}
             className={[
-              "shrink-0 cursor-pointer rounded-lg border px-3 py-1.5 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
+              "shrink-0 cursor-pointer rounded px-3 py-1.5 min-h-[44px] sm:min-h-[30px] text-sm font-medium transition-colors",
               selected
-                ? "border-border-strong/80 bg-surface text-foreground shadow-xs"
-                : "border-transparent text-muted-foreground hover:text-foreground",
+                ? "border border-border-strong bg-surface text-foreground"
+                : "border border-transparent text-muted-foreground hover:text-foreground",
             ].join(" ")}
           >
             {tab}

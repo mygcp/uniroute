@@ -42,7 +42,7 @@ function json(payload: unknown, status = 200): Response {
 export type ComboRunParams = {
 	combo: Combo;
 	canonical: CanonicalRequest;
-	/** clientKey.rule — null bila request tanpa api key ter-otorisasi. */
+	/** clientKey.rule, or null when unauthenticated. */
 	rule: ClientKey | null;
 	ruleApplied: string | null;
 	request: Request;
@@ -68,9 +68,9 @@ function cloneMessages(messages: CanonicalMessage[]): CanonicalMessage[] {
 }
 
 /**
- * Bangun request canonical untuk satu step:
- * - priority: messages asli (+ prompt step sebagai system hint bila ada)
- * - pipeline: messages asli + output langkah sebelumnya + prompt step
+ * Build canonical request for a single step:
+ * - priority: original messages (+ step prompt as system hint if present)
+ * - pipeline: original messages + previous step output + step prompt
  */
 function buildStepCanonical(
 	ctx: RunContext,
@@ -83,8 +83,7 @@ function buildStepCanonical(
 	const messages = cloneMessages(ctx.canonical.messages);
 
 	if (step.prompt) {
-		// Sisipkan instruksi step setelah system messages asli (provider umumnya
-		// menginginkan system di awal).
+		// Insert step instructions after existing system messages.
 		let insertAt = 0;
 		while (insertAt < messages.length && messages[insertAt].role === "system")
 			insertAt += 1;
@@ -97,7 +96,7 @@ function buildStepCanonical(
 	if (ctx.combo.strategy === "pipeline" && index > 0 && carryText) {
 		messages.push({
 			role: "user",
-			content: `[Output dari langkah sebelumnya]\n${carryText}`,
+			content: `[Output from previous step]\n${carryText}`,
 		} satisfies CanonicalMessage);
 	}
 
@@ -129,20 +128,20 @@ function resolveStepPool(
 	return pool;
 }
 
-/** Resolusi api key akun: akun spesifik atau null (= auto/dynamic). */
+/** Resolve account API key: specific account or null (auto/dynamic). */
 function resolveAccountApiKey(
 	step: ComboStep,
 	providerId: string,
 ): ApiKeyRow | null {
 	const keys = listApiKeys(providerId).filter((k) => k.is_active === 1);
 	if (keys.length === 0) return null;
-	// Dynamic (kosong) = semua akun aktif provider ini.
+	// Dynamic (empty) = all active accounts for this provider.
 	const wanted =
 		step.accountIds && step.accountIds.length > 0
 			? keys.filter((k) => step.accountIds!.includes(k.id))
 			: keys;
 	if (wanted.length === 0) return null;
-	// Rotasi sederhana merata antar akun terpilih.
+	// Simple round-robin rotation across selected accounts.
 	const idx = Math.floor(Math.random() * wanted.length);
 	return wanted[idx];
 }
@@ -369,8 +368,7 @@ async function executeOneModel(
 }
 
 /**
- * Jalankan satu step (bisa berisi beberapa model sebagai fallback pada provider
- * yang sama). Model dicoba berurutan; gagal → lanjut ke model berikutnya.
+ * Execute one step (trying its fallback models sequentially on the same provider).
  */
 async function executeStep(
 	ctx: RunContext,
@@ -399,19 +397,13 @@ async function executeStep(
 		lastFail = outcome;
 		if (outcome.status === 0) {
 		}
-		// Upstream gagal — coba model fallback berikutnya pada provider yang sama.
+		// Upstream failed; try next fallback model on the same provider.
 	}
 	return lastFail;
 }
 
 /**
- * Jalankan Combo untuk satu request.
- *
- * - `priority`: coba step demi step (dan model dalam step); yang berhasil → return.
- *   Untuk request streaming, fallback hanya terjadi sebelum stream mulai.
- * - `pipeline`: jalankan step berurutan; tiap step menerima output step
- *   sebelumnya (kecuali step terakhir yang boleh streaming bila diminta).
- *   Step perantara yang gagal → hentikan dengan error.
+ * Run Combo for a single request (`priority` fallback chain or sequential `pipeline`).
  */
 export async function runComboEngine(
 	params: ComboRunParams,
@@ -430,7 +422,7 @@ export async function runComboEngine(
 
 		if (outcome.kind === "ok") {
 			if (ctx.combo.strategy === "pipeline" && !isFinal) {
-				carryText = outcome.text || "(step menghasilkan output kosong)";
+				carryText = outcome.text || "(step produced empty output)";
 				continue;
 			}
 			return outcome.response;

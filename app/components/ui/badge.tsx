@@ -14,11 +14,11 @@ const SOLID: Record<BadgeTone, string> = {
 
 const SUBTLE: Record<BadgeTone, string> = {
   neutral: "border border-border bg-surface-2 text-muted-foreground",
-  success: "border border-success/25 bg-success/12 text-success",
-  warning: "border border-warning/25 bg-warning/12 text-warning",
-  danger: "border border-danger/25 bg-danger/12 text-danger",
-  info: "border border-info/25 bg-info/12 text-info",
-  primary: "border border-primary/25 bg-primary/12 text-primary",
+  success: "border border-success/30 bg-success/12 text-success",
+  warning: "border border-warning/30 bg-warning/12 text-warning",
+  danger: "border border-danger/30 bg-danger/12 text-danger",
+  info: "border border-info/30 bg-info/12 text-info",
+  primary: "border border-primary/30 bg-primary/12 text-primary",
 };
 
 export function Badge({
@@ -36,13 +36,13 @@ export function Badge({
   return (
     <span
       className={[
-        "inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium leading-tight",
+        "inline-flex items-center gap-1.5 rounded-md px-2 py-0.5 text-xs font-medium leading-tight",
         style === "solid" ? SOLID[tone] : SUBTLE[tone],
         className,
       ].join(" ")}
       {...rest}
     >
-      {dot ? <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-current" /> : null}
+      {dot ? <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-current" aria-hidden="true" /> : null}
       {children}
     </span>
   );

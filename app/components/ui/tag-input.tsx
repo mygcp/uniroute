@@ -94,7 +94,7 @@ export function TagInput({
   return (
     <div
       ref={rootRef}
-      className={`relative w-full rounded-lg border border-border bg-surface px-2 py-1.5 text-sm text-foreground transition-colors hover:border-border-strong focus-within:border-primary focus-within:ring-2 focus-within:ring-ring/25 ${className}`}
+      className={`relative w-full rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-foreground transition-colors hover:border-border-strong focus-within:border-primary focus-within:ring-2 focus-within:ring-primary/20 ${className}`}
       onMouseDown={(e) => {
         if (e.target === rootRef.current) {
           const input = rootRef.current.querySelector("input");
@@ -113,7 +113,7 @@ export function TagInput({
             <button
               type="button"
               aria-label={`Remove ${chip}`}
-              className="cursor-pointer text-muted-foreground hover:text-danger"
+              className="cursor-pointer rounded p-0.5 text-muted-foreground transition-colors hover:bg-surface hover:text-danger"
               onClick={() => remove(i)}
             >
               <X size={12} />
@@ -171,7 +171,7 @@ export function TagInput({
         <ul
           id={listboxId}
           role="listbox"
-          className={`slim-scroll absolute left-0 z-50 mt-2 max-h-56 w-full origin-top overflow-auto rounded-xl border border-border-strong bg-surface py-1 text-sm shadow-xl transition-[transform,opacity] duration-100 ${
+          className={`slim-scroll absolute left-0 z-50 mt-1.5 max-h-56 w-full origin-top overflow-auto rounded-lg border border-border-strong bg-surface py-1 text-sm shadow-xl transition-[transform,opacity] duration-100 ${
             closing
               ? "pointer-events-none scale-y-95 opacity-0"
               : "scale-y-100 opacity-100"
@@ -188,16 +188,16 @@ export function TagInput({
                 type="button"
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={() => commit(opt.value)}
-                className={`flex w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-left text-foreground hover:bg-glass-hover ${
-                  i === highlight ? "bg-primary/12 text-primary" : ""
+                className={`flex min-h-[40px] w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-left text-foreground transition-colors hover:bg-surface-2 sm:min-h-[32px] ${
+                  i === highlight ? "bg-primary/12 text-foreground" : ""
                 }`}
               >
                 <span className="flex-1 truncate font-mono text-xs">
                   {opt.value}
                 </span>
                 {opt.type === "combo" ? (
-                  <span className="rounded bg-primary/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-primary">
-                    combo
+                  <span className="rounded bg-primary/15 px-1.5 py-0.5 text-xs font-medium text-primary">
+                    Combo
                   </span>
                 ) : (
                   <>
@@ -206,8 +206,8 @@ export function TagInput({
                         {opt.provider}
                       </span>
                     ) : null}
-                    <span className="rounded bg-surface-2 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-muted-foreground">
-                      model
+                    <span className="rounded bg-surface-2 px-1.5 py-0.5 text-xs font-medium text-muted-foreground">
+                      Model
                     </span>
                   </>
                 )}

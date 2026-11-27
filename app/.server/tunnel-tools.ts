@@ -235,13 +235,17 @@ function parseVersionOutput(tool: TunnelProviderId, output: string): string | nu
 export async function probeTunnelTool(
   tool: TunnelProviderId,
   resolvedPath: string,
-): Promise<{ ok: boolean; version: string | null }> {
+): Promise<{ ok: boolean; version: string | null; error?: string }> {
   let cacheKey = `${tool}:${resolvedPath}`;
   try {
     const st = statSync(resolvedPath);
     cacheKey = `${tool}:${resolvedPath}:${st.mtimeMs}:${st.size}`;
-  } catch {
-    return { ok: false, version: null };
+  } catch (err) {
+    return {
+      ok: false,
+      version: null,
+      error: err instanceof Error ? err.message : "Binary not found",
+    };
   }
 
   const cached = probeCache.get(cacheKey);
@@ -258,7 +262,11 @@ export async function probeTunnelTool(
     );
     const combined = `${res.stdout}\n${res.stderr}`.trim();
     const version = res.ok ? parseVersionOutput(tool, combined) : null;
-    const entry = { ok: res.ok, version };
+    const entry = {
+      ok: res.ok,
+      version,
+      ...(res.ok ? {} : { error: res.error || res.stderr || undefined }),
+    };
     probeCache.set(cacheKey, entry);
     return entry;
   });
@@ -812,13 +820,26 @@ async function downloadTunnelToolImpl(
   clearTunnelProbeCache();
   const probed = await probeTunnelTool(tool, targetPath);
   if (!probed.ok) {
+    try {
+      rmSync(targetPath, { force: true });
+    } catch {
+      /* ignore cleanup errors */
+    }
+    const detail = probed.error ? ` (${probed.error})` : "";
+    const isWinDefenderLikely =
+      process.platform === "win32" &&
+      (tool === "bore" ||
+        /EACCES|EBUSY|ENOENT|virus|unwanted|blocked|operation did not complete/i.test(
+          probed.error ?? "",
+        ));
+    const msg = isWinDefenderLikely
+      ? `Downloaded ${matchedAssetName}, but Windows Defender / antivirus blocked or quarantined ${targetPath}${detail}. Add an exclusion for ${path.dirname(targetPath)} (or install via Scoop/Cargo), or use Cloudflare / frp instead.`
+      : `Downloaded ${matchedAssetName}, but binary check failed at ${targetPath}${detail}.`;
     setDownloadProgress(progressKey, {
       status: "error",
-      message: `Binary check failed at ${targetPath}.`,
+      message: msg,
     });
-    throw new Error(
-      `Downloaded ${matchedAssetName}, but binary check failed at ${targetPath}.`,
-    );
+    throw new Error(msg);
   }
 
   const sizeBytes = statSync(targetPath).size;

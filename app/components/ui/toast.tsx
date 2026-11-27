@@ -28,33 +28,28 @@ const VARIANT_STYLES: Record<
   ToastVariant,
   {
     icon: React.ReactNode;
-    iconBox: string;
-    borderAccent: string;
+    iconClass: string;
     progressBar: string;
   }
 > = {
   success: {
-    icon: <CheckCircle2 size={15} aria-hidden="true" />,
-    iconBox: "border-success/30 bg-success/12 text-success",
-    borderAccent: "border-l-success",
+    icon: <CheckCircle2 size={16} aria-hidden="true" />,
+    iconClass: "text-success",
     progressBar: "bg-success",
   },
   error: {
-    icon: <XCircle size={15} aria-hidden="true" />,
-    iconBox: "border-danger/30 bg-danger/12 text-danger",
-    borderAccent: "border-l-danger",
+    icon: <XCircle size={16} aria-hidden="true" />,
+    iconClass: "text-danger",
     progressBar: "bg-danger",
   },
   warning: {
-    icon: <AlertTriangle size={15} aria-hidden="true" />,
-    iconBox: "border-warning/30 bg-warning/12 text-warning",
-    borderAccent: "border-l-warning",
+    icon: <AlertTriangle size={16} aria-hidden="true" />,
+    iconClass: "text-warning",
     progressBar: "bg-warning",
   },
   info: {
-    icon: <Info size={15} aria-hidden="true" />,
-    iconBox: "border-info/30 bg-info/12 text-info",
-    borderAccent: "border-l-info",
+    icon: <Info size={16} aria-hidden="true" />,
+    iconClass: "text-info",
     progressBar: "bg-info",
   },
 };
@@ -141,16 +136,14 @@ function ToastCard({
       role={variant === "error" ? "alert" : "status"}
       onMouseEnter={onEnter}
       onMouseLeave={onLeave}
-      className={`pointer-events-auto relative flex items-start gap-3 overflow-hidden rounded-xl border border-border-strong border-l-[3px] ${style.borderAccent} bg-surface p-3.5 pb-4 text-sm text-foreground shadow-xl ${
+      className={`pointer-events-auto relative flex items-start gap-2.5 overflow-hidden rounded-lg border border-border-strong bg-surface p-3.5 pb-4 text-sm text-foreground shadow-xl ${
         leaving || item.leaving ? "animate-toast-out" : "animate-toast-in"
       }`}
     >
-      <span
-        className={`mt-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-lg border ${style.iconBox}`}
-      >
+      <span className={`mt-0.5 shrink-0 ${style.iconClass}`}>
         {style.icon}
       </span>
-      <div className="min-w-0 flex-1 pt-0.5">
+      <div className="min-w-0 flex-1">
         <p className="pr-1 text-sm font-semibold leading-snug text-foreground">
           {item.title}
         </p>
@@ -165,7 +158,7 @@ function ToastCard({
         onClick={closeManual}
         aria-label="Dismiss notification"
         title="Dismiss"
-        className="grid h-7 w-7 shrink-0 cursor-pointer place-items-center rounded-lg text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+        className="grid h-7 w-7 shrink-0 cursor-pointer place-items-center rounded-md text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
       >
         <X size={14} aria-hidden="true" />
       </button>

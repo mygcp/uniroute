@@ -19,9 +19,7 @@ import { handleProxy } from "./proxy-handler";
 import { createSession, SESSION_COOKIE } from "./auth";
 import { parse } from "./translate/from-openai-chat";
 
-// Sesi admin sekali-per-proses untuk tool yang memanggil pipeline internal:
-// MCP berjalan di dalam gateway, jadi dianggap tepercaya — require_api_key
-// tidak boleh memblokirnya. api_key eksplisit dari agent tetap diprioritaskan.
+// Process-wide internal admin session for MCP tool calls; explicit agent api_key still takes precedence.
 let mcpAdminSession: string | null = null;
 function mcpAdminCookie(): string {
 	mcpAdminSession ??= createSession();
@@ -69,10 +67,7 @@ import {
 import { getAllTunnelToolsStatus } from "./tunnel-tools";
 import { VALID_TUNNEL_PROVIDERS, type TunnelProviderId } from "../lib/tunnel-options";
 
-/**
- * MCP tools UniRoute — dipakai mcp-server.ts (stdio). Semua akses langsung
- * ke SQLite yang sama dengan gateway, jadi tidak perlu HTTP.
- */
+/** UniRoute MCP tools sharing the gateway SQLite database. */
 
 export type ToolDef = {
   name: string;
@@ -382,7 +377,7 @@ export const TOOLS: ToolDef[] = [
   },
   {
     name: "list_client_keys",
-    description: "List client API keys (names only — secrets are never returned).",
+    description: "List client API keys (names only; secrets are never returned).",
     inputSchema: { type: "object", properties: {} },
   },
   {
@@ -555,7 +550,7 @@ export const TOOLS: ToolDef[] = [
   {
     name: "rotate_client_key",
     description:
-      "Rotate a client API key — old stops working, new plaintext returned once.",
+      "Rotate a client API key: old stops working, new plaintext returned once.",
     inputSchema: {
       type: "object",
       properties: { id: { type: "integer" } },
@@ -692,7 +687,7 @@ const HANDLERS: Record<string, ToolHandler> = {
     const res = query(
       "UPDATE providers SET is_active = ? WHERE id = ?",
     ).run(active, id) as { changes?: number | bigint };
-    reload(); // registry cache harus ikut berubah
+    reload(); // Keep registry cache in sync.
     return { ok: Number(res.changes ?? 0) > 0, provider_id: id, active: !!active };
   },
 
@@ -1140,7 +1135,7 @@ const HANDLERS: Record<string, ToolHandler> = {
       ok: true,
       id: created.id,
       key: created.key,
-      note: "Plaintext shown once — store it now",
+      note: "Plaintext shown once. Store it now.",
     };
   },
 
@@ -1254,7 +1249,7 @@ const HANDLERS: Record<string, ToolHandler> = {
     query(
       "UPDATE models SET is_active = 0 WHERE provider_id = ? AND model_name = ?",
     ).run(str(args.provider_id), str(args.model_name));
-    reload(); // registry cache harus ikut berubah
+    reload(); // Keep registry cache in sync.
     return { ok: true };
   },
 

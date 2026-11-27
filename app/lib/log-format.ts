@@ -1,13 +1,13 @@
 import type { LogEvent } from "../hooks/use-realtime-logs";
 
 export type PricePair = { input: number; output: number };
-/** Peta harga per kombinasi `model::provider_id` (lowercase). */
+/** Price map per lowercase `model::provider_id` key. */
 export type PriceMap = Record<string, PricePair>;
-/** Peta label api key: id → nama/prefix. */
+/** API key label map: id -> name or prefix. */
 export type KeyLabelMap = Record<string, string>;
 
 export function fmtTs(ts: number): string {
-  if (!Number.isFinite(ts) || ts <= 0) return "—";
+  if (!Number.isFinite(ts) || ts <= 0) return "-";
   const ms = ts < 1e12 ? ts * 1000 : ts;
   const d = new Date(ms);
   const pad = (n: number) => String(n).padStart(2, "0");
@@ -16,7 +16,7 @@ export function fmtTs(ts: number): string {
 
 /**
  * Combo requests are labelled with their combo strategy (e.g. `combo:failover`).
- * Everything else goes straight to a provider — label it "direct".
+ * Everything else goes straight to a provider, so label it "direct".
  */
 export function sourceLabel(e: LogEvent): string {
   const strategy = String(e.strategy_used ?? "").trim();
@@ -30,7 +30,7 @@ function tokenPair(e: LogEvent): [number | null, number | null] {
   return [pt, ct];
 }
 
-/** Total token prompt+completion; null bila keduanya tidak dicatat. */
+/** Combined prompt + completion tokens; null if neither is recorded. */
 export function totalTokens(e: LogEvent): number | null {
   const [pt, ct] = tokenPair(e);
   if (pt == null && ct == null) return null;
@@ -43,7 +43,7 @@ export function priceKeyOf(model: unknown, providerId: unknown): string {
   ).trim().toLowerCase()}`;
 }
 
-/** Estimasi biaya USD satu request dari token usage + peta harga loader. */
+/** Estimated USD cost for a single request from token usage and loader price map. */
 export function costOf(e: LogEvent, prices: PriceMap): number | null {
   const [pt, ct] = tokenPair(e);
   if (pt == null && ct == null) return null;
@@ -53,7 +53,7 @@ export function costOf(e: LogEvent, prices: PriceMap): number | null {
 }
 
 export function fmtUsd(v: number | null): string {
-  if (v == null) return "—";
+  if (v == null) return "-";
   if (v === 0) return "$0";
   if (v < 0.01) return `$${v.toFixed(6)}`;
   if (v < 1) return `$${v.toFixed(4)}`;
@@ -61,14 +61,14 @@ export function fmtUsd(v: number | null): string {
 }
 
 export function fmtNum(n: number | null | undefined): string {
-  if (n == null || !Number.isFinite(Number(n))) return "—";
+  if (n == null || !Number.isFinite(Number(n))) return "-";
   return Number(n).toLocaleString("en-US");
 }
 
 const shortCount = (n: number): string =>
   n >= 10_000 ? `${(n / 1000).toFixed(1)}k` : String(n);
 
-/** Ringkasan token untuk baris log: "315", "1.2k/315", "—" bila kosong. */
+/** Token summary for log row: "315", "1.2k/315", or empty when missing. */
 export function fmtTokensShort(e: LogEvent): string {
   const [pt, ct] = tokenPair(e);
   if (pt == null && ct == null) return "";
@@ -76,7 +76,7 @@ export function fmtTokensShort(e: LogEvent): string {
   return shortCount((pt ?? ct)!);
 }
 
-/** Label api key dari event live atau peta label hasil join loader. */
+/** API key label from live event or loader join map. */
 export function keyLabelOf(e: LogEvent, keyLabels: KeyLabelMap): string {
   const name = String(e.api_key_name ?? "").trim();
   if (name) return name;
@@ -87,7 +87,7 @@ export function keyLabelOf(e: LogEvent, keyLabels: KeyLabelMap): string {
 }
 
 export function printable(entry: unknown): string {
-  if (entry === null || entry === undefined) return "—";
+  if (entry === null || entry === undefined) return "-";
   if (
     typeof entry === "string" ||
     typeof entry === "number" ||
@@ -102,7 +102,7 @@ export function printable(entry: unknown): string {
   }
 }
 
-/** metadata proxy log bisa berupa string JSON (dari DB) atau object (live SSE). */
+/** Proxy log metadata can be a JSON string (from DB) or an object (live SSE). */
 export function parseMetadata(raw: unknown): Record<string, unknown> | null {
   if (typeof raw === "string") {
     try {
@@ -120,7 +120,7 @@ export function parseMetadata(raw: unknown): Record<string, unknown> | null {
   return null;
 }
 
-/** Nilai scalar-friendly untuk ditampilkan inline (key=value). */
+/** Scalar-friendly value for inline key=value display. */
 export function scalarValue(v: unknown): string {
   if (v === null || v === undefined) return "";
   if (typeof v === "string") return v;

@@ -13,7 +13,7 @@ import { useToast } from "../components/ui/toast";
 import { useConfirm } from "../components/ui/confirm-dialog";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
-import { Input } from "../components/ui/field";
+import { FilterBar, FilterGroup, FilterActions, SearchInput } from "../components/ui/filter-bar";
 import { PageHeader } from "../components/ui/page-header";
 import { Spinner } from "../components/ui/feedback";
 import { LogViewer } from "../components/log-viewer";
@@ -49,7 +49,7 @@ export function loader({ request }: Route.LoaderArgs) {
       created_at: Number(r.created_at),
       ...r,
     }));
-  // Terbaru di atas — tanpa reverse (SQL sudah ORDER BY id DESC).
+  // Already newest-first from SQL ORDER BY id DESC.
 
   return { initial: proxy };
 }
@@ -105,7 +105,7 @@ function Detail({ event }: { event: LogEvent }) {
       <dl className="grid grid-cols-1 gap-1.5 sm:grid-cols-2 md:grid-cols-3">
         {fields.map(([k, v]) => (
           <div key={k} className="flex min-w-0 gap-2">
-            <dt className="shrink-0 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            <dt className="shrink-0 text-xs font-medium text-muted-foreground">
               {k}
             </dt>
             <dd
@@ -118,7 +118,7 @@ function Detail({ event }: { event: LogEvent }) {
         ))}
       </dl>
       <div className="mt-3">
-        <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+        <h4 className="text-xs font-medium text-muted-foreground">
           Message
         </h4>
         <pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-surface px-3 py-2 font-mono text-xs text-foreground">
@@ -127,7 +127,7 @@ function Detail({ event }: { event: LogEvent }) {
       </div>
       {metadata ? (
         <div className="mt-3">
-          <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+          <h4 className="text-xs font-medium text-muted-foreground">
             Metadata ({Object.keys(metadata).length} field
             {Object.keys(metadata).length === 1 ? "" : "s"})
           </h4>
@@ -206,7 +206,7 @@ const Row = memo(function Row({
   return (
     <div
       className={`border-b border-border/70 text-sm transition-colors last:border-b-0 ${
-        selected ? "bg-primary/8" : "hover:bg-glass-hover"
+        selected ? "bg-primary/8" : "hover:bg-surface-2/60"
       }`}
     >
       <div className="flex flex-col gap-2 px-4 py-2.5 lg:grid lg:grid-cols-[148px_82px_130px_minmax(0,1fr)_96px_68px] lg:items-center lg:gap-3">
@@ -468,32 +468,34 @@ export default function LogsProxy({ loaderData }: Route.ComponentProps) {
         }
       />
 
-      <div className="mb-4 grid grid-cols-1 gap-2 sm:grid-cols-3">
-        <Combobox
-          options={OPTIONS.levels}
-          value={level}
-          onChange={setLevel}
-          placeholder="Level…"
-        />
-        <Combobox
-          options={options.source}
-          value={source}
-          onChange={setSource}
-          placeholder="Source…"
-        />
-        <div className="flex items-center gap-2">
-          <Input
-            type="search"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search message…"
+      <FilterBar>
+        <FilterGroup className="grid w-full grid-cols-1 gap-2 sm:grid-cols-3">
+          <Combobox
+            options={OPTIONS.levels}
+            value={level}
+            onChange={setLevel}
+            placeholder="Level..."
           />
-          {activeFilters ? (
+          <Combobox
+            options={options.source}
+            value={source}
+            onChange={setSource}
+            placeholder="Source..."
+          />
+          <SearchInput
+            value={search}
+            onChange={setSearch}
+            placeholder="Search message..."
+            aria-label="Search proxy log messages"
+            clearLabel="Clear message search"
+          />
+        </FilterGroup>
+        {activeFilters ? (
+          <FilterActions>
             <Button
               type="button"
               variant="outline"
-              size="md"
-              className="shrink-0"
+              size="sm"
               onClick={() => {
                 setLevel("");
                 setSource("");
@@ -502,9 +504,9 @@ export default function LogsProxy({ loaderData }: Route.ComponentProps) {
             >
               Reset
             </Button>
-          ) : null}
-        </div>
-      </div>
+          </FilterActions>
+        ) : null}
+      </FilterBar>
 
       {dialog}
 

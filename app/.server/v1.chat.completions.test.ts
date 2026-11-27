@@ -20,7 +20,7 @@ beforeAll(async () => {
   createSession = auth.createSession;
   action = route.action as unknown as (args: { request: Request }) => Promise<Response>;
   seed();
-  // Registry di-cache antar test file — sinkronkan dengan DB hasil seed ini.
+  // Sync cached registry with the seeded DB.
   reg.reload();
 });
 

@@ -73,17 +73,14 @@ export type ProviderFormat = "openai" | "anthropic" | "gemini";
 export type StreamTransformer = {
   transform(chunk: Uint8Array): Uint8Array;
   flush(): Uint8Array;
-  /** Decode sekali: hasil bytes + text untuk pemakaian lanjutan. */
+  /** Decode once: returns bytes and text for reuse. */
   transformChunk?: (
     chunk: Uint8Array,
   ) => { out: Uint8Array; text: string };
   countTokens?: (chunkText: string) => number;
   done?: () => boolean;
   terminate?: () => Uint8Array;
-  /**
-   * Usage resmi dari event `finish` provider (jika ada). Dipakai executor
-   * untuk mencatat prompt/completion/cached tokens yang akurat di request_logs.
-   */
+  /** Official usage from provider `finish` event, if present. */
   getUsage?:
     | (() => {
         prompt_tokens: number;

@@ -23,10 +23,10 @@ export function UsageBar({
       aria-valuenow={pct}
       aria-valuemin={0}
       aria-valuemax={100}
-      className="h-1.5 w-full overflow-hidden rounded-full bg-track"
+      className="h-1.5 w-full overflow-hidden rounded-sm bg-track"
     >
       <div
-        className={`h-full rounded-full ${TONES[tone]} transition-all duration-300`}
+        className={`h-full rounded-sm ${TONES[tone]} transition-all duration-300`}
         style={{ width: `${pct}%` }}
       />
     </div>

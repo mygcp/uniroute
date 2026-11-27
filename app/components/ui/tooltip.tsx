@@ -27,7 +27,7 @@ export function Tooltip({
       <span
         id={tipId}
         role="tooltip"
-        className={`pointer-events-none absolute z-[80] whitespace-nowrap rounded-lg border border-border-strong bg-surface px-2.5 py-1 text-xs font-medium text-foreground opacity-0 shadow-lg transition-opacity duration-150 group-hover/tip:opacity-100 group-focus-within/tip:opacity-100 ${sideClass} ${alignClass}`}
+        className={`pointer-events-none absolute z-[80] whitespace-nowrap rounded-md border border-border-strong bg-foreground px-2.5 py-1 text-xs font-medium text-background opacity-0 shadow-md transition-opacity duration-150 group-hover/tip:opacity-100 group-focus-within/tip:opacity-100 ${sideClass} ${alignClass}`}
       >
         {label}
       </span>

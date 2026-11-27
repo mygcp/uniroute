@@ -2,14 +2,10 @@ import { useEffect, useState } from "react";
 import { data, Form, useFetcher, useNavigation } from "react-router";
 import type { Route } from "./+types/prompt-guard";
 import {
-  AlertTriangle,
-  CheckCircle2,
   Play,
   RotateCcw,
   Save,
-  Shield,
   ShieldCheck,
-  Sparkles,
 } from "lucide-react";
 import { requireLoaderSession, requireSession } from "../.server/auth";
 import {
@@ -28,7 +24,7 @@ import {
 } from "../lib/prompt-guard-options";
 import { PageHeader } from "../components/ui/page-header";
 import { Card } from "../components/ui/card";
-import { StatCard } from "../components/ui/stat-card";
+import { MetricStrip } from "../components/ui/stat-card";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Label, Select, Textarea } from "../components/ui/field";
@@ -214,32 +210,32 @@ export default function PromptGuardPage({
         }
       />
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard
-          title="Guard Status"
-          value={enabled ? "Active" : "Disabled"}
-          subline={enabled ? "Inspecting gateway traffic" : "Zero proxy overhead"}
-          icon={<Shield size={16} />}
-        />
-        <StatCard
-          title="Enforcement"
-          value={mode === "block" ? "Block" : "Log Only"}
-          subline={mode === "block" ? "Rejects matches with HTTP 400" : "Records warning to Proxy Logs"}
-          icon={<AlertTriangle size={16} />}
-        />
-        <StatCard
-          title="Rule Categories"
-          value={`${activeCategoryCount} / ${PROMPT_GUARD_CATEGORIES.length}`}
-          subline={`${scope === "user_and_tool" ? "User + tool messages" : "All roles"}`}
-          icon={<CheckCircle2 size={16} />}
-        />
-        <StatCard
-          title="System Framing"
-          value={injectSystemGuard ? "Enabled" : "Off"}
-          subline={injectSystemGuard ? "Prepends guard directive" : "No system prompt changes"}
-          icon={<Sparkles size={16} />}
-        />
-      </div>
+      <MetricStrip
+        items={[
+          {
+            label: "Guard status",
+            value: enabled ? "Active" : "Disabled",
+            detail: enabled ? "Inspecting gateway traffic" : "Zero proxy overhead",
+            tone: enabled ? "success" : "default",
+          },
+          {
+            label: "Enforcement",
+            value: mode === "block" ? "Block" : "Log Only",
+            detail: mode === "block" ? "Rejects matches with HTTP 400" : "Records warning to Proxy Logs",
+            tone: mode === "block" ? "info" : "warning",
+          },
+          {
+            label: "Rule categories",
+            value: `${activeCategoryCount} / ${PROMPT_GUARD_CATEGORIES.length}`,
+            detail: scope === "user_and_tool" ? "User + tool messages" : "All roles",
+          },
+          {
+            label: "System framing",
+            value: injectSystemGuard ? "Enabled" : "Off",
+            detail: injectSystemGuard ? "Prepends guard directive" : "No system prompt changes",
+          },
+        ]}
+      />
 
       <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
         <Card className="xl:col-span-2">
@@ -261,7 +257,7 @@ export default function PromptGuardPage({
               />
             ))}
 
-            <div className="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-border bg-surface-2 p-4">
+            <div className="flex flex-wrap items-center justify-between gap-4 rounded-lg border border-border bg-surface-2 p-4">
               <div>
                 <h2 className="text-base font-semibold text-foreground">
                   Enable Prompt Guard
@@ -349,7 +345,7 @@ export default function PromptGuardPage({
               </div>
             </div>
 
-            <div className="space-y-3 rounded-xl border border-border p-4">
+            <div className="space-y-3 rounded-lg border border-border p-4">
               <div className="flex items-center justify-between gap-4">
                 <div>
                   <Label htmlFor="pg-system-prompt">

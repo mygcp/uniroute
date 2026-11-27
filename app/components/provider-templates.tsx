@@ -1,4 +1,3 @@
-import { ArrowRight } from "lucide-react";
 import { PROVIDER_REGISTRY } from "~/registry";
 import type { RegistryEntry } from "~/types";
 import { Badge, type BadgeTone } from "./ui/badge";
@@ -68,28 +67,25 @@ export function ProviderTemplateCard({ template, onPick, active }: CardProps) {
     <button
       type="button"
       onClick={() => onPick(template)}
-      className={`glass-panel glass-panel-interactive group flex cursor-pointer flex-col justify-between p-4 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 ${
-        active ? "border-primary ring-2 ring-primary/25" : ""
+      className={`group flex cursor-pointer flex-col justify-between rounded-lg border bg-surface p-4 text-left transition-colors hover:border-border-strong hover:bg-surface-2/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 ${
+        active ? "border-primary ring-2 ring-primary/20" : "border-border"
       }`}
     >
-      <div className="flex items-start gap-3">
-        <span
-          className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-sm font-bold text-white shadow-sm ${template.color}`}
-        >
-          {template.name.slice(0, 1)}
-        </span>
-        <div className="min-w-0">
-          <p className="font-semibold text-foreground">{template.name}</p>
-          <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-muted-foreground">
-            {template.description}
-          </p>
+      <div className="min-w-0">
+        <div className="flex items-center justify-between gap-2">
+          <p className="truncate font-semibold text-foreground">{template.name}</p>
+          <Badge tone={AUTH_TONE[template.auth_type]}>{AUTH_LABELS[template.auth_type]}</Badge>
         </div>
+        <p className="mt-1.5 line-clamp-2 text-xs leading-relaxed text-muted-foreground">
+          {template.description}
+        </p>
       </div>
-      <div className="mt-4 flex items-center justify-between border-t border-border/70 pt-3">
-        <Badge tone={AUTH_TONE[template.auth_type]}>{AUTH_LABELS[template.auth_type]}</Badge>
-        <span className="inline-flex items-center gap-1 text-xs font-medium text-primary transition-transform group-hover:translate-x-0.5">
-          {template.id === "custom" ? "Configure manually" : "Use template"}
-          <ArrowRight size={13} />
+      <div className="mt-4 flex items-center justify-between gap-2 border-t border-border/70 pt-3">
+        <span className="truncate font-mono text-[11px] text-muted-foreground">
+          {template.base_url}
+        </span>
+        <span className="shrink-0 text-xs font-medium text-primary">
+          {template.id === "custom" ? "Configure" : "Use preset"}
         </span>
       </div>
     </button>

@@ -103,8 +103,8 @@ describe("compress", () => {
 describe("testCompression", () => {
   test("runs regardless of enabled state and returns settings", async () => {
     setSettings({ rtk: 1, caveman: 0 });
-    const r = await testCompression("contoh prompt");
-    expect(r.output).toBe("contoh prompt");
+    const r = await testCompression("sample prompt");
+    expect(r.output).toBe("sample prompt");
     expect(r.settings.rtk_enabled).toBe(true);
   }, 10000);
 });

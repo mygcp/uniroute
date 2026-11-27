@@ -39,6 +39,7 @@ import { PageHeader } from "../components/ui/page-header";
 import { EmptyState } from "../components/ui/empty-state";
 import { Spinner } from "../components/ui/feedback";
 import { Table, THead, THeadCell, TRow, TCell } from "../components/ui/table";
+import { FilterBar, FilterGroup, FilterActions, SearchInput } from "../components/ui/filter-bar";
 import { useConfirm } from "../components/ui/confirm-dialog";
 import { useToast } from "../components/ui/toast";
 
@@ -566,8 +567,7 @@ export async function action({ request }: Route.ActionArgs) {
 //---------------------------------------------------------------------------
 // Memoized sub-components
 //
-// Local state (checkbox selections, tab switches, fetcher results) no longer
-// re-renders the entire page — only the affected rows re-render.
+// Local state (checkbox selections, tab switches, fetcher results) only re-renders affected rows.
 //---------------------------------------------------------------------------
 
 type ProxyRow = Route.ComponentProps["loaderData"]["proxies"][number];
@@ -601,8 +601,7 @@ const ProxyListRow = memo(function ProxyListRow({
 	batchResult: { ok: boolean; latencyMs: number } | undefined;
 	confirm: ConfirmFn;
 }) {
-	// Fetcher per-baris: klik test di satu baris tidak akan mengganggu
-	// baris lain atau hasil batch (test all) sebelumnya.
+	// Per-row fetcher keeps individual test clicks from cancelling batch or sibling tests.
 	const rowFetcher = useFetcher<{
 		test: { id: number; ok: boolean; latencyMs: number };
 	}>();
@@ -615,7 +614,7 @@ const ProxyListRow = memo(function ProxyListRow({
 			: (batchResult ?? null);
 	const health = healthOf(proxy);
 	return (
-		<TRow key={proxy.id}>
+		<TRow key={proxy.id} selected={selected}>
 			<TCell className="w-8 px-3 py-2.5">
 				<Checkbox
 					checked={selected}
@@ -817,14 +816,14 @@ const SavedProxyRow = memo(function SavedProxyRow({
 	selected: boolean;
 	onToggle: (id: number, checked: boolean) => void;
 }) {
-	// Fetcher per-baris agar klik test tidak saling membatalkan antar baris.
+	// Per-row fetcher keeps concurrent test clicks independent.
 	const rowFetcher = useFetcher<{
 		test: { id: number; ok: boolean; latencyMs: number };
 	}>();
 	const testing = rowFetcher.state !== "idle";
 	const result = rowFetcher.data?.test;
 	return (
-		<TRow key={proxy.id}>
+		<TRow key={proxy.id} selected={selected}>
 			<TCell className="px-2 py-1.5">
 				<Checkbox
 					checked={selected}
@@ -1105,7 +1104,7 @@ function ProxiesView({ loaderData }: { loaderData: Route.ComponentProps["loaderD
 		});
 	}, []);
 
-	// Buang seleksi untuk proxy yang sudah tidak ada (setelah delete/bulk).
+	// Drop selections for proxies that were removed.
 	useEffect(() => {
 		const validIds = new Set(loaderData.proxies.map((p) => p.id));
 		setListSel((prev) => {
@@ -1277,86 +1276,104 @@ function ProxiesView({ loaderData }: { loaderData: Route.ComponentProps["loaderD
 					) : (
 						<>
 							{/* Toolbar: search, health filter, custom test URL */}
-							<div className="flex flex-wrap items-center gap-2 border-b border-border bg-surface-2/30 px-4 py-3">
-								<Input
-									controlSize="sm"
-									value={listSearch}
-									onChange={(e) => setListSearch(e.target.value)}
-									placeholder="Search name / host..."
-									className="w-full sm:w-48"
-								/>
-								<Select
-									controlSize="sm"
-									value={listFilter}
-									onChange={(e) =>
-										setListFilter(
-											e.target.value as typeof listFilter,
-										)
-									}
-									className="w-full sm:w-36"
-								>
-									<option value="all">All</option>
-									<option value="active">Active</option>
-									<option value="inactive">Inactive</option>
-									<option value="ok">Healthy</option>
-									<option value="error">Error</option>
-								</Select>
-								<span className="text-xs tabular-nums text-muted-foreground">
-									{filteredProxies.length} of {loaderData.proxies.length}
-								</span>
-
-								{errorCount > 0 && (
-									<>
+							<FilterBar variant="embedded">
+								<FilterGroup>
+									<SearchInput
+										controlSize="sm"
+										value={listSearch}
+										onChange={setListSearch}
+										placeholder="Search name / host..."
+										aria-label="Search proxies"
+										clearLabel="Clear proxy search"
+										containerClassName="w-full sm:w-52"
+									/>
+									<Select
+										controlSize="sm"
+										value={listFilter}
+										onChange={(e) =>
+											setListFilter(
+												e.target.value as typeof listFilter,
+											)
+										}
+										aria-label="Filter proxies by status"
+										className="w-full sm:w-36"
+									>
+										<option value="all">All</option>
+										<option value="active">Active</option>
+										<option value="inactive">Inactive</option>
+										<option value="ok">Healthy</option>
+										<option value="error">Error</option>
+									</Select>
+									<span className="text-xs tabular-nums text-muted-foreground">
+										{filteredProxies.length} of {loaderData.proxies.length}
+									</span>
+									{(listSearch.trim() !== "" || listFilter !== "all") && (
 										<Button
 											size="sm"
-											variant="outline"
+											variant="ghost"
 											type="button"
-											title="Select all proxies whose last test failed"
 											onClick={() => {
-												const next = new Set(listSel);
-												for (const p of loaderData.proxies) {
-													if (healthOf(p) === "error") next.add(p.id);
-												}
-												setListSel(next);
+												setListSearch("");
+												setListFilter("all");
 											}}
 										>
-											Select errors ({errorCount})
+											Reset
 										</Button>
-										<Form
-											method="post"
-											onSubmit={(e) => {
-												e.preventDefault();
-												const form = e.currentTarget;
-												void confirm({
-													title: "Delete all error proxies?",
-													description: `${errorCount} proxies whose last connection test failed will be permanently removed.`,
-													confirmLabel: "Delete",
-													variant: "danger",
-												}).then((ok) => {
-													if (ok) submit(form);
-												});
-											}}
-										>
-											<input type="hidden" name="intent" value="delete-errors" />
+									)}
+									{errorCount > 0 && (
+										<>
 											<Button
 												size="sm"
-												variant="danger"
-												type="submit"
-												className="gap-1.5"
+												variant="outline"
+												type="button"
+												title="Select all proxies whose last test failed"
+												onClick={() => {
+													const next = new Set(listSel);
+													for (const p of loaderData.proxies) {
+														if (healthOf(p) === "error") next.add(p.id);
+													}
+													setListSel(next);
+												}}
 											>
-												<Trash2 size={14} /> Delete error ({errorCount})
+												Select errors ({errorCount})
 											</Button>
-										</Form>
-									</>
-								)}
+											<Form
+												method="post"
+												onSubmit={(e) => {
+													e.preventDefault();
+													const form = e.currentTarget;
+													void confirm({
+														title: "Delete all error proxies?",
+														description: `${errorCount} proxies whose last connection test failed will be permanently removed.`,
+														confirmLabel: "Delete",
+														variant: "danger",
+													}).then((ok) => {
+														if (ok) submit(form);
+													});
+												}}
+											>
+												<input type="hidden" name="intent" value="delete-errors" />
+												<Button
+													size="sm"
+													variant="danger"
+													type="submit"
+													className="gap-1.5"
+												>
+													<Trash2 size={14} /> Delete error ({errorCount})
+												</Button>
+											</Form>
+										</>
+									)}
+								</FilterGroup>
 
-								<div className="ml-auto flex flex-wrap items-center gap-2">
+								<FilterActions className="w-full sm:w-auto">
 									<Input
 										controlSize="sm"
 										defaultValue="https://api.openai.com/v1/models"
 										id="bulk-test-url"
 										placeholder="Test URL"
-										className="w-full font-mono sm:w-64"
+										aria-label="Test URL"
+										className="w-full font-mono sm:w-60"
 									/>
 									<Button
 										size="sm"
@@ -1377,7 +1394,7 @@ function ProxiesView({ loaderData }: { loaderData: Route.ComponentProps["loaderD
 										}}
 									>
 										{manyRunning ? <Spinner size={14} /> : <RefreshCw size={14} />}
-										{manyRunning ? "Testing…" : "Test all"}
+										{manyRunning ? "Testing..." : "Test all"}
 									</Button>
 									<Button
 										size="sm"
@@ -1396,12 +1413,12 @@ function ProxiesView({ loaderData }: { loaderData: Route.ComponentProps["loaderD
 									>
 										<Plug size={14} /> Test selected ({listSel.size})
 									</Button>
-								</div>
-							</div>
+								</FilterActions>
+							</FilterBar>
 
 							{/* Bulk selection bar */}
 							{listSel.size > 0 && (
-								<div className="flex flex-wrap items-center gap-2 border-b border-border bg-muted px-4 py-2">
+								<div className="flex flex-wrap items-center gap-2 border-b border-primary/25 bg-primary/8 px-4 py-2">
 									<span className="text-xs font-medium text-foreground">
 										{listSel.size} selected
 									</span>

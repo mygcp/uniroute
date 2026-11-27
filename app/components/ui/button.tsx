@@ -7,21 +7,21 @@ const VARIANTS: Record<Variant, string> = {
   primary:
     "border border-primary-solid-border bg-primary-solid text-primary-foreground hover:bg-primary-solid-hover active:bg-primary-solid-hover",
   secondary:
-    "border border-border bg-surface-2 text-foreground hover:border-border-strong hover:bg-glass-hover",
+    "border border-border bg-surface-2 text-foreground hover:border-border-strong hover:bg-muted",
   outline:
     "border border-border bg-surface text-foreground hover:border-border-strong hover:bg-surface-2",
   ghost:
     "border border-transparent bg-transparent text-muted-foreground hover:bg-surface-2 hover:text-foreground",
   danger:
-    "border border-danger/35 bg-danger/10 text-danger hover:border-danger-solid hover:bg-danger-solid hover:text-white",
+    "border border-danger/40 bg-danger/10 text-danger hover:border-danger-solid hover:bg-danger-solid hover:text-white",
   "danger-solid":
     "border border-danger-solid bg-danger-solid text-white hover:border-danger-solid-hover hover:bg-danger-solid-hover active:bg-danger-solid-hover",
 };
 
 const SIZES: Record<Size, string> = {
-  sm: "h-8 px-3 text-xs",
-  md: "h-9 px-3.5 text-sm",
-  icon: "h-8 w-8 p-0",
+  sm: "min-h-[44px] sm:min-h-[32px] px-3 text-xs",
+  md: "min-h-[44px] sm:min-h-[36px] px-3.5 text-sm",
+  icon: "min-h-[44px] min-w-[44px] sm:min-h-[34px] sm:min-w-[34px] p-0",
 };
 
 export type ButtonVariant = Variant;
@@ -33,7 +33,7 @@ export function buttonClass(
   extra = "",
 ): string {
   return [
-    "inline-flex items-center justify-center gap-1.5 rounded-lg font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 focus-visible:ring-offset-1 focus-visible:ring-offset-background active:scale-[0.98] disabled:pointer-events-none disabled:opacity-45",
+    "inline-flex items-center justify-center gap-1.5 rounded-md font-medium transition-colors active:scale-[0.98] disabled:pointer-events-none disabled:opacity-45",
     VARIANTS[variant],
     SIZES[size],
     extra,

@@ -32,9 +32,9 @@ export function UsageChart({ data, summary, action }: Props) {
     <div className="glass-panel p-5">
       <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
         <div>
-          <h3 className="text-sm font-semibold text-foreground">
-            Traffic (Last 7 days)
-          </h3>
+          <h2 className="text-sm font-semibold text-foreground">
+            Requests and tokens, last 7 days
+          </h2>
           {summary ? (
             <p className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
               <span>
@@ -97,13 +97,17 @@ export function UsageChart({ data, summary, action }: Props) {
                     {d.count > 0 ? fmtCompact(d.count) : "0"}
                   </span>
                   <div
-                    className="flex w-full max-w-[64px] items-end"
+                    className="relative flex w-full max-w-[64px] items-end border-b border-border/80"
                     style={{ height: barHeight }}
                   >
                     <div
-                      className={`bar-grow-y w-full rounded-t-md transition-opacity ${
+                      aria-hidden="true"
+                      className="pointer-events-none absolute inset-x-0 top-1/2 border-t border-dashed border-border/50"
+                    />
+                    <div
+                      className={`bar-grow-y relative w-full rounded-t-[2px] transition-colors ${
                         d.count > 0
-                          ? "bg-gradient-to-t from-primary to-info/90"
+                          ? "bg-primary hover:bg-primary-solid-border"
                           : "bg-track"
                       } ${isActive ? "ring-2 ring-primary/60" : ""}`}
                       style={{ height: `${h}px`, animationDelay: `${i * 25}ms` }}

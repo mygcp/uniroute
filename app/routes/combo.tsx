@@ -307,7 +307,7 @@ function StepEditor({
 
 					return (
 						<div key={i}>
-							<div className="rounded-xl border border-border bg-surface">
+							<div className="rounded-lg border border-border bg-surface">
 								<div className="flex flex-wrap items-center justify-between gap-2 rounded-t-[11px] border-b border-border bg-surface-2/60 px-3.5 py-2">
 									<span className="flex min-w-0 flex-wrap items-center gap-2">
 										<span className="grid h-5 w-5 shrink-0 place-items-center rounded-md bg-primary/15 font-mono text-xs font-semibold text-primary">
@@ -662,7 +662,7 @@ function ModelAdder({
 			{open && filtered.length > 0 ? (
 				<ul
 					role="listbox"
-					className={`slim-scroll absolute left-0 z-50 mt-1.5 max-h-52 w-full origin-top overflow-auto rounded-xl border border-border-strong bg-surface py-1 text-sm shadow-xl transition-[transform,opacity] duration-100 ${
+					className={`slim-scroll absolute left-0 z-50 mt-1.5 max-h-52 w-full origin-top overflow-auto rounded-lg border border-border-strong bg-surface py-1 text-sm shadow-xl transition-[transform,opacity] duration-100 ${
 						closing
 							? "pointer-events-none scale-y-95 opacity-0"
 							: "scale-y-100 opacity-100"
@@ -679,8 +679,8 @@ function ModelAdder({
 								type="button"
 								onMouseDown={(e) => e.preventDefault()}
 								onClick={() => commit(opt)}
-								className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-foreground hover:bg-glass-hover ${
-									i === highlight ? "bg-glass-hover" : ""
+								className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-foreground hover:bg-surface-2 ${
+									i === highlight ? "bg-surface-2" : ""
 								}`}
 							>
 								<span className="flex-1 truncate font-mono text-xs">{opt}</span>
@@ -850,7 +850,7 @@ function KeyAdder({
 			{open && filtered.length > 0 ? (
 				<ul
 					role="listbox"
-					className={`slim-scroll absolute left-0 z-50 mt-1.5 max-h-52 w-full origin-top overflow-auto rounded-xl border border-border-strong bg-surface py-1 text-sm shadow-xl transition-[transform,opacity] duration-100 ${
+					className={`slim-scroll absolute left-0 z-50 mt-1.5 max-h-52 w-full origin-top overflow-auto rounded-lg border border-border-strong bg-surface py-1 text-sm shadow-xl transition-[transform,opacity] duration-100 ${
 						closing
 							? "pointer-events-none scale-y-95 opacity-0"
 							: "scale-y-100 opacity-100"
@@ -867,8 +867,8 @@ function KeyAdder({
 								type="button"
 								onMouseDown={(e) => e.preventDefault()}
 								onClick={() => commit(opt)}
-								className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-foreground hover:bg-glass-hover ${
-									i === highlight ? "bg-glass-hover" : ""
+								className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-foreground hover:bg-surface-2 ${
+									i === highlight ? "bg-surface-2" : ""
 								}`}
 							>
 								<span className="flex-1 truncate text-xs">{opt}</span>
@@ -971,7 +971,7 @@ function ComboForm({
 						role="radio"
 						aria-checked={strategy === "priority"}
 						onClick={() => setStrategy("priority")}
-						className={`flex items-start gap-3 rounded-xl border p-3.5 text-left transition-colors ${
+						className={`flex items-start gap-3 rounded-lg border p-3.5 text-left transition-colors ${
 							strategy === "priority"
 								? "border-primary bg-primary/10"
 								: "border-border bg-surface-2/40 hover:border-border-strong"
@@ -1001,7 +1001,7 @@ function ComboForm({
 						role="radio"
 						aria-checked={strategy === "pipeline"}
 						onClick={() => setStrategy("pipeline")}
-						className={`flex items-start gap-3 rounded-xl border p-3.5 text-left transition-colors ${
+						className={`flex items-start gap-3 rounded-lg border p-3.5 text-left transition-colors ${
 							strategy === "pipeline"
 								? "border-primary bg-primary/10"
 								: "border-border bg-surface-2/40 hover:border-border-strong"
@@ -1111,7 +1111,7 @@ export default function Combo({ loaderData }: Route.ComponentProps) {
 			{msg?.error ? (
 				<div
 					role="alert"
-					className="mb-4 rounded-xl border border-danger/35 bg-danger/10 px-4 py-3 text-sm text-danger"
+					className="mb-4 rounded-lg border border-danger/35 bg-danger/10 px-4 py-3 text-sm text-danger"
 				>
 					{msg.error}
 				</div>

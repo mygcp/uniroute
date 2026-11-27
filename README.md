@@ -1,166 +1,88 @@
+<div align="center">
+
 # UniRoute
 
-UniRoute is a self-hosted AI gateway with a web dashboard. It puts multiple
-LLM providers behind a single OpenAI-compatible endpoint and adds routing,
-client API keys, outbound proxies, request logging, usage analytics, and an
-MCP server that lets coding agents manage the gateway through tool calls.
+Self-hosted AI gateway and web dashboard. Route OpenAI, Anthropic, and Gemini traffic through one endpoint with fallback combos, client keys, outbound proxies, and MCP control.
+
+[![Release](https://img.shields.io/github/v/release/mygcp/uniroute?style=flat-square&color=c2410c)](https://github.com/mygcp/uniroute/releases)
+[![Runtime](https://img.shields.io/badge/runtime-Bun%20%7C%20Node%2022.5%2B-181816?style=flat-square)](docs/getting-started.md)
+
+[Quick Start](#quick-start) · [Features](#features) · [Documentation](#documentation)
+
+<br />
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/dashboard-dark.png" />
+  <source media="(prefers-color-scheme: light)" srcset="docs/images/dashboard-light.png" />
+  <img src="docs/images/dashboard-dark.png" alt="UniRoute dashboard showing gateway traffic, 7-day usage chart, and active providers" width="100%" />
+</picture>
+
+</div>
 
 ## Features
 
-- OpenAI-compatible API: `/v1/chat/completions`, `/v1/messages`, `/v1/responses`, `/v1/models` — requests are translated between OpenAI, Anthropic, and Gemini formats automatically.
-- Routing rules for model rewrites, provider fallback chains, and a load-balancing strategy per model (combos); models can also carry custom display names surfaced via `/v1/models`.
-- Client API keys with quotas, budgets, expiry, IP rules, auto-block, and rotation.
-- Outbound proxy engine: HTTP CONNECT and SOCKS5 pools with round-robin, priority, or random rotation, health tracking, and egress assignment per client key, account, combo, provider, or global pool.
-- Realtime request logs (status, duration, tokens, transport, proxy, endpoint, upstream TLS) and proxy operation logs.
-- Usage analytics split by input/output/cached tokens with cost estimates.
-- Per-provider chat playground with streaming, thinking/reasoning display, markdown rendering, and sessions saved to SQLite.
-- Media passthrough: `/v1/images/generations`, `/v1/audio/speech`, `/v1/audio/transcriptions`; vision and audio inputs are translated per provider.
-- Global prompt compression with external [RTK](https://github.com/rtk-ai/rtk) and [Caveman Engine](https://github.com/JuliusBrussee/caveman); the binaries are not bundled and are downloaded on demand (SHA-256 verified, no GitHub API or auth).
-- Public tunneling & custom domains with external `cloudflared`, `ngrok`, `frpc`, and `bore` binaries downloaded on demand, including auto-start on boot and auto-reconnect.
-- MCP server exposing 52 tools, registrable from the dashboard into Claude Code, Codex, and OpenCode. A built-in remote HTTP endpoint (`/api/mcp`, bearer token) can be switched on for agents on other machines.
+- Unified `/v1/*` API with automatic translation across OpenAI, Anthropic, and Gemini formats (chat, responses, images, and audio).
+- Model combos (`combo:<name>`) for priority fallback chains and sequential multi-model pipelines.
+- Client API keys with quotas, monthly budgets, IP rules, expiry, and key rotation.
+- Outbound HTTP CONNECT and SOCKS5 proxy pools with health tracking and per-key or per-provider routing.
+- Prompt Guard filtering, optional prompt compression (RTK and Caveman Engine), and built-in public tunnels (`cloudflared`, `ngrok`, `frpc`, `bore`).
+- Live request logs, token and cost analytics, and a per-provider chat playground stored in SQLite.
+- Built-in MCP server with 55 tools (stdio and remote HTTP) plus one-click config for Claude Code, Codex CLI, and OpenCode.
 
-## Quick start
+<table>
+  <tr>
+    <td width="50%">
+      <img src="docs/images/combos.png" alt="UniRoute Model Combos showing priority fallback chains and sequential pipelines" width="100%" />
+      <p align="center"><sub><strong>Model Combos:</strong> priority fallback chains and sequential pipelines</sub></p>
+    </td>
+    <td width="50%">
+      <img src="docs/images/logs.png" alt="UniRoute Request Logs showing live gateway requests, proxy routing, tokens, and cost" width="100%" />
+      <p align="center"><sub><strong>Request Logs:</strong> live traffic, egress proxies, cached tokens, and cost</sub></p>
+    </td>
+  </tr>
+</table>
 
-### Binary (recommended)
+## Quick Start
 
-**Install via curl:**
+**macOS / Linux:**
 
 ```bash
-# latest
 curl -fsSL https://raw.githubusercontent.com/mygcp/uniroute/main/install.sh | sh
-# specific version
-curl -fsSL https://raw.githubusercontent.com/mygcp/uniroute/main/install.sh | sh -s -- v1.0.0
-# custom dir/repo
-BIN_DIR=~/.local/bin REPO=mygcp/uniroute sh install.sh
-
-# verify
-uni doctor
-uni start --daemon --port 3000
-uni status && uni logs -f
+uni start --daemon
 ```
 
-Or download `uni-*` from [Releases](https://github.com/mygcp/uniroute/releases) (standalone binary with client assets embedded).
+**Windows (PowerShell):**
 
-**Self-update:**
+```powershell
+irm https://raw.githubusercontent.com/mygcp/uniroute/main/install.ps1 | iex
+uni start --daemon
+```
+
+**From source ([Bun](https://bun.sh)):**
 
 ```bash
-uni update --check   # check latest
-uni update           # download latest binary for your OS/arch and replace ~/.local/bin/uni
-uniroute update      # alias — same as uni (create symlink: ln -s $(which uni) ~/.local/bin/uniroute)
-# force even if same version
-uni update --force
+bun install && bun run dev
 ```
 
-Single binary via `bun build --compile` (GH Release builds `uni-linux-x64`, `uni-darwin-arm64`, etc.):
+Open `http://localhost:3000` (or `http://localhost:5173` in dev mode) and sign in with the default password `CHANGEME`. Copy `.env.example` to `.env` to customize port, password, or database path.
 
-```bash
-bun run compile            # -> dist/uni (self-contained binary)
-./dist/uni start --daemon
-./dist/uni doctor
-```
-
-Build all targets: `bun run compile:all`.
-
-### Termux / Android
-
-The standalone `uni-*` binaries are built with `bun build --compile` and
-need glibc, so they do NOT run directly on Termux (Bionic libc). Attempting
-to run one fails with `cannot execute: required file not found` — that means
-the ELF interpreter is missing, not that the download is corrupt.
-`install.sh` detects Termux and prints this guidance instead of installing.
-Your options, no root needed unless noted:
-
-(a) proot-distro Ubuntu (separate home dir — feels like a VM):
-
-```bash
-pkg install proot-distro && proot-distro install ubuntu
-proot-distro login ubuntu  # then re-run the installer inside
-```
-
-(b) [termux-desktop](https://github.com/sabamdarif/termux-desktop) Distro
-Container (no root, feels native — same Termux home): distro apps run
-straight from the Termux terminal (`debian` to enter,
-`pdrun <app>` to launch). Set it up, then run the installer there.
-
-(c) chroot distro (needs a ROOTED device — e.g. boot a distro with
-Linux Deploy, chroot into it, then re-run the installer inside).
-
-(d) light mode from source with node (no binary, no root needed):
-
-```bash
-pkg install nodejs git
-git clone https://github.com/mygcp/uniroute uniroute
-cd uniroute && npm ci && npm run build
-curl -fsSL https://raw.githubusercontent.com/mygcp/uniroute/main/install.sh | sh -s -- --light
-```
-
-Light mode installs a `uni` wrapper that runs the repo checkout via
-bun/node, so keep the cloned directory in place.
-
-### From source (Bun)
-
-Requires [Bun](https://bun.sh).
-
-```bash
-bun install
-bun run dev
-```
-
-Open http://localhost:5173 and log in. The app works without configuration;
-the default password is `CHANGEME`. Copy `.env.example` to `.env` to change
-it. See [docs/configuration.md](docs/configuration.md).
-
-For production (without binary):
-
-```bash
-bun run build && bun run start   # serves on PORT (default 3000)
-# or via CLI source:
-bun cli/uni.ts start --daemon
-```
+For Termux/Android, standalone binaries, self-updates, and CLI flags, see [Getting Started](docs/getting-started.md).
 
 ## Documentation
 
-| Document | Contents |
+| Guide | Topics |
 | --- | --- |
-| [Getting Started](docs/getting-started.md) | Install, log in, first provider, first request |
-| [Configuration](docs/configuration.md) | Environment variables |
-| [Architecture](docs/architecture.md) | Stack, request flow, data model |
-| [Providers](docs/providers.md) | Providers, API keys, models, vision and audio |
-| [Chat Playground](docs/chat-playground.md) | Multi-turn chat, saved sessions |
-| [Proxy Engine](docs/proxy-engine.md) | Proxies, pools, rotation strategies, egress priority |
-| [Monitoring](docs/monitoring.md) | Request/proxy logs, usage analytics |
+| [Getting Started](docs/getting-started.md) | Installation, Termux, first provider, first request |
+| [Configuration](docs/configuration.md) | Environment variables and `.env` options |
+| [Architecture](docs/architecture.md) | Request lifecycle, stack, and SQLite schema |
+| [Providers](docs/providers.md) | Upstream providers, credentials, models, vision and audio |
+| [Model Combos](docs/combos.md) | Priority fallback and sequential pipelines |
+| [Proxy Engine](docs/proxy-engine.md) | Outbound proxies, pools, rotation strategies, egress rules |
+| [Compression](docs/compression.md) | Global prompt compression with RTK and Caveman Engine |
+| [Tunneling](docs/tunneling.md) | Public tunnels, auto-start, and custom domains |
+| [Monitoring](docs/monitoring.md) | Realtime request logs, proxy logs, usage analytics |
+| [Chat Playground](docs/chat-playground.md) | Multi-turn chat and saved sessions |
+| [AI Agents & MCP](docs/ai-agents.md) | Coding agent setup, remote HTTP MCP, full tool list |
 | [API Reference](docs/api-reference.md) | `/v1/*` endpoints and error formats |
-| [AI Agents & MCP](docs/ai-agents.md) | Harness config, MCP server (stdio, HTTP, remote), tool list |
-| [Model Combos](docs/combos.md) | Priority fallback and sequential pipeline combos |
-| [Compression](docs/compression.md) | RTK and Caveman Engine setup, global pipeline, options |
-| [Tunneling](docs/tunneling.md) | External cloudflared, ngrok, frpc, bore tunnels, auto-tunneling, custom domains |
-| [Performance](docs/performance.md) | Measured baseline, hot-path invariants, benchmarks |
-| [Development](docs/development.md) | Scripts, testing, code conventions |
-
-## CLI
-
-```bash
-uni start [--port 3000] [-d|--daemon]  # foreground or background
-uni stop
-uni restart [--daemon]
-uni status
-uni logs [-f] [-n 100]
-uni doctor
-uni update [--check] [--force]         # self-update from GitHub Releases
-uni --help
-# uniroute is alias for uni
-```
-
-PID: `data/uniroute.pid` (or `$XDG_DATA_HOME/uniroute/uniroute.pid`), logs: `data/logs/uniroute.log`, overrides `UNIROUTE_PID_FILE`/`UNIROUTE_LOG_FILE`.
-
-## Scripts
-
-```bash
-bun run dev         # dev server on :5173
-bun run build       # production build
-bun run start       # serve the build (Bun)
-bun run compile     # build + bun build --compile → dist/uni
-bun run compile:all # cross-compile linux/darwin arm64/x64
-bun run test        # unit tests
-bun run typecheck   # typegen + tsc
-```
+| [Performance](docs/performance.md) | Measured baseline and benchmarks |
+| [Development](docs/development.md) | Scripts, testing, and code conventions |

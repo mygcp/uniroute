@@ -7,7 +7,7 @@ export const CUSTOM_ENTRY: RegistryEntry = {
   authType: "bearer",
   baseUrl: "",
   format: "openai",
-  description: "Isi manual — URL & auth apa pun",
+  description: "Manual setup: any URL and auth type",
   color: "bg-gray-500",
   models: [],
 };

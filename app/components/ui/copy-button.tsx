@@ -18,9 +18,15 @@ export function CopyButton({
       variant="ghost"
       size="icon"
       type="button"
-      title={label}
+      title={copied ? "Copied" : label}
       aria-label={label}
-      className={className}
+      className={[
+        "hover:border-border",
+        copied ? "border-success/40 text-success hover:text-success" : "",
+        className,
+      ]
+        .filter(Boolean)
+        .join(" ")}
       onClick={async () => {
         const ok = await copyText(text);
         if (ok) {
@@ -29,7 +35,11 @@ export function CopyButton({
         }
       }}
     >
-      {copied ? <Check size={14} className="text-success" /> : <Copy size={14} />}
+      {copied ? (
+        <Check size={14} className="text-success" aria-hidden="true" />
+      ) : (
+        <Copy size={14} aria-hidden="true" />
+      )}
     </Button>
   );
 }

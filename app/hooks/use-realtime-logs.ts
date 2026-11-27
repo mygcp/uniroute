@@ -51,7 +51,7 @@ export function useRealtimeLogs(
         const merged = newestFirstRef.current
           ? [...batch, ...prev]
           : [...prev, ...batch];
-        // Cap panjang list; buang dari ujung yang paling tua.
+        // Cap list length by dropping oldest entries.
         return merged.length > 1000
           ? newestFirstRef.current
             ? merged.slice(0, 1000)
@@ -62,10 +62,10 @@ export function useRealtimeLogs(
         const el = scrollRef.current;
         if (!el) return;
         if (newestFirstRef.current) {
-          // Mode terbaru-di-atas: ikut ke atas hanya bila user memang di dekat atas.
+          // Newest-first mode: follow top only when already near the top.
           if (el.scrollTop <= 120) el.scrollTop = 0;
         } else {
-          // Mode lama: ikut ke bawah hanya bila user di dekat dasar.
+          // Oldest-first mode: follow bottom only when already near the bottom.
           const nearBottom =
             el.scrollHeight - el.scrollTop - el.clientHeight < 120;
           if (nearBottom) el.scrollTop = el.scrollHeight;
@@ -93,8 +93,7 @@ export function useRealtimeLogs(
               started_at?: number;
             };
 
-        // Pelacakan request in-flight (tidak terpengaruh pause): muncul saat
-        // mulai, hilang saat selesai / melewati TTL.
+        // Track in-flight requests regardless of pause state; cleared on completion or TTL.
         if (data.type === "request-start" && data.reqId) {
           setInflight((prev) => [
             {
@@ -125,7 +124,7 @@ export function useRealtimeLogs(
         /* ignore malformed events */
       }
     };
-    // Buang in-flight yang menggantung terlalu lama (proses restart dsb).
+    // Evict stale in-flight entries (e.g. after server restart).
     const ttlTimer = setInterval(() => {
       const cutoff = Date.now() - INFLIGHT_TTL_MS;
       setInflight((prev) =>

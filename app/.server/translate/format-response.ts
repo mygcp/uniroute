@@ -190,7 +190,7 @@ function buildChat(ext: Extracted): Record<string, unknown> {
 
 function buildAnthropic(ext: Extracted): Record<string, unknown> {
   const content: Record<string, unknown>[] = [];
-  // Tanpa signature (display only) — klien baca, bukan untuk di-relay balik.
+  // Omit signature (display only).
   if (ext.reasoning !== "") content.push({ type: "thinking", thinking: ext.reasoning });
   if (ext.text !== "") content.push({ type: "text", text: ext.text });
   for (const tc of ext.toolCalls) {

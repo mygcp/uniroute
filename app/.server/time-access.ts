@@ -64,9 +64,9 @@ function minutesOf(hhmm: string): number | null {
 }
 
 /**
- * Cek apakah waktu sekarang (di timezone config) berada dalam hari & jam yang
- * diizinkan. Konfigurasi null/salah/disabled → allowed. Timezone yang tidak
- * bisa di-resolve → fallback interpretasi UTC (agar tidak hard-block).
+ * Check whether the current time in the configured timezone falls within allowed
+ * days and hours. Null, invalid, or disabled configs allow access; unknown
+ * timezones fall back to UTC.
  */
 export function isWithinAccessHours(
   cfg: AccessHoursConfig | null | undefined,

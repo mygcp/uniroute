@@ -126,11 +126,11 @@ describe("terminate fallback", () => {
     expect(dec.decode(t.terminate?.() ?? new Uint8Array(0))).toContain('"type":"message_stop"');
   });
 
-  test("drops empty content_delta frames (optimasi: tidak diteruskan ke client)", () => {
+  test("drops empty content_delta frames", () => {
     const t = composeStreamTransformer("openai", "openai-chat");
     const out = runAll(t, [
       'data: {"choices":[{"delta":{"role":"assistant"},"index":0}]}\n\n',
-      // 3 frame kosong berturut-turut — harus diabaikan semua.
+      // Three consecutive empty frames must all be dropped.
       'data: {"choices":[{"delta":{"content":""},"index":0}]}\n\n',
       'data: {"choices":[{"delta":{"content":""},"index":0}]}\n\n',
       'data: {"choices":[{"delta":{"content":""},"index":0}]}\n\n',

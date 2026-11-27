@@ -165,7 +165,7 @@ export function verifyPassword(input: string): boolean {
   if (!process.env.PASSWORD?.trim() && !warnedDefaultPassword) {
     warnedDefaultPassword = true;
     console.warn(
-      "[uniroute] PASSWORD not set — using default 'CHANGEME'. Set it in .env for production.",
+      "[uniroute] PASSWORD not set: using default 'CHANGEME'. Set it in .env for production.",
     );
   }
   if (!input) return false;

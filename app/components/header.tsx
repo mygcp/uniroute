@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { Link, useLocation, useNavigate } from "react-router";
 import {
+  ArrowUpCircle,
   Bot,
   Cable,
   ChevronRight,
@@ -46,6 +47,7 @@ const SEGMENT_LABELS: Record<string, string> = {
   proxy: "Proxy Logs",
   analytics: "Analytics",
   usage: "Usage Analytics",
+  updates: "Updates",
 };
 
 function buildBreadcrumbs(pathname: string): Crumb[] {
@@ -88,13 +90,14 @@ const COMMANDS: CommandItem[] = [
   { id: "combo", label: "Model Combos", group: "Pages", keywords: "fallback routing chain", icon: Link2, to: "/combo" },
   { id: "proxies", label: "Proxies", group: "Pages", keywords: "socks5 http pool outbound", icon: Network, to: "/proxies" },
   { id: "compression", label: "Compression", group: "Pages", keywords: "rtk caveman prompt", icon: FileArchive, to: "/compression" },
-  { id: "prompt-guard", label: "Prompt Guard", group: "Pages", keywords: "prompt injection filter safety system guard", icon: ShieldCheck, to: "/prompt-guard" },
+  { id: "prompt-guard", label: "Prompt Guard", group: "Pages", keywords: "prompt injection filter system guard", icon: ShieldCheck, to: "/prompt-guard" },
   { id: "tunnels", label: "Tunneling", group: "Pages", keywords: "cloudflared ngrok frpc bore domain public url", icon: Globe, to: "/tunnels" },
   { id: "mcp", label: "MCP Server", group: "Pages", keywords: "model context protocol tools", icon: Cable, to: "/mcp" },
   { id: "agents", label: "AI Agents", group: "Pages", keywords: "claude codex opencode cli", icon: Bot, to: "/agents" },
   { id: "analytics", label: "Usage Analytics", group: "Pages", keywords: "tokens cost chart breakdown", icon: TrendingUp, to: "/analytics/usage" },
   { id: "logs", label: "Request Logs", group: "Pages", keywords: "live stream traffic debug", icon: ScrollText, to: "/logs" },
   { id: "proxy-logs", label: "Proxy Logs", group: "Pages", keywords: "outbound errors", icon: FolderOpen, to: "/logs/proxy" },
+  { id: "updates", label: "Updates", group: "Pages", keywords: "version release tag upgrade rollback", icon: ArrowUpCircle, to: "/updates" },
   { id: "new-key", label: "Create New API Key", group: "Quick Actions", keywords: "add client key", icon: Plus, to: "/api-manager/create" },
   { id: "new-proxy", label: "Add Outbound Proxy", group: "Quick Actions", keywords: "create proxy", icon: Plus, to: "/proxies/create" },
   { id: "key-groups", label: "Manage Key Groups", group: "Quick Actions", keywords: "quotas groups", icon: KeySquare, to: "/api-manager/groups" },
@@ -150,7 +153,7 @@ function CommandPalette({
 
   return (
     <div
-      className="fixed inset-0 z-[90] flex items-start justify-center bg-black/65 px-4 pt-[14vh] backdrop-blur-[2px]"
+      className="fixed inset-0 z-[90] flex items-start justify-center bg-black/65 px-4 pt-[14vh]"
       role="dialog"
       aria-modal="true"
       aria-label="Quick navigation"
@@ -158,8 +161,8 @@ function CommandPalette({
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className="dialog-pop w-full max-w-lg overflow-hidden rounded-2xl border border-border-strong bg-surface shadow-2xl">
-        <div className="flex items-center gap-2.5 border-b border-border bg-surface-2/40 px-4 py-3">
+      <div className="dialog-pop w-full max-w-lg overflow-hidden rounded-lg border border-border-strong bg-surface shadow-2xl">
+        <div className="flex items-center gap-2.5 border-b border-border bg-surface-2/60 px-4 py-3">
           <Search size={16} className="shrink-0 text-muted-foreground" aria-hidden="true" />
           <input
             ref={inputRef}
@@ -181,18 +184,19 @@ function CommandPalette({
               }
             }}
             placeholder="Jump to page or action..."
+            aria-label="Search pages and actions"
             className="w-full bg-transparent text-sm text-foreground placeholder:text-muted-foreground focus:outline-none"
           />
-          <kbd className="hidden rounded border border-border bg-surface px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground sm:inline-block">
+          <kbd className="hidden rounded border border-border bg-surface px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground sm:inline-block">
             ESC
           </kbd>
           <button
             type="button"
             onClick={onClose}
             aria-label="Close quick navigation"
-            className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 sm:hidden"
+            className="inline-flex min-h-[36px] min-w-[36px] shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground sm:hidden"
           >
-            <X size={15} aria-hidden="true" />
+            <X size={16} aria-hidden="true" />
           </button>
         </div>
 
@@ -211,9 +215,9 @@ function CommandPalette({
                   type="button"
                   onMouseEnter={() => setActive(i)}
                   onClick={() => run(item)}
-                  className={`flex w-full items-center justify-between gap-3 rounded-lg px-3 py-2 text-left text-sm transition-colors ${
+                  className={`flex min-h-[40px] w-full items-center justify-between gap-3 rounded-md px-3 py-2 text-left text-sm transition-colors ${
                     isSelected
-                      ? "bg-primary/12 text-primary"
+                      ? "bg-primary/14 text-foreground"
                       : "text-foreground hover:bg-surface-2"
                   }`}
                 >
@@ -221,14 +225,14 @@ function CommandPalette({
                     <Icon size={15} className={isSelected ? "text-primary" : "text-muted-foreground"} aria-hidden="true" />
                     <span className="font-medium">{item.label}</span>
                   </span>
-                  <span className="text-[11px] text-muted-foreground">{item.group}</span>
+                  <span className="text-xs text-muted-foreground">{item.group}</span>
                 </button>
               );
             })
           )}
         </div>
 
-        <div className="flex items-center justify-between border-t border-border bg-surface-2/40 px-4 py-2 text-[11px] text-muted-foreground">
+        <div className="flex items-center justify-between border-t border-border bg-surface-2/60 px-4 py-2 text-xs text-muted-foreground">
           <div className="flex items-center gap-3">
             <span>↑↓ Navigate</span>
             <span>↵ Open</span>
@@ -240,7 +244,13 @@ function CommandPalette({
   );
 }
 
-export function Header({ onMenuClick }: { onMenuClick?: () => void }) {
+export function Header({
+  onMenuClick,
+  menuButtonRef,
+}: {
+  onMenuClick?: () => void;
+  menuButtonRef?: RefObject<HTMLButtonElement | null>;
+}) {
   const { theme, toggle } = useTheme();
   const { pathname } = useLocation();
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -262,24 +272,24 @@ export function Header({ onMenuClick }: { onMenuClick?: () => void }) {
 
   return (
     <>
-      <header className="sticky top-0 z-40 flex h-14 items-center justify-between gap-3 border-b border-border bg-surface/95 px-3 backdrop-blur-md sm:px-5 md:px-7">
+      <header className="sticky top-0 z-40 flex min-h-14 items-center justify-between gap-3 border-b border-border bg-surface px-3 sm:px-5 md:px-7">
         <div className="flex min-w-0 items-center gap-2.5">
-          <Button
+          <button
+            ref={menuButtonRef}
             type="button"
             onClick={onMenuClick}
             aria-label="Open navigation menu"
-            size="icon"
-            variant="outline"
-            className="md:hidden"
+            className="inline-flex min-h-[44px] items-center gap-1.5 rounded-md border border-border bg-surface-2 px-3 text-xs font-medium text-foreground transition-colors hover:border-border-strong md:hidden"
           >
-            <Menu size={18} />
-          </Button>
+            <Menu size={16} aria-hidden="true" />
+            <span>Menu</span>
+          </button>
 
           <nav aria-label="Breadcrumb" className="flex min-w-0 items-center gap-1.5 text-sm">
             {crumbs.map((c, idx) => (
               <span key={`${c.label}-${idx}`} className="flex min-w-0 items-center gap-1.5">
                 {idx > 0 ? (
-                  <ChevronRight size={14} className="shrink-0 text-muted-foreground/60" />
+                  <ChevronRight size={14} className="shrink-0 text-muted-foreground" aria-hidden="true" />
                 ) : null}
                 {c.to ? (
                   <Link
@@ -302,7 +312,7 @@ export function Header({ onMenuClick }: { onMenuClick?: () => void }) {
             type="button"
             onClick={() => setPaletteOpen(true)}
             aria-label="Quick navigation"
-            className="flex h-8 items-center gap-2 rounded-lg border border-border bg-surface-2/70 px-2.5 text-xs text-muted-foreground transition-colors hover:border-border-strong hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 sm:w-52 sm:justify-between"
+            className="flex min-h-[44px] sm:min-h-[34px] items-center gap-2 rounded-md border border-border bg-surface-2 px-3 text-xs text-muted-foreground transition-colors hover:border-border-strong hover:text-foreground sm:w-52 sm:justify-between"
           >
             <span className="flex items-center gap-1.5">
               <Search size={13} aria-hidden="true" />
@@ -321,7 +331,7 @@ export function Header({ onMenuClick }: { onMenuClick?: () => void }) {
               size="icon"
               variant="outline"
             >
-              {theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
+              {theme === "dark" ? <Sun size={16} aria-hidden="true" /> : <Moon size={16} aria-hidden="true" />}
             </Button>
           </Tooltip>
         </div>

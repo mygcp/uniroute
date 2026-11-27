@@ -16,18 +16,42 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
       - run: bun install --frozen-lockfile
-      - run: bun run build
-      - name: verify build artifacts
+      - name: sync version from tag (prepare)
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          TAG_VER="${GITHUB_REF_NAME#v}"
+          bun -e 'const fs = require("node:fs"); const p = JSON.parse(fs.readFileSync("package.json", "utf8")); p.version = process.argv[1]; fs.writeFileSync("package.json", JSON.stringify(p, null, 2) + "\n");' "$TAG_VER"
+        shell: bash
+      - run: bun run bundle
+      - name: verify build and bundle artifacts
         run: |
           test -f build/server/index.js
           test -f build/client-assets.js
-          wc -l build/client-assets.js
+          test -f dist/uni-bundle.tar.gz
+          ls -lh dist/uni-bundle.tar.gz
+        shell: bash
+      - name: smoke test bundle under bun and node
+        run: |
+          SMOKE="$RUNNER_TEMP/bundle-smoke"
+          rm -rf "$SMOKE" && mkdir -p "$SMOKE"
+          tar -xzf dist/uni-bundle.tar.gz -C "$SMOKE"
+          UNIROUTE_INSTALL_MODE=bundle UNIROUTE_APP_DIR="$SMOKE" bun "$SMOKE/uni.mjs" version
+          UNIROUTE_INSTALL_MODE=bundle UNIROUTE_APP_DIR="$SMOKE" bun "$SMOKE/uni.mjs" doctor
+          UNIROUTE_INSTALL_MODE=bundle UNIROUTE_APP_DIR="$SMOKE" node --no-warnings=ExperimentalWarning "$SMOKE/uni.mjs" version
+          UNIROUTE_INSTALL_MODE=bundle UNIROUTE_APP_DIR="$SMOKE" node --no-warnings=ExperimentalWarning "$SMOKE/uni.mjs" doctor
         shell: bash
       - uses: actions/upload-artifact@v7
         with:
           name: build
           path: build/
+      - uses: actions/upload-artifact@v7
+        with:
+          name: uni-bundle
+          path: dist/uni-bundle.tar.gz
 
   build:
     needs: prepare
@@ -75,7 +99,7 @@ jobs:
       - name: compile
         run: |
           test -f build/client-assets.js
-          bun build cli/uni.ts --compile --minify --sourcemap=none --target=${{ matrix.target }} --outfile dist/${{ matrix.artifact }}
+          bun build cli/uni-compiled.ts --compile --minify --sourcemap=none --target=${{ matrix.target }} --outfile dist/${{ matrix.artifact }}
           ls -lh dist/${{ matrix.artifact }}
         shell: bash
       - name: verify embedded client assets
@@ -155,5 +179,6 @@ jobs:
             dist/**/uni-*
             dist/**/*.tar.gz
             dist/**/*.zip
+            dist/uni-bundle.tar.gz
           fail_on_unmatched_files: false
           generate_release_notes: true

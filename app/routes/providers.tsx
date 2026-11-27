@@ -19,8 +19,8 @@ import { Card } from "../components/ui/card";
 import { Badge, type BadgeTone } from "../components/ui/badge";
 import { Toggle } from "../components/ui/toggle";
 import { Button } from "../components/ui/button";
-import { Input } from "../components/ui/field";
 import { EmptyState } from "../components/ui/empty-state";
+import { FilterBar, FilterGroup, FilterActions, SearchInput, SegmentedControl } from "../components/ui/filter-bar";
 import { Spinner } from "../components/ui/feedback";
 import { useToast } from "../components/ui/toast";
 
@@ -316,7 +316,7 @@ export default function Providers({ loaderData, actionData }: Route.ComponentPro
                   size="sm"
                   onClick={() => setPicked(null)}
                 >
-                  ← Choose another template
+                  Choose another template
                 </Button>
               </div>
               <ProviderForm
@@ -346,49 +346,54 @@ export default function Providers({ loaderData, actionData }: Route.ComponentPro
         </div>
       ) : null}
 
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-        <h2 className="text-base font-semibold text-foreground">
-          Configured Providers{" "}
-          <span className="font-normal text-muted-foreground">
-            ({filteredProviders.length}
-            {filteredProviders.length !== providers.length ? ` of ${providers.length}` : ""})
-          </span>
-        </h2>
-
-        {providers.length > 0 ? (
-          <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
-            <div className="relative w-full sm:w-60">
-              <Search
-                size={14}
-                className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-muted-foreground"
-              />
-              <Input
-                controlSize="sm"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                placeholder="Search providers…"
-                className="pl-8"
-              />
-            </div>
-            <div className="inline-flex rounded-lg border border-border bg-surface-2/70 p-0.5 text-xs">
-              {(["all", "active", "inactive"] as const).map((st) => (
-                <button
-                  key={st}
-                  type="button"
-                  onClick={() => setStatusFilter(st)}
-                  className={`cursor-pointer rounded-md px-2.5 py-1 font-medium capitalize transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 ${
-                    statusFilter === st
-                      ? "bg-surface text-foreground shadow-xs"
-                      : "text-muted-foreground hover:text-foreground"
-                  }`}
-                >
-                  {st}
-                </button>
-              ))}
-            </div>
-          </div>
-        ) : null}
-      </div>
+      {providers.length > 0 ? (
+        <FilterBar>
+          <FilterGroup>
+            <h2 className="text-sm font-semibold text-foreground">
+              Configured Providers
+              <span className="ml-1.5 font-mono text-xs font-normal tabular-nums text-muted-foreground">
+                ({filteredProviders.length}
+                {filteredProviders.length !== providers.length ? ` of ${providers.length}` : ""})
+              </span>
+            </h2>
+          </FilterGroup>
+          <FilterActions className="w-full sm:w-auto">
+            <SearchInput
+              controlSize="sm"
+              value={search}
+              onChange={setSearch}
+              placeholder="Search providers..."
+              aria-label="Search providers"
+              clearLabel="Clear provider search"
+              containerClassName="w-full sm:w-60"
+            />
+            <SegmentedControl
+              ariaLabel="Filter providers by status"
+              value={statusFilter}
+              onChange={setStatusFilter}
+              options={[
+                { value: "all", label: "All", count: providers.length },
+                {
+                  value: "active",
+                  label: "Active",
+                  count: providers.filter((p) => Boolean(p.is_active)).length,
+                },
+                {
+                  value: "inactive",
+                  label: "Inactive",
+                  count: providers.filter((p) => !p.is_active).length,
+                },
+              ]}
+            />
+          </FilterActions>
+        </FilterBar>
+      ) : (
+        <div className="mb-4">
+          <h2 className="text-base font-semibold text-foreground">
+            Configured Providers
+          </h2>
+        </div>
+      )}
 
       {providers.length === 0 ? (
         <Card>

@@ -51,7 +51,7 @@ const ALIAS: Record<string, string> = {
   rs: "rust",
 };
 
-/** Highlight kode fence markdown; fallback escape otomatis dari hljs. */
+/** Highlight fenced markdown code; falls back to auto-escaping from hljs. */
 export function highlightCode(
   code: string,
   lang?: string,

@@ -24,7 +24,7 @@ function toBlock(part: {
       };
     }
   }
-  // Anthropic messages API tidak mendukung audio → bagian diabaikan.
+  // Anthropic messages API does not support audio parts.
   if (part.type === "audio") return null;
   return { type: "text", text: "" };
 }

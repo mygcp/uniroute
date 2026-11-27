@@ -119,19 +119,21 @@ export default function Login({ loaderData }: Route.ComponentProps) {
           onClick={toggle}
           aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
         >
-          {theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
+          {theme === "dark" ? <Sun size={16} aria-hidden="true" /> : <Moon size={16} aria-hidden="true" />}
         </Button>
       </div>
 
-      <div className="glass-panel w-full max-w-sm p-6 sm:p-8">
-        <div className="mb-6 flex flex-col items-center text-center">
-          <BrandMark size={46} />
-          <h1 className="mt-4 text-2xl font-bold tracking-tight text-foreground">
-            UniRoute
-          </h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            AI Gateway Admin · Sign in to continue
-          </p>
+      <div className="w-full max-w-sm rounded-lg border border-border bg-surface p-6 sm:p-8">
+        <div className="mb-6 flex items-center gap-3 border-b border-border pb-5">
+          <BrandMark size={40} />
+          <div>
+            <h1 className="text-xl font-bold tracking-tight text-foreground">
+              UniRoute
+            </h1>
+            <p className="text-xs text-muted-foreground">
+              AI Gateway Control Plane
+            </p>
+          </div>
         </div>
 
         <fetcher.Form
@@ -162,7 +164,7 @@ export default function Login({ loaderData }: Route.ComponentProps) {
                 type="button"
                 onClick={() => setShowPassword((v) => !v)}
                 aria-label={showPassword ? "Hide password" : "Show password"}
-                className="absolute top-1/2 right-2 -translate-y-1/2 cursor-pointer rounded-md p-1 text-muted-foreground transition-colors hover:bg-glass-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+                className="absolute top-1/2 right-2 -translate-y-1/2 cursor-pointer rounded-md p-1 text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
               >
                 {showPassword ? <EyeOff size={15} /> : <Eye size={15} />}
               </button>

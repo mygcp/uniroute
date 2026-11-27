@@ -1,24 +1,23 @@
 import { exec, getTableVersion, onBeforeRead, onDbReset, onShutdownFlush, query } from "./db";
 
 /**
- * Combo Engine — model layer (MVP: `priority` fallback chain & `pipeline`
- * sequential). Data murni + helper statis agar mudah di-unit-test.
- * Eksekusi request ada di `combo-runner.ts`.
+ * Combo Engine: model layer (`priority` fallback chain & `pipeline` sequential).
+ * Pure data and static helpers for unit testing; execution lives in `combo-runner.ts`.
  */
 
 export type ComboStrategy = "priority" | "pipeline";
 
 export type ComboStepInput = {
-  /** Provider id spesifik; null/undefined = semua provider untuk model itu. */
+  /** Specific provider ID; null/undefined matches any provider for that model. */
   providerId?: string | null;
   modelId?: string;
   modelIds?: string[];
-  /** Bobot untuk strategi weighted (cadangan, disimpan untuk kompatibilitas). */
+  /** Weight reserved for weighted strategy compatibility. */
   weight?: number | null;
-  /** kredensial/akun spesifik; null/undefined = auto/dynamic. */
+  /** Specific credential/account; null/undefined = auto/dynamic. */
   accountId?: number | null;
   accountIds?: number[];
-  /** Instruksi khusus step (dipakai pipeline / ditambahkan sebagai system hint). */
+  /** Step-specific prompt instruction (pipeline or system hint). */
   prompt?: string | null;
 };
 
@@ -72,7 +71,7 @@ type StepRow = {
   prompt: string | null;
 };
 
-/** Model reference dari client: `combo:<nama>`. */
+/** Model reference from client: `combo:<name>`. */
 export function parseComboModel(model: string): string | null {
   if (typeof model !== "string") return null;
   if (!model.startsWith("combo:")) return null;
@@ -258,13 +257,13 @@ export function getComboById(id: number): Combo | undefined {
   return comboByIdCache.get(id);
 }
 
-/** Resolve model name → combo (hanya `combo:` prefix; tanpa bentrok dgn model asli). */
+/** Resolve model name to combo (`combo:` prefix only, no conflict with real models). */
 export function resolveCombo(model: string): Combo | undefined {
   const name = parseComboModel(model);
   return name ? getComboByName(name) : undefined;
 }
 
-/** Validasi input; return pesan error atau null bila valid. */
+/** Validate combo input; returns error message or null if valid. */
 export function validateComboInput(input: ComboInput): string | null {
   const name = (input.name ?? "").trim();
   if (!name) return "combo name is required";
@@ -349,7 +348,7 @@ function insertSteps(comboId: number, steps: ComboStepInput[]): void {
   });
 }
 
-/** Replace seluruh steps (dan field dasar) untuk combo id. */
+/** Replace all steps and base fields for combo ID. */
 export function updateCombo(id: number, input: ComboInput): Combo | undefined {
   const existing = getComboById(id);
   if (!existing) return undefined;
@@ -465,8 +464,8 @@ export function listComboMetrics(comboId: number, limit = 100): {
 }
 
 /**
- * Ekstrak teks utama dari respons upstream (untuk pipeline chaining).
- * Mendukung bentuk OpenAI chat, OpenAI Responses, Anthropic, dan Gemini.
+ * Extract primary text from upstream response for pipeline chaining
+ * (supports OpenAI chat, OpenAI Responses, Anthropic, and Gemini).
  */
 export function extractUpstreamText(json: unknown): string {
   if (json === null || typeof json !== "object") return "";

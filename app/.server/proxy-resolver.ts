@@ -17,7 +17,7 @@ import {
 import { validateUrlSync } from "./ssrf";
 
 /**
- * Outbound Proxy Engine — single egress point for all upstream HTTP/S traffic.
+ * Outbound Proxy Engine: single egress point for all upstream HTTP/S traffic.
  *
  * Selection hierarchy (spec 4.1):
  *   1. API key pool         (client_api_keys assigned pool)
@@ -54,7 +54,7 @@ export interface FetchUpstreamInit extends RequestInit {
 	proxyPoolId?: number;
 	/** Provider id, used only for diagnostics. */
 	providerId?: string;
-	/** Konteks untuk proxy_logs: ip client & api key client (opsional). */
+	/** Optional context for proxy_logs: client IP and API key ID. */
 	logClientIp?: string | null;
 	logApiKeyId?: number | null;
 	/** Called each time a specific proxy is about to be used. */
@@ -63,12 +63,12 @@ export interface FetchUpstreamInit extends RequestInit {
 
 const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
 
-/** Batas waktu pembentukan tunnel (TCP + CONNECT/SOCKS handshake). */
+/** Tunnel handshake timeout (TCP + CONNECT/SOCKS). */
 const PROXY_CONNECT_TIMEOUT_MS = 8_000;
-/** Proxy dengan latensi terakhir di atas nilai ini didemosi ke ekor chain. */
+/** Proxies slower than this threshold are demoted to the tail of the chain. */
 const SLOW_PROXY_MS = 5_000;
 
-// Konstanta byte dipakai di loop parsing panas — hindari alokasi per chunk.
+// Preallocated CRLF constants for the HTTP header parsing loop.
 const CRLF = Buffer.from("\r\n");
 const CRLF_CRLF = Buffer.from("\r\n\r\n");
 
@@ -107,10 +107,10 @@ export function resolveProxyPool(params: {
 }
 
 /**
- * Urutan pemakaian proxy sesuai strategy pool:
- * - round_robin: least-recently-used dulu (rotasi merata)
- * - priority   : urutan sesuai daftar di pool (index pertama = utama)
- * - random     : acak tiap request
+ * Order proxies according to pool strategy:
+ * - round_robin: least-recently-used first
+ * - priority: pool list order (index 0 first)
+ * - random: shuffled per request
  */
 export function orderProxiesByStrategy(
 	chain: ResolvedProxy[],
@@ -137,9 +137,7 @@ export function orderProxiesByStrategy(
 			);
 			break;
 	}
-	// Demosi proxy lambat ke ekor chain — strategi tetap berlaku di antara
-	// proxy yang sehat. Mencegah request jatuh ke proxy yang butuh puluhan
-	// detik padahal ada yang responsif.
+	// Demote slow proxies to the end of the chain while preserving strategy among healthy ones.
 	const isSlow = (r: ResolvedProxy) =>
 		r.proxy.last_latency_ms != null && r.proxy.last_latency_ms > SLOW_PROXY_MS;
 	return [
@@ -287,10 +285,7 @@ export async function fetchUpstream(
 // ---------------------------------------------------------------------------
 
 /**
- * Bentukkan tunnel dengan batas waktu ketat: TCP connect + handshake harus
- * selesai dalam PROXY_CONNECT_TIMEOUT_MS, kalau tidak socket dihancurkan dan
- * error dilempar → resolver failover ke proxy berikutnya. Tanpa ini, proxy
- * mati/ lambat bisa menggantung request puluhan detik.
+ * Open a tunnel within PROXY_CONNECT_TIMEOUT_MS so dead or slow proxies fail over quickly.
  */
 async function establishTunnel(
 	proxy: ProxyConfig,
@@ -307,7 +302,7 @@ async function establishTunnel(
 			? socks5Tunnel(proxy, targetHost, targetPort, ctrl.signal)
 			: httpConnectTunnel(proxy, targetHost, targetPort, ctrl.signal));
 	} catch (err) {
-		// Abort dari timer internal kita = timeout koneksi, bukan pembatalan client.
+		// Internal timer abort indicates connect timeout rather than client cancel.
 		if (
 			err instanceof Error &&
 			err.message === "aborted" &&
@@ -329,8 +324,7 @@ async function connectToProxy(
 	signal?: AbortSignal,
 ): Promise<Socket> {
 	const socket = netConnect({ host: proxy.host, port: proxy.port });
-	// Tanpa ini, destroy(err) pada jalur abort/timeout bisa memancarkan
-	// event 'error' tanpa listener dan menjatuhkan proses.
+	// Attach error listener so destroy(err) on abort/timeout never triggers an uncaught error.
 	socket.on("error", () => {});
 	let settled = false;
 	const onAbort = () => {
@@ -694,10 +688,7 @@ function readResponseHead(
 type StepResult<T> = { done: true; value: T } | { done: false };
 
 /**
- * Kumpulkan byte dari socket sampai `step` mengembalikan nilai final.
- * - step mengembalikan `{ done: false }` bila butuh data lagi.
- * - throw di dalam step (mis. limit terlampaui) menolak promise.
- * - abort / socket end-close selesai sebelum nilai final → reject.
+ * Collect bytes from a socket until `step` returns `{ done: true, value }`.
  */
 function collectSocket<T>(
 	socket: Socket,
@@ -748,7 +739,7 @@ function collectSocket<T>(
 	});
 }
 
-/** Baca tepat `n` byte dari socket. */
+/** Read exactly `n` bytes from socket. */
 function readN(
 	socket: Socket,
 	n: number,
@@ -769,7 +760,7 @@ function readN(
 	);
 }
 
-/** Baca sampai delimiter ditemukan; sisanya dikembalikan sebagai `tail`. */
+/** Read until delimiter is found; remaining bytes are returned as `tail`. */
 function readUntil(
 	socket: Socket,
 	delimiter: Buffer,

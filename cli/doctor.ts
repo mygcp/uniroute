@@ -1,8 +1,15 @@
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import { fileURLToPath } from "node:url";
+import { probeEphemeralPort } from "../app/.server/http-runtime";
 
 type Check = { name: string; ok: boolean; msg: string };
+
+const moduleDir =
+  typeof import.meta.dir === "string"
+    ? import.meta.dir
+    : path.dirname(fileURLToPath(import.meta.url));
 
 function isCompiledBinary(): boolean {
   const dir = import.meta.dir ?? "";
@@ -11,28 +18,58 @@ function isCompiledBinary(): boolean {
   return bin !== "bun" && bin !== "node";
 }
 
+function isBundleMode(): boolean {
+  if (process.env.UNIROUTE_INSTALL_MODE === "bundle") return true;
+  return fs.existsSync(path.join(moduleDir, "client", "favicon.ico")) ||
+    fs.existsSync(path.join(moduleDir, "client", "assets"));
+}
+
 export async function runDoctor(): Promise<{ ok: boolean; checks: Check[] }> {
   const checks: Check[] = [];
 
-  const bunVer = typeof Bun !== "undefined" ? Bun.version : (process.versions.bun ?? "unknown");
-  checks.push({
-    name: "runtime",
-    ok: bunVer !== "unknown",
-    msg: `Bun ${bunVer} (need >=1.2)`,
-  });
+  const isBun = typeof Bun !== "undefined";
+  const bunVer = isBun ? Bun.version : (process.versions.bun ?? null);
+  const nodeVer = process.versions.node ?? null;
+  if (bunVer) {
+    checks.push({
+      name: "runtime",
+      ok: true,
+      msg: `Bun ${bunVer} (need >=1.2)`,
+    });
+  } else if (nodeVer) {
+    const [maj, min] = nodeVer.split(".").map(Number);
+    const ok = maj > 22 || (maj === 22 && min >= 5);
+    checks.push({
+      name: "runtime",
+      ok,
+      msg: `Node.js ${nodeVer} (need >=22.5)`,
+    });
+  } else {
+    checks.push({ name: "runtime", ok: false, msg: "unknown runtime" });
+  }
 
   if (isCompiledBinary()) {
-    const embeddedCount = typeof Bun !== "undefined" && Array.isArray(Bun.embeddedFiles) ? Bun.embeddedFiles.length : 0;
+    const embeddedCount = isBun && Array.isArray(Bun.embeddedFiles) ? Bun.embeddedFiles.length : 0;
     checks.push({
       name: "build",
       ok: true,
       msg: embeddedCount > 0 ? `embedded in binary (${embeddedCount} client assets)` : "embedded in binary",
     });
+  } else if (isBundleMode()) {
+    const appDir = process.env.UNIROUTE_APP_DIR ?? moduleDir;
+    const hasClient =
+      fs.existsSync(path.join(appDir, "client", "assets")) ||
+      fs.existsSync(path.join(appDir, "client", "favicon.ico"));
+    checks.push({
+      name: "build",
+      ok: hasClient,
+      msg: hasClient ? `prebuilt bundle (${appDir})` : `client assets missing in ${appDir}`,
+    });
   } else {
     const candidates = [
       path.resolve(process.cwd(), "build/server/index.js"),
       path.resolve(path.dirname(process.execPath), "build/server/index.js"),
-      path.join(import.meta.dir ?? ".", "../build/server/index.js"),
+      path.join(moduleDir, "../build/server/index.js"),
     ];
     const buildExists = candidates.some((p) => {
       try {
@@ -66,9 +103,7 @@ export async function runDoctor(): Promise<{ ok: boolean; checks: Check[] }> {
   let portOk = true;
   let portMsg = `PORT ${port} (env PORT or --port)`;
   try {
-    const srv = Bun.serve({ port: 0, fetch() { return new Response("ok"); } });
-    const p = srv.port;
-    srv.stop(true);
+    const p = await probeEphemeralPort();
     portMsg += ` - probe ok (ephemeral ${p})`;
   } catch (e) {
     portOk = false;

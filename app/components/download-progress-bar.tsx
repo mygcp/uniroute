@@ -75,7 +75,7 @@ export function DownloadProgressBar({
         <span className="truncate font-medium text-foreground">
           {PHASE_LABEL[status] ?? "Working..."}
         </span>
-        <span className="shrink-0 font-mono">
+        <span className="shrink-0 font-mono tabular-nums">
           {total && total > 0
             ? `${fmtMb(downloaded)} / ${fmtMb(total)} (${pct ?? 0}%)`
             : downloaded > 0
@@ -85,14 +85,14 @@ export function DownloadProgressBar({
                 : "..."}
         </span>
       </div>
-      <div className="h-1.5 w-full overflow-hidden rounded-full bg-surface">
+      <div className="h-1.5 w-full overflow-hidden rounded-sm bg-surface">
         {pct != null ? (
           <div
-            className="h-full rounded-full bg-primary transition-[width] duration-200"
+            className="h-full rounded-sm bg-primary transition-[width] duration-200"
             style={{ width: `${pct}%` }}
           />
         ) : (
-          <div className="h-full w-1/2 animate-pulse rounded-full bg-primary/80" />
+          <div className="h-full w-1/2 animate-pulse rounded-sm bg-primary/80" />
         )}
       </div>
     </div>

@@ -1,19 +1,29 @@
 #!/usr/bin/env bun
 import path from "node:path";
 import fs from "node:fs";
-import os from "node:os";
-import { spawn } from "node:child_process";
+import readline from "node:readline";
+import { spawn, spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import pkg from "../package.json";
+import { sleepMs } from "../app/.server/http-runtime";
+import {
+  applyAppUpdate,
+  detectBundleDir,
+  detectCompiledBinary,
+  listGitHubReleases,
+  type UpdateProgressEvent,
+} from "../app/.server/self-update";
 import { getPidPath, getLogPath, readPid, writePid, removePid, isAlive } from "./pid";
 import { runDoctor } from "./doctor";
 
-const VERSION = pkg.version || "1.0.0";
+const VERSION = pkg.version || "1.1.0";
+const moduleDir =
+  typeof import.meta.dir === "string"
+    ? import.meta.dir
+    : path.dirname(fileURLToPath(import.meta.url));
 
 function isCompiledBinary(): boolean {
-  const dir = import.meta.dir ?? "";
-  if (dir.startsWith("/$bunfs") || /^[A-Za-z]:[\\/]+~BUN/i.test(dir)) return true;
-  const bin = path.basename(process.execPath).replace(/\.exe$/i, "").toLowerCase();
-  return bin !== "bun" && bin !== "node";
+  return detectCompiledBinary();
 }
 
 function printHelp() {
@@ -29,9 +39,17 @@ Commands:
   status                                            Show PID, port, uptime
   logs [-f|--follow] [-n N]                         Tail log file
   doctor                                            Check env, build, db, port
-  update [--check] [--force]                        Self-update binary from GitHub Releases
+  update [TAG] [options]                            Update or switch release version
   version                                           Print version
   help                                              Show this help
+
+Update options:
+  --latest                Install the latest stable release (default)
+  --version TAG           Install a specific release tag (e.g. v1.1.0)
+  --list                  List available release tags from GitHub
+  --select                Interactively pick a version from available tags
+  --check                 Check if a newer release is available
+  --force                 Reinstall even if already on the target version
 
 Options:
   --port PORT   Override PORT env (default 3000)
@@ -45,8 +63,10 @@ Examples:
   uni stop
   uni logs -f
   uni doctor
-  uni update                # download latest binary
-  uni update --check        # only check version
+  uni update                # install latest release
+  uni update --list         # show all release tags
+  uni update --select       # choose a version interactively
+  uni update --version v1.1.0
 `.trim());
 }
 
@@ -64,6 +84,11 @@ function parseArgs(argv: string[]) {
     else if (a === "--daemon-child") flags.daemonChild = true;
     else if (a === "--check") flags.check = true;
     else if (a === "--force") flags.force = true;
+    else if (a === "--list") flags.list = true;
+    else if (a === "--select") flags.select = true;
+    else if (a === "--latest") flags.latest = true;
+    else if (a === "--version" && rest[i + 1]) { flags.version = rest[++i]; }
+    else if (a.startsWith("--version=")) flags.version = a.split("=")[1];
     else if (a === "--port" && rest[i + 1]) { flags.port = rest[++i]; }
     else if (a.startsWith("--port=")) flags.port = a.split("=")[1];
     else if (a === "--host" && rest[i + 1]) { flags.host = rest[++i]; }
@@ -113,10 +138,14 @@ async function cmdStart(flags: Record<string, string | boolean>) {
     }
     const execPath = process.execPath;
     const compiled = isCompiledBinary();
+    const bundleDir = detectBundleDir();
+    const entryScript = bundleDir
+      ? path.join(bundleDir, "uni.mjs")
+      : path.resolve(moduleDir, "uni.ts");
     const spawnCmd = execPath;
     const spawnArgs = compiled
       ? ["start", "--daemon-child"]
-      : [path.resolve(import.meta.dir, "uni.ts"), "start", "--daemon-child"];
+      : [entryScript, "start", "--daemon-child"];
     if (flags.port) spawnArgs.push("--port", String(flags.port));
     if (flags.host) spawnArgs.push("--host", String(flags.host));
     if (flags.env) spawnArgs.push("--env", String(flags.env));
@@ -132,7 +161,7 @@ async function cmdStart(flags: Record<string, string | boolean>) {
     fs.closeSync(logFd);
 
     for (let i = 0; i < 20; i++) {
-      await Bun.sleep(200);
+      await sleepMs(200);
       const pid = readPid(pidPath);
       if (pid && isAlive(pid)) {
         console.log(`[uni] started in background pid ${pid} (log: ${logPath}, pid: ${pidPath})`);
@@ -219,12 +248,12 @@ async function cmdRestart(flags: Record<string, string | boolean>) {
     console.log(`[uni] restarting (stop pid ${pid})...`);
     try { process.kill(pid, "SIGTERM"); } catch {}
     for (let i = 0; i < 25; i++) {
-      await Bun.sleep(200);
+      await sleepMs(200);
       if (!isAlive(pid)) break;
     }
     if (isAlive(pid)) {
       try { process.kill(pid, "SIGKILL"); } catch {}
-      await Bun.sleep(500);
+      await sleepMs(500);
     }
     removePid(pidPath);
   } else if (pid) removePid(pidPath);
@@ -256,6 +285,13 @@ function cmdStatus() {
   }
 }
 
+function readLastLines(filePath: string, lineCount: number): string {
+  const raw = fs.readFileSync(filePath, "utf8");
+  const lines = raw.split(/\r?\n/);
+  if (lines.length && lines[lines.length - 1] === "") lines.pop();
+  return lines.slice(-Math.max(1, lineCount)).join("\n") + (lines.length ? "\n" : "");
+}
+
 function cmdLogs(flags: Record<string, string | boolean>) {
   const logPath = getLogPath();
   if (!fs.existsSync(logPath)) {
@@ -266,12 +302,41 @@ function cmdLogs(flags: Record<string, string | boolean>) {
   const follow = !!flags.follow;
   if (follow) {
     console.log(`[uni] following ${logPath} (Ctrl+C to exit)`);
-    const proc = Bun.spawn(["tail", "-F", "-n", String(n), logPath], { stdout: "inherit", stderr: "inherit" });
-    process.on("SIGINT", () => { proc.kill(); process.exit(0); });
+    if (process.platform !== "win32") {
+      const proc = spawn("tail", ["-F", "-n", String(n), logPath], { stdio: "inherit" });
+      process.on("SIGINT", () => { proc.kill(); process.exit(0); });
+      return;
+    }
+    process.stdout.write(readLastLines(logPath, n));
+    let offset = fs.statSync(logPath).size;
+    const iv = setInterval(() => {
+      try {
+        const size = fs.statSync(logPath).size;
+        if (size > offset) {
+          const fd = fs.openSync(logPath, "r");
+          const buf = Buffer.allocUnsafe(size - offset);
+          fs.readSync(fd, buf, 0, buf.length, offset);
+          fs.closeSync(fd);
+          offset = size;
+          process.stdout.write(buf.toString("utf8"));
+        } else if (size < offset) {
+          offset = size;
+        }
+      } catch {
+        // ignore transient rotation errors
+      }
+    }, 300);
+    process.on("SIGINT", () => { clearInterval(iv); process.exit(0); });
   } else {
-    const proc = Bun.spawnSync(["tail", "-n", String(n), logPath]);
-    process.stdout.write(proc.stdout.toString());
-    if (proc.stderr.length) process.stderr.write(proc.stderr.toString());
+    if (process.platform !== "win32") {
+      const proc = spawnSync("tail", ["-n", String(n), logPath], { encoding: "utf8" });
+      if (proc.status === 0) {
+        process.stdout.write(proc.stdout ?? "");
+        if (proc.stderr) process.stderr.write(proc.stderr);
+        return;
+      }
+    }
+    process.stdout.write(readLastLines(logPath, n));
   }
 }
 
@@ -285,189 +350,171 @@ async function cmdDoctor() {
   process.exit(ok ? 0 : 1);
 }
 
-function getUpdateTarget(): { target: string; artifact: string; ext: string } | null {
-  const platform = process.platform;
-  const arch = process.arch;
-  if (platform === "linux" && arch === "x64") return { target: "bun-linux-x64", artifact: "uni-linux-x64", ext: "" };
-  if (platform === "linux" && arch === "arm64") return { target: "bun-linux-arm64", artifact: "uni-linux-arm64", ext: "" };
-  if (platform === "darwin" && arch === "x64") return { target: "bun-darwin-x64", artifact: "uni-darwin-x64", ext: "" };
-  if (platform === "darwin" && arch === "arm64") return { target: "bun-darwin-arm64", artifact: "uni-darwin-arm64", ext: "" };
-  if (platform === "win32") return { target: "bun-windows-x64", artifact: "uni-windows-x64.exe", ext: ".exe" };
-  return null;
+function askLine(prompt: string): Promise<string> {
+  return new Promise((resolve) => {
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    rl.question(prompt, (ans) => {
+      rl.close();
+      resolve(ans.trim());
+    });
+  });
 }
 
-async function cmdUpdate(flags: Record<string, string | boolean>) {
-  const repo = process.env.UNIROUTE_REPO ?? process.env.REPO ?? "mygcp/uniroute";
-  const compiled = isCompiledBinary();
-  if (!compiled) {
-    console.log("[uni] update: running via bun (dev) - self-update only for compiled binary");
-    console.log("  try: git pull && bun run build");
-    if (!flags.force) process.exit(0);
-  }
-
-  const current = VERSION;
-  console.log(`[uni] current ${current} - checking ${repo}...`);
-
-  const apiUrl = `https://api.github.com/repos/${repo}/releases/latest`;
-  let latest: { tag_name: string; assets: Array<{ name: string; browser_download_url: string }> };
-  try {
-    const res = await fetch(apiUrl, { headers: { Accept: "application/vnd.github+json", "User-Agent": "uni-update" } });
-    if (!res.ok) throw new Error(`HTTP ${res.status} ${await res.text().then((t) => t.slice(0, 200))}`);
-    latest = (await res.json()) as typeof latest;
-  } catch (e) {
-    console.error(`[uni] update: failed to fetch latest: ${e instanceof Error ? e.message : String(e)}`);
-    process.exit(1);
-  }
-
-  const tag = latest.tag_name;
-  const latestVer = tag.replace(/^v/, "");
-  console.log(`[uni] latest ${tag} (current ${current})`);
-
-  if (latestVer === current && !flags.force) {
-    console.log("[uni] already up to date");
-    process.exit(0);
-  }
-  if (flags.check) {
-    console.log(`[uni] update available: ${current} -> ${latestVer}`);
-    process.exit(0);
-  }
-
-  const tgt = getUpdateTarget();
-  if (!tgt) {
-    console.error(`[uni] update: unsupported platform ${process.platform}/${process.arch}`);
-    process.exit(1);
-  }
-
-  const asset = latest.assets.find((a) => a.name === tgt.artifact) ?? latest.assets.find((a) => a.name === `${tgt.artifact}.tar.gz`);
-  if (!asset) {
-    console.error(`[uni] update: asset ${tgt.artifact} not found in ${tag}`);
-    console.error(`  available: ${latest.assets.map((a) => a.name).join(", ")}`);
-    process.exit(1);
-  }
-
-  const url = asset.browser_download_url;
-  console.log(`[uni] downloading ${asset.name} from ${url}...`);
-
-  const tmp = path.join(osTmpDir(), `uni-update-${Date.now()}-${tgt.artifact}`);
-  try {
-    const res = await fetch(url);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    if (!res.body) {
-      const buf = Buffer.from(await res.arrayBuffer());
-      fs.writeFileSync(tmp, buf, { mode: 0o755 });
-    } else {
-      const total = Number(res.headers.get("content-length") ?? 0) || 0;
-      const ws = fs.createWriteStream(tmp, { mode: 0o755 });
-      const reader = res.body.getReader();
-      let received = 0;
-      let lastDraw = 0;
-      const isTty = Boolean(process.stdout.isTTY);
-      const drawBar = (done = false) => {
-        const mb = (received / (1024 * 1024)).toFixed(1);
-        if (total > 0) {
-          const pct = Math.min(100, Math.round((received / total) * 100));
-          const totalMb = (total / (1024 * 1024)).toFixed(1);
-          const width = 24;
-          const filled = Math.round((pct / 100) * width);
-          const bar = "=".repeat(filled) + (filled < width ? ">" : "") + " ".repeat(Math.max(0, width - filled - (filled < width ? 1 : 0)));
-          if (isTty) {
-            process.stdout.write(`\r  [${bar}] ${String(pct).padStart(3)}% ${mb}/${totalMb} MB${done ? "\n" : ""}`);
-          } else if (done) {
-            console.log(`  downloaded ${mb}/${totalMb} MB (100%)`);
-          }
-        } else if (isTty) {
-          process.stdout.write(`\r  downloaded ${mb} MB${done ? "\n" : ""}`);
-        } else if (done) {
-          console.log(`  downloaded ${mb} MB`);
-        }
-      };
-      try {
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          if (!value || value.byteLength === 0) continue;
-          received += value.byteLength;
-          if (!ws.write(value)) {
-            await new Promise<void>((resolve) => ws.once("drain", resolve));
-          }
-          const now = Date.now();
-          if (now - lastDraw >= 100) {
-            lastDraw = now;
-            drawBar(false);
-          }
-        }
-        await new Promise<void>((resolve, reject) => {
-          ws.on("error", reject);
-          ws.end(() => resolve());
-        });
-        drawBar(true);
-      } catch (err) {
-        try {
-          ws.destroy();
-        } catch {}
-        throw err;
+function createCliProgressPrinter() {
+  let lastDraw = 0;
+  const isTty = Boolean(process.stdout.isTTY);
+  return (ev: UpdateProgressEvent) => {
+    if (ev.status !== "downloading") return;
+    const mb = (ev.bytesDownloaded / (1024 * 1024)).toFixed(2);
+    const done = ev.percent === 100;
+    const now = Date.now();
+    if (!done && now - lastDraw < 100) return;
+    lastDraw = now;
+    if (ev.totalBytes && ev.totalBytes > 0) {
+      const pct = Math.min(100, ev.percent ?? Math.round((ev.bytesDownloaded / ev.totalBytes) * 100));
+      const totalMb = (ev.totalBytes / (1024 * 1024)).toFixed(2);
+      const width = 24;
+      const filled = Math.round((pct / 100) * width);
+      const bar =
+        "=".repeat(filled) +
+        (filled < width ? ">" : "") +
+        " ".repeat(Math.max(0, width - filled - (filled < width ? 1 : 0)));
+      if (isTty) {
+        process.stdout.write(`\r  [${bar}] ${String(pct).padStart(3)}% ${mb}/${totalMb} MB${done ? "\n" : ""}`);
+      } else if (done) {
+        console.log(`  downloaded ${mb}/${totalMb} MB (100%)`);
       }
+    } else if (isTty) {
+      process.stdout.write(`\r  downloaded ${mb} MB${done ? "\n" : ""}`);
+    } else if (done) {
+      console.log(`  downloaded ${mb} MB`);
     }
+  };
+}
+
+async function cmdUpdate(flags: Record<string, string | boolean>, positionals: string[]) {
+  const compiled = isCompiledBinary();
+  const bundleDir = detectBundleDir();
+  const repo = process.env.UNIROUTE_REPO ?? process.env.REPO ?? "mygcp/uniroute";
+
+  console.log(`[uni] current ${VERSION} (${compiled ? "binary" : bundleDir ? "bundle" : "source"}) - checking ${repo}...`);
+
+  let catalog;
+  try {
+    catalog = await listGitHubReleases({ forceRefresh: true, repo });
   } catch (e) {
-    console.error(`[uni] download failed: ${e instanceof Error ? e.message : String(e)}`);
+    console.error(`[uni] update: failed to fetch releases: ${e instanceof Error ? e.message : String(e)}`);
     process.exit(1);
   }
 
-  let newBinary = tmp;
-  if (asset.name.endsWith(".tar.gz")) {
-    try {
-      const outDir = `${tmp}.dir`;
-      fs.mkdirSync(outDir, { recursive: true });
-      const proc = Bun.spawnSync(["tar", "-xzf", tmp, "-C", outDir]);
-      if (proc.exitCode !== 0) throw new Error(proc.stderr.toString().slice(0, 300));
-      const found = fs.readdirSync(outDir, { recursive: true } as any) as unknown as string[];
-      const binName = tgt.artifact;
-      const candidate = found.find((p) => String(p).endsWith(binName)) ?? found.find((p) => String(p).includes("uni-"));
-      if (!candidate) throw new Error("binary not found in tar");
-      const src = path.join(outDir, String(candidate));
-      const extracted = `${tmp}.bin`;
-      fs.copyFileSync(src, extracted);
-      fs.chmodSync(extracted, 0o755);
-      newBinary = extracted;
-    } catch (e) {
-      console.error(`[uni] extract failed: ${e instanceof Error ? e.message : String(e)}`);
-      process.exit(1);
-    }
-  }
-
-  let targetPath = process.execPath;
-  if (!compiled) {
-    const homeBin = path.join(os.homedir(), ".local", "bin", "uni");
-    const usrBin = "/usr/local/bin/uni";
-    if (fs.existsSync(homeBin)) targetPath = homeBin;
-    else if (fs.existsSync(usrBin) && (() => { try { fs.accessSync(path.dirname(usrBin), fs.constants.W_OK); return true; } catch { return false; } })()) targetPath = usrBin;
-    else {
-      console.log(`[uni] dev mode - new binary at ${newBinary}, copy manually to ~/.local/bin/uni`);
-      console.log(`  mv ${newBinary} ~/.local/bin/uni && chmod +x ~/.local/bin/uni`);
+  if (flags.list) {
+    if (catalog.releases.length === 0) {
+      console.log("[uni] no releases published yet.");
       process.exit(0);
     }
+    console.log(`\nAvailable releases for ${catalog.repo}:`);
+    for (const r of catalog.releases) {
+      const tags: string[] = [];
+      if (r.isCurrent) tags.push("current");
+      if (r.isLatest) tags.push("latest");
+      if (r.prerelease) tags.push("prerelease");
+      const date = r.publishedAt ? r.publishedAt.slice(0, 10) : "unknown-date";
+      const assets = [
+        r.hasBundleAsset ? "bundle" : null,
+        r.hasBinaryAsset ? "binary" : null,
+      ]
+        .filter(Boolean)
+        .join("+");
+      console.log(
+        `  ${r.tag.padEnd(14)} ${date}  [${assets || "source-only"}]${tags.length ? `  (${tags.join(", ")})` : ""}`,
+      );
+    }
+    process.exit(0);
+  }
+
+  if (flags.check) {
+    const latest = catalog.latestTag ?? "unknown";
+    const latestVer = latest.replace(/^v/i, "");
+    console.log(`[uni] latest ${latest} (current ${VERSION})`);
+    if (latestVer === VERSION) {
+      console.log("[uni] already up to date");
+    } else {
+      console.log(`[uni] update available: ${VERSION} -> ${latest}`);
+    }
+    process.exit(0);
+  }
+
+  if (!compiled && !bundleDir) {
+    console.log("[uni] update: running from a local source checkout.");
+    console.log("  Use git to switch versions: git fetch --tags && git checkout <tag> && bun install && bun run build");
+    process.exit(0);
+  }
+
+  let target = typeof flags.version === "string"
+    ? flags.version
+    : positionals[0]
+      ? positionals[0]
+      : "latest";
+
+  if (flags.latest) target = "latest";
+
+  if (flags.select) {
+    if (!process.stdin.isTTY) {
+      console.error("[uni] --select requires an interactive terminal.");
+      process.exit(1);
+    }
+    if (catalog.releases.length === 0) {
+      console.error("[uni] no releases available to select.");
+      process.exit(1);
+    }
+    console.log("\nSelect a release to install:");
+    console.log(`  0) latest (${catalog.latestTag ?? "latest"})`);
+    catalog.releases.forEach((r, idx) => {
+      const marks = [
+        r.isCurrent ? "current" : null,
+        r.isLatest ? "latest" : null,
+        r.prerelease ? "prerelease" : null,
+      ]
+        .filter(Boolean)
+        .join(", ");
+      const date = r.publishedAt ? r.publishedAt.slice(0, 10) : "";
+      console.log(`  ${idx + 1}) ${r.tag}${date ? ` (${date})` : ""}${marks ? ` [${marks}]` : ""}`);
+    });
+    const choice = await askLine("\nEnter number (0 for latest, or q to cancel): ");
+    if (!choice || choice.toLowerCase() === "q") {
+      console.log("[uni] update cancelled");
+      process.exit(0);
+    }
+    const num = Number(choice);
+    if (!Number.isInteger(num) || num < 0 || num > catalog.releases.length) {
+      console.error(`[uni] invalid selection: ${choice}`);
+      process.exit(1);
+    }
+    target = num === 0 ? "latest" : catalog.releases[num - 1].tag;
   }
 
   try {
-    const bak = `${targetPath}.bak`;
-    try { fs.copyFileSync(targetPath, bak); } catch {}
-    fs.copyFileSync(newBinary, targetPath);
-    fs.chmodSync(targetPath, 0o755);
-    console.log(`[uni] updated ${targetPath} ${current} -> ${latestVer}`);
-    console.log("  run: uni doctor && uni version");
+    const result = await applyAppUpdate({
+      target,
+      force: Boolean(flags.force),
+      repo,
+      onProgress: createCliProgressPrinter(),
+    });
+    if (result.alreadyUpToDate) {
+      console.log(`[uni] already on ${result.tag} (pass --force to reinstall)`);
+      process.exit(0);
+    }
+    console.log(`[uni] updated (${result.mode}) ${result.fromVersion} -> ${result.toVersion} (${result.tag})`);
+    console.log("  restart if running: uni restart --daemon");
+    console.log("  verify: uni doctor && uni version");
   } catch (e) {
-    console.error(`[uni] replace failed (need sudo?): ${e instanceof Error ? e.message : String(e)}`);
-    console.error(`  new binary kept at ${newBinary}`);
+    console.error(`[uni] update failed: ${e instanceof Error ? e.message : String(e)}`);
     process.exit(1);
   }
 }
 
-function osTmpDir(): string {
-  return process.env.TMPDIR ?? process.env.TMP ?? os.tmpdir();
-}
-
-async function main() {
-  const { cmd, flags } = parseArgs(process.argv);
+export async function main() {
+  const { cmd, flags, positionals } = parseArgs(process.argv);
   if (flags.help) { printHelp(); process.exit(0); }
   switch (cmd) {
     case "start": await cmdStart(flags); break;
@@ -476,7 +523,7 @@ async function main() {
     case "status": cmdStatus(); break;
     case "logs": cmdLogs(flags); break;
     case "doctor": await cmdDoctor(); break;
-    case "update": await cmdUpdate(flags); break;
+    case "update": await cmdUpdate(flags, positionals); break;
     case "version":
     case "--version":
     case "-v": console.log(`uni ${VERSION}`); break;

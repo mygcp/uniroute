@@ -347,9 +347,8 @@ export function isEnabled(): {
 }
 
 /**
- * Jalankan satu binary via stdin->stdout dengan timeout terkonfigurasi.
- * Menggunakan node:child_process agar bekerja di Node.js (Vite dev) maupun Bun.
- * Throw -> fallback ke prompt asli.
+ * Run a compressor binary via stdin->stdout with configured timeout.
+ * Uses node:child_process for both Bun and Node.js compatibility; throws on failure.
  */
 async function runBinary(
   binPath: string,

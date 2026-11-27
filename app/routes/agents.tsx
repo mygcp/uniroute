@@ -176,7 +176,7 @@ export async function action({ request }: Route.ActionArgs) {
   const form = await request.formData();
   const intent = String(form.get("intent") ?? "");
 
-  // Global toggle: izinkan memakai key tersimpan (dekripsi) dari halaman ini.
+  // Global toggle allowing decrypted stored keys to be used from this page.
   if (intent === "set-reveal") {
     if (isKeyRevealLockedByEnv()) {
       return {
@@ -792,9 +792,9 @@ const HarnessCard = memo(function HarnessCard({
       ) : null}
 
       {data?.previewed && !viewerClosed ? (
-        <div className="mt-3 rounded-xl border border-border-strong bg-surface-2/40 p-3">
+        <div className="mt-3 rounded-lg border border-border-strong bg-surface-2/40 p-3">
           <div className="mb-2 flex items-center justify-between gap-2">
-            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            <p className="text-xs font-medium text-muted-foreground">
               Preview {data.merged ? "(merged into existing)" : "(new file)"}
             </p>
             <button
@@ -813,7 +813,7 @@ const HarnessCard = memo(function HarnessCard({
       ) : null}
 
       {(backupData?.backupContent || backupData?.currentContent) && !viewerClosed ? (
-        <div className="mt-3 rounded-xl border border-border-strong bg-surface-2/40 p-3">
+        <div className="mt-3 rounded-lg border border-border-strong bg-surface-2/40 p-3">
           <div className="mb-2 flex items-center justify-between gap-2">
             <p className="font-mono text-xs font-medium text-foreground">
               {backupData.currentContent ? "Current file: " : "Backup: "}
@@ -836,7 +836,7 @@ const HarnessCard = memo(function HarnessCard({
 
       <div className="mt-6 border-t border-border pt-4">
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-          <p className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+          <p className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
             <FileClock size={14} aria-hidden="true" /> Config Backups ({status.backups.length})
           </p>
           <span className="font-mono text-[11px] text-muted-foreground">
@@ -848,7 +848,7 @@ const HarnessCard = memo(function HarnessCard({
             No backups yet for {status.name}. Backups are created automatically whenever Apply overwrites an existing file.
           </p>
         ) : (
-          <div className="overflow-hidden rounded-xl border border-border">
+          <div className="overflow-hidden rounded-lg border border-border">
             <Table className="min-w-[540px]">
               <THead>
                 <TRow className="hover:bg-transparent">
@@ -1070,7 +1070,7 @@ export default function Agents({
 
       {/* Agent Selector Tabs / Cards */}
       <div className="mb-4">
-        <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+        <p className="mb-2 text-xs font-medium text-muted-foreground">
           Select Coding Agent to Configure
         </p>
         <div className="grid grid-cols-1 gap-3 lg:grid-cols-3" role="tablist" aria-label="Coding agents">
@@ -1084,7 +1084,7 @@ export default function Agents({
                 role="tab"
                 aria-selected={active}
                 onClick={() => setSelectedId(h.id)}
-                className={`rounded-xl border p-4 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 ${
+                className={`rounded-lg border p-4 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 ${
                   active
                     ? "border-primary bg-primary/10"
                     : "border-border bg-surface hover:border-border-strong"

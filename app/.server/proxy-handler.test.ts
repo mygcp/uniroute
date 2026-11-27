@@ -23,8 +23,7 @@ beforeAll(async () => {
   handleProxy = handler.handleProxy;
   parseChat = translate.parse;
   seed();
-  // Registry tidak lagi di-reload per-request (optimasi jalur panas) —
-  // sinkronkan cache dengan DB hasil seed ini secara eksplisit.
+  // Sync registry cache explicitly with the seeded DB.
   reg.reload();
 });
 
@@ -104,7 +103,7 @@ describe("proxy-handler validation", () => {
 
   test("returns 404 provider_disabled for model on disabled provider", async () => {
     setRequireApiKey(false);
-    // seed menaruh gpt-4o di provider yang semuanya nonaktif
+    // Seed places gpt-4o on disabled providers.
     const res = await post({ model: "gpt-4o", messages: [{ role: "user", content: "hi" }] });
     expect(res.status).toBe(404);
     const body = await res.json();

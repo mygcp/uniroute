@@ -49,7 +49,7 @@ export function LogViewer({
       {!connected ? (
         <div
           role="status"
-          className="mb-3 rounded-xl border border-warning/35 bg-warning/10 px-3.5 py-2 text-xs font-medium text-warning"
+          className="mb-3 rounded-md border border-warning/35 bg-warning/10 px-3.5 py-2 text-xs font-medium text-warning"
         >
           Connection to live logs lost. Reconnecting...
         </div>
@@ -78,7 +78,7 @@ export function LogViewer({
         </div>
 
         {columnHeader ? (
-          <div className="hidden border-b border-border bg-surface-2/70 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground lg:block">
+          <div className="hidden border-b border-border bg-surface-2/70 text-xs font-medium text-muted-foreground lg:block">
             {columnHeader}
           </div>
         ) : null}

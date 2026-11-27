@@ -151,7 +151,7 @@ export function createEventFormatter(
       return null;
     }
     if (ev.type === "reasoning_start") {
-      // Blok thinking Anthropic — tanpa signature (display only).
+      // Anthropic thinking block without signature (display only).
       if (clientFormat === "anthropic" && thinkingBlockIndex === null) {
         thinkingBlockIndex = blockIndex++;
         return frame(
@@ -167,7 +167,7 @@ export function createEventFormatter(
     }
     if (ev.type === "reasoning_delta") {
       if (clientFormat === "openai-chat") {
-        // Konvensi DeepSeek/OpenRouter — dibaca Open WebUI & klien sejenis.
+        // DeepSeek/OpenRouter convention read by Open WebUI and compatible clients.
         return frame(
           JSON.stringify({
             choices: [{ delta: { reasoning_content: ev.text }, index: 0 }],

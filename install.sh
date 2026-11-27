@@ -1,51 +1,99 @@
 #!/usr/bin/env sh
-# UniRoute installer — downloads uni binary from GitHub Releases
-# Usage: curl -fsSL https://raw.githubusercontent.com/<org>/uniroute/main/install.sh | sh
-#        curl -fsSL .../install.sh | sh -s -- --version v1.0.0
+# UniRoute installer: prefers lightweight gzipped bundle (~1 MB) when Bun or Node.js >= 22.5
+# is installed, with an explicit warning before falling back to the ~85 MB standalone binary.
+# Usage:
+#   curl -fsSL https://raw.githubusercontent.com/mygcp/uniroute/main/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/mygcp/uniroute/main/install.sh | sh -s -- --version v1.1.0
+#   curl -fsSL https://raw.githubusercontent.com/mygcp/uniroute/main/install.sh | sh -s -- --binary
 set -eu
 
 REPO="${REPO:-mygcp/uniroute}"
-VERSION="${1:-latest}"
+VERSION="latest"
 BIN_DIR="${BIN_DIR:-$HOME/.local/bin}"
+UNIROUTE_HOME="${UNIROUTE_HOME:-$HOME/.local/share/uniroute}"
+APP_DIR="$UNIROUTE_HOME/app"
 NAME="uni"
-LIGHT="0"
-for arg in "$@"; do case "$arg" in --light) LIGHT="1";; --version) shift;; esac; done
-# handle --light before version parsing
-if [ "$LIGHT" = "1" ]; then
-  # version may be $2 when --light is $1
-  for arg in "$@"; do case "$arg" in v*|latest) VERSION="$arg";; esac; done
-fi
+MODE="auto"
+YES="0"
 
-detect_platform() {
-  # Termux/Android pakai Bionic libc, bukan glibc — binary standalone
-  # (bun --compile) tidak bisa jalan langsung ("cannot execute:
-  # required file not found" = ELF interpreter hilang).
-  OS_KERNEL=$(uname -s | tr '[:upper:]' '[:lower:]')
-  OS_RELEASE=$(uname -o 2>/dev/null || echo "")
-  if [ -n "${TERMUX_VERSION:-}" ] || [ "$OS_RELEASE" = "Android" ]; then
-    echo "Termux/Android detected: the standalone binary needs glibc and won't run here." >&2
-    echo "" >&2
-    echo "Pick one:" >&2
-    echo "  1) proot Ubuntu, no root needed:" >&2
-    echo "       pkg install proot-distro && proot-distro install ubuntu" >&2
-    echo "       proot-distro login ubuntu  # then re-run this installer inside" >&2
-    echo "       (separate home dir — feels like a VM)" >&2
-    echo "  2) termux-desktop Distro Container, no root, feels native:" >&2
-    echo "       https://github.com/sabamdarif/termux-desktop" >&2
-    echo "       distro apps run straight from the Termux terminal" >&2
-    echo "       (e.g. \`debian\` to enter, \`pdrun <app>\` to launch)," >&2
-    echo "       sharing your Termux home — then run this installer there" >&2
-    echo "  3) chroot distro, needs a ROOTED device:" >&2
-    echo "       boot a distro (e.g. Linux Deploy) and chroot into it," >&2
-    echo "       then re-run this installer inside the chroot" >&2
-    echo "  4) light mode with node, no binary (no root needed):" >&2
-    echo "       pkg install nodejs git && git clone https://github.com/${REPO} uniroute" >&2
-    echo "       cd uniroute && npm ci && npm run build" >&2
-    echo "       curl -fsSL https://raw.githubusercontent.com/${REPO}/main/install.sh | sh -s -- --light" >&2
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --binary|--standalone) MODE="binary"; shift ;;
+    --bundle|--light) MODE="bundle"; shift ;;
+    --yes|-y) YES="1"; shift ;;
+    --version)
+      if [ $# -lt 2 ]; then echo "Missing value for --version" >&2; exit 1; fi
+      VERSION="$2"; shift 2 ;;
+    --version=*) VERSION="${1#--version=}"; shift ;;
+    -h|--help)
+      cat <<'EOF'
+UniRoute installer
+
+Options:
+  --version TAG     Install a specific release tag (default: latest)
+  --bundle          Force lightweight gzipped bundle (requires Bun or Node >= 22.5)
+  --binary          Force standalone compiled binary (~85 MB)
+  -y, --yes         Skip interactive confirmation when falling back to binary
+  -h, --help        Show this help
+EOF
+      exit 0 ;;
+    v*|latest) VERSION="$1"; shift ;;
+    *) echo "Unknown argument: $1" >&2; exit 1 ;;
+  esac
+done
+
+download_file() {
+  url="$1"
+  out="$2"
+  if command -v curl >/dev/null 2>&1; then
+    curl -fL --progress-bar "$url" -o "$out"
+  elif command -v wget >/dev/null 2>&1; then
+    wget --show-progress -qO "$out" "$url" 2>/dev/null || wget -O "$out" "$url"
+  else
+    echo "Error: curl or wget is required." >&2
     exit 1
   fi
-  OS=$(uname -s | tr '[:upper:]' '[:lower:]')
-  ARCH=$(uname -m)
+}
+
+release_asset_url() {
+  asset="$1"
+  if [ "$VERSION" = "latest" ]; then
+    echo "https://github.com/$REPO/releases/latest/download/$asset"
+  else
+    case "$VERSION" in v*) TAG="$VERSION" ;; *) TAG="v$VERSION" ;; esac
+    echo "https://github.com/$REPO/releases/download/$TAG/$asset"
+  fi
+}
+
+detect_runtime() {
+  if command -v bun >/dev/null 2>&1; then
+    echo "bun:$(bun --version 2>/dev/null || echo unknown)"
+    return 0
+  fi
+  if command -v node >/dev/null 2>&1; then
+    nver="$(node -v 2>/dev/null | sed 's/^v//')"
+    nmaj="$(echo "$nver" | cut -d. -f1)"
+    nmin="$(echo "$nver" | cut -d. -f2)"
+    if [ -n "$nmaj" ] && [ -n "$nmin" ] && [ "$nmaj" -gt 22 ] 2>/dev/null; then
+      echo "node:$nver"
+      return 0
+    fi
+    if [ "$nmaj" -eq 22 ] 2>/dev/null && [ "$nmin" -ge 5 ] 2>/dev/null; then
+      echo "node:$nver"
+      return 0
+    fi
+  fi
+  return 1
+}
+
+detect_platform() {
+  OS_RELEASE="$(uname -o 2>/dev/null || echo "")"
+  if [ -n "${TERMUX_VERSION:-}" ] || [ "$OS_RELEASE" = "Android" ]; then
+    echo "termux"
+    return 0
+  fi
+  OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
+  ARCH="$(uname -m)"
   case "$OS" in
     linux) OS="linux" ;;
     darwin) OS="darwin" ;;
@@ -54,87 +102,133 @@ detect_platform() {
   case "$ARCH" in
     x86_64|amd64) ARCH="x64" ;;
     arm64|aarch64) ARCH="arm64" ;;
-    *) echo "Unsupported arch: $ARCH" >&2; exit 1 ;;
+    *) echo "Unsupported architecture: $ARCH" >&2; exit 1 ;;
   esac
   echo "$OS-$ARCH"
 }
 
-TARGET=$(detect_platform)
-echo "→ Detected $TARGET"
-
-if [ "$LIGHT" = "1" ]; then
-  echo "→ Light mode: checking for bun or node..."
-  if command -v bun >/dev/null 2>&1; then
-    echo "✓ bun $(bun --version) found — installing light wrapper"
-    mkdir -p "$BIN_DIR"
-    cat > "$BIN_DIR/$NAME" <<'WRAP'
-#!/bin/sh
-# uni light wrapper — detects bun/node at runtime
+write_bundle_launcher() {
+  mkdir -p "$BIN_DIR"
+  cat > "$BIN_DIR/$NAME" <<EOF
+#!/usr/bin/env sh
+set -eu
+export UNIROUTE_INSTALL_MODE="bundle"
+export UNIROUTE_APP_DIR="$APP_DIR"
+ENTRY="\$UNIROUTE_APP_DIR/uni.mjs"
 if command -v bun >/dev/null 2>&1; then
-  # try to find server.ts: cwd, or ~/.local/share/uniroute, or next to wrapper
-  for d in "$PWD" "$HOME/.local/share/uniroute" "$(dirname "$0")/.."; do
-    if [ -f "$d/server.ts" ] && [ -f "$d/build/server/index.js" ]; then exec bun "$d/server.ts" "$@"; fi
-    if [ -f "$d/cli/uni-light.ts" ]; then exec bun "$d/cli/uni-light.ts" "$@"; fi
-  done
-  # fallback: try bunx via git clone
-  echo "light wrapper: bun found but no server.ts/build found — clone repo: git clone https://github.com/REPO && cd uniroute && bun install && bun run build && bun cli/uni-light.ts start" >&2
-  exit 1
+  exec bun "\$ENTRY" "\$@"
 elif command -v node >/dev/null 2>&1; then
-  echo "bun not found, trying node $(node --version) — node:sqlite fallback"
-  for d in "$PWD" "$HOME/.local/share/uniroute" "$(dirname "$0")/.."; do
-    if [ -f "$d/server.ts" ]; then exec node --loader ts-node/esm "$d/server.ts" "$@" 2>/dev/null || exec node "$d/server.ts" "$@"; fi
-  done
-  echo "node found but no server.ts — git clone https://github.com/REPO && cd uniroute && npm ci && npm run build && node server.ts" >&2
-  exit 1
-else
-  echo "Need bun or node for light mode: pkg install nodejs / curl -fsSL https://bun.sh/install | bash" >&2
-  echo "Or use standalone: curl -fsSL https://raw.githubusercontent.com/REPO/main/install.sh | sh" >&2
-  exit 1
-fi
-WRAP
-    sed -i "s|REPO|${REPO}|g" "$BIN_DIR/$NAME"
-    chmod +x "$BIN_DIR/$NAME"
-    if [ ! -e "$BIN_DIR/uniroute" ]; then ln -sf "$NAME" "$BIN_DIR/uniroute" 2>/dev/null || true; fi
-    echo "✓ Installed light wrapper $BIN_DIR/$NAME (uses bun/node at runtime)"
-    echo "  Requires: git clone https://github.com/$REPO && cd uniroute && bun install && bun run build"
-    echo "  Then: $NAME start --daemon"
-    exit 0
-  else
-    echo "→ No bun/node found, falling back to standalone binary"
+  NVER="\$(node -v 2>/dev/null | sed 's/^v//')"
+  NMAJ="\$(echo "\$NVER" | cut -d. -f1)"
+  NMIN="\$(echo "\$NVER" | cut -d. -f2)"
+  if [ "\$NMAJ" = "22" ] && [ "\$NMIN" -lt 13 ] 2>/dev/null; then
+    exec node --no-warnings=ExperimentalWarning --experimental-sqlite "\$ENTRY" "\$@"
   fi
-  ART="uni-light-$TARGET"
+  exec node --no-warnings=ExperimentalWarning "\$ENTRY" "\$@"
 else
-  ART="uni-$TARGET"
+  echo "[uni] Bun or Node.js >= 22.5 is required to run the bundle install." >&2
+  echo "  Install Bun (https://bun.sh) or Node.js 22+, or reinstall with --binary." >&2
+  exit 1
 fi
-if [ "$VERSION" = "latest" ]; then
-  URL="https://github.com/$REPO/releases/latest/download/$ART"
+EOF
+  chmod +x "$BIN_DIR/$NAME"
+  ln -sf "$NAME" "$BIN_DIR/uniroute" 2>/dev/null || true
+}
+
+install_bundle() {
+  URL="$(release_asset_url "uni-bundle.tar.gz")"
+  echo "-> Downloading lightweight bundle ($URL)"
+  TMP_TGZ="$(mktemp)"
+  TMP_DIR="$(mktemp -d)"
+  trap 'rm -rf "$TMP_TGZ" "$TMP_DIR"' EXIT
+  download_file "$URL" "$TMP_TGZ"
+  tar -xzf "$TMP_TGZ" -C "$TMP_DIR"
+  mkdir -p "$UNIROUTE_HOME"
+  rm -rf "$APP_DIR.bak"
+  if [ -d "$APP_DIR" ]; then
+    mv "$APP_DIR" "$APP_DIR.bak"
+  fi
+  mv "$TMP_DIR" "$APP_DIR"
+  write_bundle_launcher
+  echo ""
+  echo "Installed UniRoute lightweight bundle to $APP_DIR"
+  echo "Launcher: $BIN_DIR/$NAME (alias: $BIN_DIR/uniroute)"
+  echo "Next: $NAME doctor && $NAME start --daemon"
+  echo "Update or switch versions anytime: $NAME update --list"
+}
+
+install_binary() {
+  TARGET="$(detect_platform)"
+  if [ "$TARGET" = "termux" ]; then
+    echo "Termux/Android uses Bionic libc, so the glibc standalone binary cannot run here." >&2
+    echo "Install Node.js 22+ instead and re-run for the ~1 MB bundle:" >&2
+    echo "  pkg install nodejs && curl -fsSL https://raw.githubusercontent.com/$REPO/main/install.sh | sh" >&2
+    exit 1
+  fi
+  ART="uni-$TARGET"
+  URL="$(release_asset_url "$ART")"
+  echo "-> Downloading standalone binary ($URL)"
+  mkdir -p "$BIN_DIR"
+  TMP="$(mktemp)"
+  trap 'rm -f "$TMP"' EXIT
+  download_file "$URL" "$TMP"
+  chmod +x "$TMP"
+  mv "$TMP" "$BIN_DIR/$NAME"
+  ln -sf "$NAME" "$BIN_DIR/uniroute" 2>/dev/null || true
+  echo ""
+  echo "Installed UniRoute standalone binary to $BIN_DIR/$NAME (alias: $BIN_DIR/uniroute)"
+  echo "Next: $NAME doctor && $NAME start --daemon"
+  echo "Update or switch versions anytime: $NAME update --list"
+}
+
+RUNTIME=""
+if RUNTIME="$(detect_runtime)"; then
+  RT_NAME="${RUNTIME%%:*}"
+  RT_VER="${RUNTIME#*:}"
+  if [ "$MODE" = "binary" ]; then
+    echo "-> Detected $RT_NAME $RT_VER, installing standalone binary as requested (--binary)."
+    install_binary
+  else
+    echo "-> Detected $RT_NAME $RT_VER. Installing lightweight gzipped bundle (~1 MB instead of ~85 MB binary)."
+    install_bundle
+  fi
 else
-  case "$VERSION" in v*) TAG="$VERSION";; *) TAG="v$VERSION";; esac
-  URL="https://github.com/$REPO/releases/download/$TAG/$ART"
+  if [ "$MODE" = "bundle" ]; then
+    echo "Error: --bundle was requested, but neither Bun nor Node.js >= 22.5 was found." >&2
+    echo "Install Bun:    curl -fsSL https://bun.sh/install | bash" >&2
+    echo "Install Node:   https://nodejs.org (v22.5 or newer)" >&2
+    exit 1
+  fi
+
+  echo ""
+  echo "WARNING: Neither Bun nor Node.js (>= 22.5) was found on this system."
+  echo "  UniRoute itself is only ~1 MB gzipped, while the standalone binary embeds"
+  echo "  the full ~85 MB runtime."
+  echo ""
+  echo "  Recommended: install Bun or Node.js 22+ first, then re-run this installer"
+  echo "  for a ~1 MB install and ~1 MB updates:"
+  echo "    Bun:     curl -fsSL https://bun.sh/install | bash"
+  echo "    Node.js: https://nodejs.org"
+  echo ""
+
+  if [ "$MODE" = "binary" ] || [ "$YES" = "1" ]; then
+    install_binary
+  elif [ -r /dev/tty ]; then
+    printf "Continue installing the ~85 MB standalone binary anyway? [y/N] "
+    read -r ANS </dev/tty || ANS=""
+    case "$ANS" in
+      y|Y|yes|YES) install_binary ;;
+      *)
+        echo "Aborted. Install Bun or Node.js 22+, then re-run this installer."
+        exit 0 ;;
+    esac
+  else
+    echo "Non-interactive shell detected. Install Bun/Node.js 22+ first, or re-run with --binary." >&2
+    exit 1
+  fi
 fi
 
-echo "→ Downloading $URL"
-mkdir -p "$BIN_DIR"
-TMP=$(mktemp)
-if command -v curl >/dev/null 2>&1; then
-  curl -fL --progress-bar "$URL" -o "$TMP"
-elif command -v wget >/dev/null 2>&1; then
-  wget --show-progress -qO "$TMP" "$URL" 2>/dev/null || wget -O "$TMP" "$URL"
-else
-  echo "Need curl or wget" >&2; exit 1
-fi
-chmod +x "$TMP"
-mv "$TMP" "$BIN_DIR/$NAME"
-# alias uniroute -> uni
-if [ ! -e "$BIN_DIR/uniroute" ]; then ln -sf "$NAME" "$BIN_DIR/uniroute" 2>/dev/null || true; fi
-echo "✓ Installed $BIN_DIR/$NAME (alias $BIN_DIR/uniroute) [$ART]"
-if [ "$LIGHT" = "1" ]; then
-  echo "  Light mode: needs bun or node + build/ (git clone && bun install && bun run build)"
-  echo "  Run: $NAME doctor && $NAME start --daemon"
-else
-  echo "  Run: $NAME doctor && $NAME start --daemon"
-  echo "  Self-update: $NAME update --check && $NAME update"
-fi
-if ! echo "$PATH" | grep -q "$BIN_DIR"; then
-  echo "  Add to PATH: export PATH=\"\$HOME/.local/bin:\$PATH\""
-fi
+case ":${PATH}:" in
+  *":${BIN_DIR}:"*) ;;
+  *) echo "Add to PATH: export PATH=\"$BIN_DIR:\$PATH\"" ;;
+esac

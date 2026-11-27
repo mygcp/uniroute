@@ -24,7 +24,7 @@ function inline(md: string): string {
 }
 
 export type MarkdownOptions = {
-	/** Hook syntax highlight untuk fenced code. Return HTML siap pakai. */
+	/** Syntax highlight hook for fenced code blocks. Returns ready-to-render HTML. */
 	highlight?: (code: string, lang?: string) => string;
 };
 

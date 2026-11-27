@@ -17,7 +17,7 @@ import {
 } from "lucide-react";
 import { PageHeader } from "../components/ui/page-header";
 import { Card } from "../components/ui/card";
-import { StatCard } from "../components/ui/stat-card";
+import { MetricStrip } from "../components/ui/stat-card";
 import { Button } from "../components/ui/button";
 import { Badge } from "../components/ui/badge";
 import { Input, Select } from "../components/ui/field";
@@ -519,34 +519,31 @@ export default function McpPage() {
         subtitle="Expose UniRoute administration and gateway tools to local or remote coding agents over Model Context Protocol."
       />
 
-      {/* Summary metrics */}
-      <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
-        <StatCard
-          title="Remote HTTP Server"
-          value={data.remote.enabled ? "Online" : "Disabled"}
-          accent={data.remote.enabled ? "bg-success" : "bg-muted-foreground/40"}
-          icon={<Globe size={16} />}
-          subline={
-            data.remote.enabled
+      <MetricStrip
+        className="mb-6"
+        items={[
+          {
+            label: "Remote HTTP server",
+            value: data.remote.enabled ? "Online" : "Disabled",
+            detail: data.remote.enabled
               ? `${data.remoteEndpoint} (${data.remote.requireAuth ? "Bearer auth" : "Open"})`
-              : "Enable below for remote / VPS agents"
-          }
-        />
-        <StatCard
-          title="Exposed Tools"
-          value={data.tools.length}
-          accent="bg-info"
-          icon={<Wrench size={16} />}
-          subline={`${CATEGORY_ORDER.length} tool categories`}
-        />
-        <StatCard
-          title="Local Clients"
-          value={`${registeredCount} / ${data.harnesses.length}`}
-          accent={registeredCount > 0 ? "bg-success" : "bg-primary"}
-          icon={<Server size={16} />}
-          subline="Same-machine Stdio configs detected"
-        />
-      </div>
+              : "Enable below for remote or VPS agents",
+            tone: data.remote.enabled ? "success" : "default",
+          },
+          {
+            label: "Exposed tools",
+            value: data.tools.length,
+            detail: `${CATEGORY_ORDER.length} tool categories`,
+            tone: "info",
+          },
+          {
+            label: "Local clients",
+            value: `${registeredCount} / ${data.harnesses.length}`,
+            detail: "Same-machine stdio configs detected",
+            tone: registeredCount > 0 ? "success" : "default",
+          },
+        ]}
+      />
 
       {/* Built-in Remote HTTP MCP Server (VPS / Cross-machine ready) */}
       <Card className="mb-6">
@@ -583,10 +580,10 @@ export default function McpPage() {
 
         <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
           {/* Endpoint URL + Live Test */}
-          <div className="space-y-2.5 rounded-xl border border-border bg-surface-2/35 p-3.5">
+          <div className="space-y-2.5 rounded-lg border border-border bg-surface-2/35 p-3.5">
             <div className="flex items-center justify-between gap-2">
-              <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                Remote Endpoint URL
+              <span className="text-xs font-medium text-muted-foreground">
+                Remote endpoint URL
               </span>
               <div className="flex items-center gap-1.5">
                 {data.tunnelUrl ? (
@@ -613,7 +610,7 @@ export default function McpPage() {
             {data.tunnelUrl ? (
               <div className="flex items-center justify-between gap-2 rounded-lg border border-border bg-surface/60 px-3 py-1.5">
                 <div className="min-w-0">
-                  <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+                  <span className="text-xs font-medium text-muted-foreground">
                     Local HTTP (still active)
                   </span>
                   <code className="block truncate font-mono text-[11px] text-foreground">
@@ -653,10 +650,10 @@ export default function McpPage() {
           </div>
 
           {/* Bearer Token Security */}
-          <div className="space-y-2.5 rounded-xl border border-border bg-surface-2/35 p-3.5">
+          <div className="space-y-2.5 rounded-lg border border-border bg-surface-2/35 p-3.5">
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <span className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                <KeyRound size={13} aria-hidden="true" /> Bearer Authentication
+              <span className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                <KeyRound size={13} aria-hidden="true" /> Bearer authentication
               </span>
               <Toggle
                 checked={data.remote.requireAuth}
@@ -768,9 +765,9 @@ export default function McpPage() {
           />
         </div>
 
-        <div className="overflow-hidden rounded-xl border border-border bg-surface-2/50">
+        <div className="overflow-hidden rounded-lg border border-border bg-surface-2/50">
           <div className="flex items-center justify-between border-b border-border bg-surface-2/80 px-3.5 py-2">
-            <span className="font-mono text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+            <span className="font-mono text-xs font-medium text-muted-foreground">
               {snippetTab} · {activeSnippet.lang}
             </span>
             <CopyButton text={activeSnippet.code} label={`Copy ${snippetTab} snippet`} />

@@ -9,11 +9,10 @@ export type TransformResult = {
 };
 
 /**
- * Gabung base_url + path API dengan aman untuk kedua konvensi base_url:
- *  - root style:  https://api.openai.com          → + "/v1/chat/completions"
- *  - full style:  https://api.groq.com/openai/v1  → + "/chat/completions"
- * `new URL(path, base)` TIDAK bisa dipakai di sini: path absolut mengganti
- * seluruh path base, jadi base ber-suffix (…/openai/v1) kehilangan suffix-nya.
+ * Join base_url + API path safely for both base_url conventions:
+ *  - root style:  https://api.openai.com         -> + "/v1/chat/completions"
+ *  - full style:  https://api.groq.com/openai/v1 -> + "/chat/completions"
+ * `new URL(path, base)` cannot be used because an absolute path strips any base path suffix.
  */
 export function joinApiUrl(baseUrl: string, apiPath: string): string {
   const base = baseUrl.replace(/\/+$/, "");

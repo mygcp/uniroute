@@ -7,7 +7,7 @@ export const ANTHROPIC_ENTRY: RegistryEntry = {
   authType: "bearer",
   baseUrl: "https://api.anthropic.com",
   format: "anthropic",
-  description: "Claude — Anthropic-compatible gateway",
+  description: "Claude, Anthropic-compatible gateway",
   color: "bg-orange-500",
   modelsUrl: "https://api.anthropic.com/v1/models",
   models: [

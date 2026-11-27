@@ -295,7 +295,7 @@ export default function CreateKey({
 			/>
 
 			{created?.newlyCreatedKey ? (
-				<div className="mb-6 rounded-xl border border-warning/35 bg-warning/10 p-4 text-sm">
+				<div className="mb-6 rounded-lg border border-warning/35 bg-warning/10 p-4 text-sm">
 					<p className="font-semibold text-foreground">
 						Key created. Copy it now, it will not be shown again.
 					</p>

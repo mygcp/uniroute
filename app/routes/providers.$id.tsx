@@ -146,7 +146,7 @@ export async function loader({ request, params }: Route.LoaderArgs) {
   const proxies = rawProxies.map(({ password: _p, password_enc: _pe, ...rest }) => rest);
   const chatSessions = provider ? listSessions(provider.id) : [];
 
-  // Assignment provider aktif: pool biasa atau singleton single-proxy.
+  // Active provider proxy assignment: regular pool or single-proxy singleton.
   let providerSelected = "";
   if (provider) {
     const pp = getPoolForProvider(provider.id);
@@ -245,9 +245,8 @@ export async function action({ request, params }: Route.ActionArgs) {
 
   // ---- Outbound proxy assignment ------------------------------------------
 
-  // Semua key provider ini memakai pool yang sama (level provider).
-  // Nilai "proxy:<id>" berarti memakai SATU proxy langsung dari list —
-  // dibungkus pool singleton agar pipeline routing tidak berubah.
+  // All keys for this provider share the provider-level pool.
+  // "proxy:<id>" wraps a single proxy in a singleton pool to reuse the routing pipeline.
   if (intent === "set-provider-pool") {
     const raw = String(form.get("pool_id") || "");
     if (!raw) {
@@ -280,7 +279,7 @@ export async function action({ request, params }: Route.ActionArgs) {
     };
   }
 
-  // Satu akun (provider_credentials) memakai pool sendiri.
+  // Single account uses its own pool.
   if (intent === "set-key-pool") {
     const keyId = Number(form.get("key_id"));
     const raw = String(form.get("pool_id") || "");
@@ -291,9 +290,7 @@ export async function action({ request, params }: Route.ActionArgs) {
     };
   }
 
-  // Pilih SATU proxy spesifik untuk satu akun — disimpan sebagai pool
-  // singleton "auto · <id> · key-<keyId>" agar pipeline routing lama tetap
-  // berfungsi. Tanpa proxy_id = lepas assignment.
+  // Assign a specific proxy to one account via a singleton pool; empty proxy_id unassigns it.
   if (intent === "set-key-proxy") {
     const keyId = Number(form.get("key_id"));
     const key = listApiKeys(id).find((k) => k.id === keyId);
@@ -320,9 +317,7 @@ export async function action({ request, params }: Route.ActionArgs) {
     };
   }
 
-  // Distribusi otomatis: bagi proxy aktif (dari satu pool ATAU seluruh daftar
-  // proxy) secara round-robin ke semua akun aktif provider. Pool otomatis
-  // bernama "auto · <id> · acct-N" dibuat/diperbarui & ditautkan per akun.
+  // Round-robin distribute active proxies across all active accounts for this provider.
   if (intent === "distribute") {
     const sourceType =
       String(form.get("source_type")) === "list" ? "list" : "pool";
@@ -500,7 +495,7 @@ export async function action({ request, params }: Route.ActionArgs) {
     const contextLength = parseContextLength(form.get("context_length"));
     const makePrimary =
       form.get("is_primary") === "1" || form.get("is_primary") === "on";
-    // Dynamic import: modul .server tidak boleh masuk graf client bundle.
+    // Dynamic import keeps .server modules out of the client bundle.
     const { upsertProviderModel } = await import("../.server/provider-models");
     upsertProviderModel(id, modelName, contextLength, makePrimary, customDisplay);
     reload();
@@ -519,11 +514,11 @@ export async function action({ request, params }: Route.ActionArgs) {
         id,
       );
     } catch {
-      return { modelsAction: { ok: false, message: "DB belum mendukung display_name" } };
+      return { modelsAction: { ok: false, message: "Database does not support display_name yet" } };
     }
     reload();
     return {
-      modelsAction: { ok: true, message: customDisplay ? `Display name → ${customDisplay}` : "Display name dikosongkan (kembali ke prefix/nama)" },
+      modelsAction: { ok: true, message: customDisplay ? `Display name set to ${customDisplay}` : "Display name cleared (reverted to prefix/model)" },
     };
   }
 
@@ -647,7 +642,7 @@ export async function action({ request, params }: Route.ActionArgs) {
     }
     if (prefix) {
       const dup = query("SELECT id FROM providers WHERE prefix = ? AND id != ?").get(prefix, id) as { id: string } | undefined;
-      if (dup) return { providerUpdate: { ok: false, message: `prefix "${prefix}" sudah dipakai ${dup.id}` } };
+      if (dup) return { providerUpdate: { ok: false, message: `Prefix "${prefix}" is already used by ${dup.id}` } };
     }
     if (!name || !baseUrl) return { providerUpdate: { ok: false, message: "name & base_url required" } };
     query("UPDATE providers SET name = ?, base_url = ?, auth_type = ?, prefix = ? WHERE id = ?").run(name, baseUrl, authType, prefix, id);
@@ -685,7 +680,7 @@ export default function ProviderDetail({
   const PROXY_TONE_CLASS: Record<Tone, string> = {
     ok: "border-success/40 bg-success/15 text-success hover:bg-success/25",
     error: "border-danger/40 bg-danger/15 text-danger hover:bg-danger/25",
-    none: "border-border bg-muted text-muted-foreground hover:bg-glass-hover",
+    none: "border-border bg-muted text-muted-foreground hover:bg-surface-2",
   };
 
   function proxyInfoFor(key: ApiKeyRow): {
@@ -856,7 +851,7 @@ export default function ProviderDetail({
   const streamStartRef = useRef(0);
   const awaitingAssistantRef = useRef(false);
 
-  // Smart auto-scroll: pin ke bawah hanya bila user memang di dekat bawah.
+  // Pin scroll to bottom only when already near the bottom.
   useEffect(() => {
     const el = chatScrollRef.current;
     if (!el) return;
@@ -885,8 +880,7 @@ export default function ProviderDetail({
     });
   }, [chatLoadFetcher.data]);
 
-  // Simpan respons: kunci session agar auto-save berikutnya UPDATE, bukan
-  // membuat sesi duplikat.
+  // Lock session ID after save so subsequent auto-saves update instead of duplicating.
   useEffect(() => {
     const d = chatSaveFetcher.data?.chat;
     if (!d) return;
@@ -968,10 +962,7 @@ export default function ProviderDetail({
     });
   };
 
-  // Commit giliran assistant tepat sekali ketika selesai + auto-save.
-  // Truncation (putus tengah jalan) di-commit sebagai turn normal berisi
-  // potongan — bukan "Error:" — agar auto-lanjut / kirim berikutnya bisa
-  // menyambung konteks. Error HTTP asli tetap di-commit sebagai error.
+  // Commit assistant turn once when finished and auto-save; truncated output stays a normal turn.
   useEffect(() => {
     if (!awaitingAssistantRef.current) return;
     if (!(stream.done || stream.truncated || stream.error)) return;
@@ -995,8 +986,7 @@ export default function ProviderDetail({
     const next: ChatMsg[] = [...historyRef.current, assistantTurn];
     setTurns(next);
     if (autoSave && !stream.error && assistantTurn.content !== "") {
-      // Simpan DI LUAR updater state — updater bisa dieksekusi React
-      // berkali-kali saat render konkuren → submit dobel = sesi kembar.
+      // Submit outside React state updater to avoid duplicate saves under concurrent renders.
       const fd = new FormData();
       fd.set("intent", "chat-save");
       fd.set("provider_id", loaderData.provider?.id ?? "");
@@ -1031,7 +1021,7 @@ export default function ProviderDetail({
     undefined,
   );
 
-  // Toast untuk aksi Form biasa (actionData.notice / modelsAction): key/model/pool/chat.
+  // Show toast for standard form actions.
   useEffect(() => {
     const ad = actionData as
       | {
@@ -1146,7 +1136,7 @@ export default function ProviderDetail({
 
   const testResult = fetcher.data?.test;
 
-  // Prefix = nama saja, "/" otomatis. Samakan dengan server displayName().
+  // Prefix is name-only; "/" separator is added automatically to match server displayName().
   const cleanPfx = (provider?.prefix ?? "").replace(/^\/+|\/+$/g, "").trim();
   const modelDisplay = (m: { model_name: string; display_name: string | null }) =>
     (m.display_name ?? "").trim() || (cleanPfx ? `${cleanPfx}/${m.model_name}` : m.model_name);
@@ -1817,7 +1807,7 @@ export default function ProviderDetail({
                 return (
                 <div
                   key={m.id}
-                  className="flex flex-col justify-between rounded-xl border border-border bg-surface-2/40 p-3.5"
+                  className="flex flex-col justify-between rounded-lg border border-border bg-surface-2/40 p-3.5"
                 >
                   <div>
                     <div className="flex items-start justify-between gap-2">
@@ -2107,7 +2097,7 @@ export default function ProviderDetail({
             >
               {history.length === 0 && !stream.streaming ? (
                 <div className="mx-auto flex h-full max-w-md flex-col items-center justify-center py-8 text-center">
-                  <div className="grid h-11 w-11 place-items-center rounded-xl border border-border bg-surface-2 text-primary">
+                  <div className="grid h-11 w-11 place-items-center rounded-lg border border-border bg-surface-2 text-primary">
                     <MessageSquare size={20} aria-hidden="true" />
                   </div>
                   <h3 className="mt-3 text-sm font-semibold text-foreground">
@@ -2143,7 +2133,7 @@ export default function ProviderDetail({
                 if (isUser) {
                   return (
                     <div key={idx} className="flex justify-end">
-                      <div className="max-w-[85%] rounded-2xl rounded-br-sm border border-primary-solid-border bg-primary-solid px-4 py-2.5 text-sm leading-relaxed text-primary-foreground sm:max-w-[76%]">
+                      <div className="max-w-[85%] rounded-lg rounded-br-sm border border-primary-solid-border bg-primary-solid px-4 py-2.5 text-sm leading-relaxed text-primary-foreground sm:max-w-[76%]">
                         <p className="whitespace-pre-wrap break-words">{m.content}</p>
                       </div>
                     </div>
@@ -2164,7 +2154,7 @@ export default function ProviderDetail({
 
                 return (
                   <div key={idx} className="flex justify-start">
-                    <div className="min-w-0 max-w-full flex-1 rounded-xl border border-border bg-surface-2/40 px-4 py-3">
+                    <div className="min-w-0 max-w-full flex-1 rounded-lg border border-border bg-surface-2/40 px-4 py-3">
                       <div className="mb-2 flex items-center justify-between gap-2 border-b border-border/60 pb-1.5">
                         <span className="font-mono text-[11px] font-medium text-muted-foreground">
                           {m.model || chatModel || provider.name}
@@ -2199,7 +2189,7 @@ export default function ProviderDetail({
 
               {stream.streaming ? (
                 <div className="flex justify-start">
-                  <div className="min-w-0 max-w-full flex-1 rounded-xl border border-primary/35 bg-surface-2/40 px-4 py-3">
+                  <div className="min-w-0 max-w-full flex-1 rounded-lg border border-primary/35 bg-surface-2/40 px-4 py-3">
                     <div className="mb-2 flex items-center gap-2 border-b border-border/60 pb-1.5">
                       <Spinner size={12} />
                       <span className="font-mono text-[11px] font-medium text-primary">
@@ -2226,7 +2216,7 @@ export default function ProviderDetail({
 
             {/* Unified docked composer */}
             <div className="border-t border-border bg-surface-2/25 p-3 sm:p-4">
-              <div className="overflow-hidden rounded-xl border border-border bg-surface transition-colors focus-within:border-primary focus-within:ring-2 focus-within:ring-ring/25">
+              <div className="overflow-hidden rounded-lg border border-border bg-surface transition-colors focus-within:border-primary focus-within:ring-2 focus-within:ring-ring/25">
                 <MessageInput
                   id="chat-composer"
                   embedded
@@ -2303,7 +2293,7 @@ export default function ProviderDetail({
           }}
         >
           <div
-            className="dialog-pop flex max-h-[80vh] w-full max-w-lg flex-col overflow-hidden rounded-2xl border border-border-strong bg-surface shadow-2xl"
+            className="dialog-pop flex max-h-[80vh] w-full max-w-lg flex-col overflow-hidden rounded-lg border border-border-strong bg-surface shadow-2xl"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="border-b border-border bg-surface-2/40 px-4 py-3.5">

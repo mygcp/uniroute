@@ -15,7 +15,8 @@ import { Spinner } from "../components/ui/feedback";
 import { useConfirm } from "../components/ui/confirm-dialog";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
-import { Input, Select } from "../components/ui/field";
+import { Select } from "../components/ui/field";
+import { FilterBar, FilterGroup, FilterActions, SearchInput } from "../components/ui/filter-bar";
 import { PageHeader } from "../components/ui/page-header";
 import { LogViewer } from "../components/log-viewer";
 import {
@@ -76,7 +77,7 @@ export function loader({ request }: Route.LoaderArgs) {
     prices[key] = { input, output };
   }
 
-  // Label api key agar detail menampilkan nama key, bukan hanya id numerik.
+  // Map key IDs to human-readable names in log details.
   const keyRows = query(
     "SELECT id, name, key_prefix FROM client_api_keys ORDER BY id ASC",
   ).all() as { id: number; name: string | null; key_prefix: string }[];
@@ -184,7 +185,7 @@ function Detail({
       <dl className="grid grid-cols-1 gap-1.5 sm:grid-cols-2 md:grid-cols-3">
         {fields.map(([k, v]) => (
           <div key={k} className="flex min-w-0 gap-2">
-            <dt className="shrink-0 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            <dt className="shrink-0 text-xs font-medium text-muted-foreground">
               {k}
             </dt>
             <dd
@@ -198,7 +199,7 @@ function Detail({
       </dl>
       {event.error_message ? (
         <div className="mt-3">
-          <h4 className="text-xs font-semibold uppercase tracking-wide text-danger">
+          <h4 className="text-xs font-medium text-danger">
             Error message
           </h4>
           <pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-danger/10 px-3 py-2 font-mono text-xs text-danger">
@@ -264,7 +265,7 @@ const Row = memo(function Row({
   return (
     <div
       className={`border-b border-border/70 text-sm transition-colors last:border-b-0 ${
-        selected ? "bg-primary/8" : "hover:bg-glass-hover"
+        selected ? "bg-primary/8" : "hover:bg-surface-2/60"
       }`}
     >
       <div className="flex flex-col gap-2 px-4 py-2.5 lg:grid lg:grid-cols-[148px_86px_minmax(0,1.5fr)_minmax(0,1fr)_104px_124px_68px] lg:items-center lg:gap-3">
@@ -604,55 +605,57 @@ export default function Logs({ loaderData }: Route.ComponentProps) {
         }
       />
 
-      <div className="mb-4 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-6">
-        <Combobox
-          options={options.model}
-          value={model}
-          onChange={setModel}
-          placeholder="Model…"
-        />
-        <Combobox
-          options={options.provider}
-          value={provider}
-          onChange={setProvider}
-          placeholder="Provider…"
-        />
-        <Combobox
-          options={OPTIONS.statuses}
-          value={status}
-          onChange={setStatus}
-          placeholder="Status…"
-        />
-        <Combobox
-          options={options.source}
-          value={source}
-          onChange={setSource}
-          placeholder="Source…"
-        />
-        <Select
-          value={transport}
-          onChange={(e) =>
-            setTransport(e.target.value as "" | "proxy" | "direct")
-          }
-          aria-label="Filter by transport"
-        >
-          <option value="">Transport: all</option>
-          <option value="proxy">Proxy</option>
-          <option value="direct">Direct</option>
-        </Select>
-        <div className="flex items-center gap-2">
-          <Input
-            type="search"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search errors..."
+      <FilterBar>
+        <FilterGroup className="grid w-full grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-6">
+          <Combobox
+            options={options.model}
+            value={model}
+            onChange={setModel}
+            placeholder="Model..."
           />
-          {activeFilters ? (
+          <Combobox
+            options={options.provider}
+            value={provider}
+            onChange={setProvider}
+            placeholder="Provider..."
+          />
+          <Combobox
+            options={OPTIONS.statuses}
+            value={status}
+            onChange={setStatus}
+            placeholder="Status..."
+          />
+          <Combobox
+            options={options.source}
+            value={source}
+            onChange={setSource}
+            placeholder="Source..."
+          />
+          <Select
+            value={transport}
+            onChange={(e) =>
+              setTransport(e.target.value as "" | "proxy" | "direct")
+            }
+            aria-label="Filter by transport"
+          >
+            <option value="">Transport: all</option>
+            <option value="proxy">Proxy</option>
+            <option value="direct">Direct</option>
+          </Select>
+          <SearchInput
+            value={search}
+            onChange={setSearch}
+            placeholder="Search errors..."
+            aria-label="Search errors"
+            clearLabel="Clear error search"
+          />
+        </FilterGroup>
+        {activeFilters ? (
+          <FilterActions>
             <Button
               type="button"
               variant="outline"
-              size="md"
-              className="shrink-0"
+              size="sm"
               onClick={() => {
                 setModel("");
                 setProvider("");
@@ -664,9 +667,9 @@ export default function Logs({ loaderData }: Route.ComponentProps) {
             >
               Reset
             </Button>
-          ) : null}
-        </div>
-      </div>
+          </FilterActions>
+        ) : null}
+      </FilterBar>
 
       {dialog}
 

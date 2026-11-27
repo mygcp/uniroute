@@ -1,22 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useFetcher } from "react-router";
 import {
-  Activity,
   ArrowRight,
-  Bot,
-  CheckCircle2,
-  Clock,
-  Globe,
-  Home as HomeIcon,
-  KeySquare,
-  Link2,
-  Plug,
+  ArrowUpCircle,
   Plus,
-  ScrollText,
   Square,
-  TrendingUp,
 } from "lucide-react";
 import type { Route } from "./+types/home";
+import pkg from "../../package.json";
 import { requireLoaderSession, requireSession } from "../.server/auth";
 import {
   getStats,
@@ -30,16 +21,19 @@ import {
   stopTunnel,
 } from "../.server/tunnel";
 import type { TunnelRuntimeStatus } from "../lib/tunnel-options";
-import { StatCard } from "../components/ui/stat-card";
+import { MetricStrip } from "../components/ui/stat-card";
 import { PageHeader } from "../components/ui/page-header";
 import { Card, CardHeader, CardTitle } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
 import { Button, buttonClass } from "../components/ui/button";
 import { CopyButton } from "../components/ui/copy-button";
+import { EmptyState } from "../components/ui/empty-state";
 import { Spinner } from "../components/ui/feedback";
 import { useToast } from "../components/ui/toast";
 import { UsageChart } from "../components/usage-chart";
 import { fmtTs } from "../lib/log-format";
+
+const APP_VERSION = pkg.version || "1.1.0";
 
 export function meta() {
   return [{ title: "Dashboard | UniRoute" }];
@@ -188,88 +182,90 @@ export default function Home({ loaderData }: Route.ComponentProps) {
     <div>
       <PageHeader
         title="Dashboard"
-        icon={<HomeIcon size={20} />}
-        subtitle="Real-time overview of your AI gateway traffic, providers, and keys."
+        subtitle="Live gateway traffic, endpoint routing, and provider readiness."
         actions={
-          <>
-            <div className="flex items-center gap-1.5 rounded-lg border border-border bg-surface px-2.5 py-1 text-xs">
-              {liveTunnel.active ? (
-                <Link
-                  to="/tunnels"
-                  title={`Active ${liveTunnel.provider} tunnel (${liveTunnel.status})`}
-                  className="inline-flex items-center gap-1.5 text-success hover:underline"
-                >
-                  <span className="h-2 w-2 rounded-full bg-success" aria-hidden="true" />
-                  Tunnel
-                </Link>
-              ) : (
-                <span className="text-muted-foreground">Endpoint</span>
-              )}
-              <code className="max-w-[190px] truncate font-mono text-foreground sm:max-w-none">
-                {liveGatewayUrl}
-              </code>
-              <CopyButton text={liveGatewayUrl} label="Copy gateway endpoint" />
-            </div>
-            {liveTunnel.active ? (
-              <tunnelFetcher.Form method="post">
-                <input type="hidden" name="intent" value="stop_tunnel" />
-                <Button
-                  type="submit"
-                  size="sm"
-                  variant="danger"
-                  disabled={stoppingTunnel}
-                >
-                  {stoppingTunnel ? (
-                    <Spinner size={13} />
-                  ) : (
-                    <Square size={13} aria-hidden="true" />
-                  )}
-                  Stop Tunnel
-                </Button>
-              </tunnelFetcher.Form>
-            ) : null}
-            <Link to="/api-manager/create" className={buttonClass("primary", "sm")}>
-              <Plus size={14} />
-              New API Key
-            </Link>
-          </>
+          <Link to="/api-manager/create" className={buttonClass("primary", "sm")}>
+            <Plus size={14} aria-hidden="true" />
+            New API Key
+          </Link>
         }
       />
 
-      <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard
-          title="Total Requests"
-          value={stats.total.toLocaleString()}
-          icon={<Activity size={16} />}
-          subline={`${stats.today.toLocaleString()} today`}
-        />
-        <StatCard
-          title="Success Rate"
-          value={stats.total > 0 ? stats.successRate : "-"}
-          suffix={stats.total > 0 ? "%" : undefined}
-          accent="bg-success"
-          icon={<CheckCircle2 size={16} />}
-          subline={`${stats.success.toLocaleString()} / ${stats.total.toLocaleString()} OK`}
-        />
-        <StatCard
-          title="Avg Latency"
-          value={stats.total > 0 ? latency.value : "-"}
-          suffix={stats.total > 0 ? latency.suffix : undefined}
-          accent="bg-warning"
-          icon={<Clock size={16} />}
-          subline={stats.total > 0 ? "Across all logged requests" : "No requests yet"}
-        />
-        <StatCard
-          title="Active Providers"
-          value={stats.activeProviders}
-          accent="bg-info"
-          icon={<Plug size={16} />}
-          subline={`of ${stats.totalProviders} configured · ${activeKeys} client key${activeKeys === 1 ? "" : "s"}`}
-        />
+      <MetricStrip
+        className="mb-6"
+        items={[
+          {
+            label: "Total requests",
+            value: stats.total.toLocaleString(),
+            detail: `${stats.today.toLocaleString()} today`,
+          },
+          {
+            label: "Success rate",
+            value: stats.total > 0 ? stats.successRate : "-",
+            suffix: stats.total > 0 ? "%" : undefined,
+            detail: `${stats.success.toLocaleString()} / ${stats.total.toLocaleString()} OK`,
+            tone: stats.total > 0 && stats.successRate < 90 ? "warning" : "success",
+          },
+          {
+            label: "Average latency",
+            value: stats.total > 0 ? latency.value : "-",
+            suffix: stats.total > 0 ? latency.suffix : undefined,
+            detail: stats.total > 0 ? "Across logged requests" : "No requests yet",
+          },
+          {
+            label: "Active providers",
+            value: stats.activeProviders,
+            detail: `of ${stats.totalProviders} configured · ${activeKeys} client key${activeKeys === 1 ? "" : "s"}`,
+          },
+        ]}
+      />
+
+      <div className="mb-6 flex flex-col justify-between gap-3 rounded-lg border border-border bg-surface px-4 py-3 sm:flex-row sm:items-center">
+        <div className="flex min-w-0 flex-wrap items-center gap-2.5 text-xs">
+          {liveTunnel.active ? (
+            <Badge tone="success" dot>
+              Tunnel ({liveTunnel.provider})
+            </Badge>
+          ) : (
+            <Badge tone="neutral">Gateway endpoint</Badge>
+          )}
+          <code className="max-w-full truncate font-mono text-sm text-foreground">
+            {liveGatewayUrl}
+          </code>
+          <CopyButton text={liveGatewayUrl} label="Copy gateway endpoint" />
+        </div>
+
+        <div className="flex shrink-0 items-center gap-2">
+          {liveTunnel.active ? (
+            <tunnelFetcher.Form method="post">
+              <input type="hidden" name="intent" value="stop_tunnel" />
+              <Button
+                type="submit"
+                size="sm"
+                variant="danger"
+                disabled={stoppingTunnel}
+              >
+                {stoppingTunnel ? (
+                  <Spinner size={13} />
+                ) : (
+                  <Square size={13} aria-hidden="true" />
+                )}
+                Stop Tunnel
+              </Button>
+            </tunnelFetcher.Form>
+          ) : (
+            <Link
+              to="/tunnels"
+              className="text-xs font-medium text-primary hover:underline"
+            >
+              Configure public tunnel
+            </Link>
+          )}
+        </div>
       </div>
 
-      <div className="grid grid-cols-1 gap-5 lg:grid-cols-3">
-        <div className="space-y-5 lg:col-span-2">
+      <div className="grid grid-cols-1 gap-5 lg:grid-cols-12">
+        <div className="space-y-5 lg:col-span-8">
           <UsageChart
             data={usage}
             summary={week}
@@ -280,31 +276,28 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                 className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
               >
                 Full analytics
-                <ArrowRight size={13} />
+                <ArrowRight size={13} aria-hidden="true" />
               </Link>
             }
           />
 
           <Card>
             <CardHeader>
-              <CardTitle>Recent Requests</CardTitle>
+              <CardTitle>Recent requests</CardTitle>
               <Link
                 to="/logs"
                 prefetch="intent"
                 className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
               >
                 Open live logs
-                <ArrowRight size={13} />
+                <ArrowRight size={13} aria-hidden="true" />
               </Link>
             </CardHeader>
             {recent.length === 0 ? (
-              <p className="py-6 text-center text-sm text-muted-foreground">
-                No requests logged yet. Send a request to{" "}
-                <code className="rounded bg-surface-2 px-1.5 py-0.5 font-mono text-xs">
-                  {liveGatewayUrl}/chat/completions
-                </code>{" "}
-                to see traffic here.
-              </p>
+              <EmptyState
+                title="No requests logged yet"
+                description={`Send a chat completion request to ${liveGatewayUrl}/chat/completions to see live traffic here.`}
+              />
             ) : (
               <div className="divide-y divide-border/70">
                 {recent.map((r) => {
@@ -322,7 +315,7 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                           {r.model || "unknown"}
                         </span>
                         {r.provider_id ? (
-                          <span className="hidden rounded bg-surface-2 px-1.5 py-0.5 text-[11px] text-muted-foreground sm:inline">
+                          <span className="hidden rounded border border-border bg-surface-2 px-1.5 py-0.5 text-[11px] text-muted-foreground sm:inline">
                             {r.provider_id}
                           </span>
                         ) : null}
@@ -339,52 +332,7 @@ export default function Home({ loaderData }: Route.ComponentProps) {
           </Card>
         </div>
 
-        <div className="space-y-5">
-          <Card>
-            <CardHeader>
-              <CardTitle>Quick Actions</CardTitle>
-            </CardHeader>
-            <div className="grid grid-cols-1 gap-2">
-              {[
-                { to: "/providers", label: "Configure Providers", desc: "Add models & upstream keys", icon: Plug },
-                { to: "/api-manager/create", label: "Issue Client API Key", desc: "Scoped key with budgets", icon: KeySquare },
-                { to: "/combo", label: "Model Combos", desc: "Failover & fallback chains", icon: Link2 },
-                { to: "/tunnels", label: "Public Tunneling", desc: "cloudflared, ngrok, frpc, custom domain", icon: Globe },
-                { to: "/agents", label: "Connect AI Agents", desc: "Claude Code, Codex, OpenCode", icon: Bot },
-                { to: "/logs", label: "Inspect Live Traffic", desc: "Realtime request stream", icon: ScrollText },
-                { to: "/analytics/usage", label: "Token & Cost Breakdown", desc: "Usage by provider & model", icon: TrendingUp },
-              ].map((item) => {
-                const Icon = item.icon;
-                return (
-                  <Link
-                    key={item.to}
-                    to={item.to}
-                    prefetch="intent"
-                    className="group flex items-center justify-between gap-3 rounded-xl border border-border/80 bg-surface-2/40 px-3 py-2.5 transition-all hover:border-primary/35 hover:bg-glass-hover"
-                  >
-                    <div className="flex min-w-0 items-center gap-2.5">
-                      <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-border bg-surface text-muted-foreground transition-colors group-hover:border-primary/30 group-hover:text-primary">
-                        <Icon size={15} />
-                      </span>
-                      <div className="min-w-0">
-                        <p className="truncate text-sm font-medium text-foreground">
-                          {item.label}
-                        </p>
-                        <p className="truncate text-xs text-muted-foreground">
-                          {item.desc}
-                        </p>
-                      </div>
-                    </div>
-                    <ArrowRight
-                      size={14}
-                      className="shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:text-primary"
-                    />
-                  </Link>
-                );
-              })}
-            </div>
-          </Card>
-
+        <div className="space-y-5 lg:col-span-4">
           <Card>
             <CardHeader>
               <CardTitle>Providers</CardTitle>
@@ -394,20 +342,23 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                 className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
               >
                 Manage all
-                <ArrowRight size={13} />
+                <ArrowRight size={13} aria-hidden="true" />
               </Link>
             </CardHeader>
             {providers.length === 0 ? (
-              <div className="py-4 text-center">
-                <p className="text-sm text-muted-foreground">No providers configured.</p>
-                <Link
-                  to="/providers"
-                  className={buttonClass("primary", "sm", "mt-3")}
-                >
-                  <Plus size={14} />
-                  Add Provider
-                </Link>
-              </div>
+              <EmptyState
+                title="No providers configured"
+                description="Add an upstream provider to start routing model requests."
+                action={
+                  <Link
+                    to="/providers"
+                    className={buttonClass("primary", "sm")}
+                  >
+                    <Plus size={14} aria-hidden="true" />
+                    Add Provider
+                  </Link>
+                }
+              />
             ) : (
               <div className="space-y-2">
                 {providers.map((p) => (
@@ -415,10 +366,11 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                     key={p.id}
                     to={`/providers/${p.id}`}
                     prefetch="intent"
-                    className="flex items-center justify-between gap-2 rounded-xl border border-border/70 bg-surface-2/40 px-3 py-2 transition-colors hover:border-primary/35 hover:bg-glass-hover"
+                    className="flex min-h-[44px] items-center justify-between gap-2 rounded-md border border-border bg-surface-2/60 px-3 py-2 transition-colors hover:border-border-strong hover:bg-surface-2"
                   >
                     <div className="flex min-w-0 items-center gap-2.5">
                       <span
+                        aria-hidden="true"
                         className={`h-2 w-2 shrink-0 rounded-full ${
                           p.is_active ? "bg-success" : "bg-muted-foreground/40"
                         }`}
@@ -433,10 +385,10 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                       </div>
                     </div>
                     <div className="flex shrink-0 items-center gap-1.5 text-[11px] text-muted-foreground">
-                      <span className="rounded bg-surface px-1.5 py-0.5 tabular-nums">
+                      <span className="rounded border border-border bg-surface px-1.5 py-0.5 tabular-nums">
                         {p.models}m
                       </span>
-                      <span className="rounded bg-surface px-1.5 py-0.5 tabular-nums">
+                      <span className="rounded border border-border bg-surface px-1.5 py-0.5 tabular-nums">
                         {p.keys}k
                       </span>
                     </div>
@@ -444,6 +396,40 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                 ))}
               </div>
             )}
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>System</CardTitle>
+              <Badge tone="neutral">v{APP_VERSION}</Badge>
+            </CardHeader>
+            <div className="space-y-2.5 text-xs">
+              <div className="flex items-center justify-between text-muted-foreground">
+                <span>Client API keys</span>
+                <span className="font-mono font-medium tabular-nums text-foreground">
+                  {activeKeys} active
+                </span>
+              </div>
+              <div className="flex items-center justify-between text-muted-foreground">
+                <span>Tunnel status</span>
+                <span className="font-mono font-medium text-foreground">
+                  {liveTunnel.active ? liveTunnel.status : "inactive"}
+                </span>
+              </div>
+              <div className="pt-2">
+                <Link
+                  to="/updates"
+                  prefetch="intent"
+                  className={buttonClass("outline", "sm", "w-full justify-between")}
+                >
+                  <span className="flex items-center gap-1.5">
+                    <ArrowUpCircle size={14} aria-hidden="true" />
+                    Check for updates
+                  </span>
+                  <ArrowRight size={13} aria-hidden="true" />
+                </Link>
+              </div>
+            </div>
           </Card>
         </div>
       </div>

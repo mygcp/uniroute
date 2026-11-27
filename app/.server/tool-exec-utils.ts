@@ -80,7 +80,13 @@ export async function spawnTextAsync(
   command: string,
   args: string[],
   timeoutMs = 4_000,
-): Promise<{ ok: boolean; stdout: string; stderr: string; code: number | null }> {
+): Promise<{
+  ok: boolean;
+  stdout: string;
+  stderr: string;
+  code: number | null;
+  error?: string;
+}> {
   return await new Promise((resolve) => {
     let settled = false;
     let totalBytes = 0;
@@ -94,8 +100,14 @@ export async function spawnTextAsync(
         stdio: ["ignore", "pipe", "pipe"],
         windowsHide: true,
       });
-    } catch {
-      resolve({ ok: false, stdout: "", stderr: "", code: null });
+    } catch (err) {
+      resolve({
+        ok: false,
+        stdout: "",
+        stderr: "",
+        code: null,
+        error: err instanceof Error ? err.message : String(err),
+      });
       return;
     }
 
@@ -129,11 +141,17 @@ export async function spawnTextAsync(
       }
     });
 
-    child.on("error", () => {
+    child.on("error", (err) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      resolve({ ok: false, stdout: "", stderr: "", code: null });
+      resolve({
+        ok: false,
+        stdout: "",
+        stderr: "",
+        code: null,
+        error: err instanceof Error ? err.message : String(err),
+      });
     });
 
     child.on("close", (code) => {

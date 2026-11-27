@@ -24,9 +24,8 @@ function fireWebhook(key: ClientKey | undefined, event: string, extra: Record<st
 }
 
 /**
- * Rotasi: generate key baru; key lama dipindah ke slot previous dan tetap
- * valid selama `grace_period_days` (0 → langsung tidak valid). `created_at`
- * dibarui sebagai penanda waktu rotasi terakhir (dipakai deteksi interval).
+ * Rotate key: generate a new key, move the old key to the previous slot for
+ * `grace_period_days` (0 = immediate expiry), and update `created_at`.
  */
 export function rotateKey(id: number): { key: string; id: number } {
   const current = getClientKeyById(id);
@@ -63,7 +62,7 @@ export function rotateKey(id: number): { key: string; id: number } {
   return { key: newKey, id };
 }
 
-/** Rotasi terjadwal bila interval `rotation_interval_days` sudah terlampaui. */
+/** Rotate on schedule if `rotation_interval_days` has elapsed. */
 export function maybeRotateForInterval(key: ClientKey): void {
   const interval = key.rotation_interval_days;
   if (!interval || interval <= 0) return;
@@ -85,7 +84,7 @@ export function reactivateKey(id: number, byIp = "dashboard"): void {
   fireWebhook(getClientKeyById(id), "reactivated");
 }
 
-/** Auto-block saat budget/quota tercapai (dari pipeline request atau operasi). */
+/** Auto-block when budget or quota is exhausted. */
 export function autoBlockKey(id: number, reason: string): void {
   setClientKeyBlocked(id, Math.floor(Date.now() / 1000));
   logAudit(id, "BUDGET_BLOCKED", {
@@ -117,9 +116,8 @@ export type RequestOutcomeInput = {
 };
 
 /**
- * Dicatat SETELAH request selesai: update usage harian, audit REQUEST,
- * cek alert threshold → webhook, dan auto-block bila budget habis.
- * Return `{ blocked }` agar caller bisa membalas 429 bila perlu.
+ * Record usage after request completion, audit, check thresholds, and auto-block
+ * if budget is exceeded. Returns `{ blocked }` so callers can respond with 429.
  */
 export function recordRequestUsage(
   keyIdOrKey: number | ClientKey,

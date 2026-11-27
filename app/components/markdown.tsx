@@ -21,7 +21,7 @@ function injectCopyHeaders(html: string): string {
   );
 }
 
-/** Render markdown LLM (aman: input di-escape dulu) + syntax highlight. */
+/** Render LLM markdown (input is escaped first) with syntax highlighting. */
 export function Markdown({ text, highlight = true }: { text: string; highlight?: boolean }) {
   const ref = useRef<HTMLDivElement>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -31,8 +31,7 @@ export function Markdown({ text, highlight = true }: { text: string; highlight?:
       injectCopyHeaders(
         renderMarkdown(
           text,
-          // Saat streaming: lewati highlight.js (bagian termahal) — blok kode
-          // tetap tampil sebagai <pre> escaped, highlight menyusul saat done.
+          // Skip highlight.js while streaming; render escaped <pre> and highlight once done.
           highlight
             ? {
                 highlight: (code, lang) => highlightCode(code, lang).html,

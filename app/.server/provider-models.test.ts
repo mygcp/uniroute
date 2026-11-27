@@ -29,10 +29,8 @@ afterAll(() => {
 });
 
 describe("provider-models registry invalidation", () => {
-	// Kunci regresi optimasi: handleProxy TIDAK me-reload registry per request.
-	// Konsekuensinya, mutasi lewat service layer WAJIB menyegarkan cache —
-	// test ini memastikan kontrak itu tidak pernah rusak lagi.
-	test("upsertProviderModel langsung terlihat di registry tanpa reload manual", () => {
+	// Service-layer mutations must refresh the in-memory registry cache.
+	test("upsertProviderModel is immediately visible in registry without manual reload", () => {
 		const before = reg.getProviders("model-opt-check");
 		expect(before.length).toBe(0);
 
@@ -43,10 +41,7 @@ describe("provider-models registry invalidation", () => {
 		expect(after[0]!.id).toBe("openai");
 	});
 
-	test("syncProviderModels juga menyegarkan registry (satu invalidasi di akhir)", async () => {
-		// Sync dengan daftar fetch gagal tidak boleh merusak state; cukup
-		// pastikan upsert massal lewat core tetap menghasilkan registry segar
-		// untuk model yang ditambahkan via upsert berulang.
+	test("syncProviderModels refreshes registry with a single invalidation", async () => {
 		pm.upsertProviderModel("openai", "model-opt-check-2", null, true);
 		expect(reg.getProviders("model-opt-check-2").length).toBe(1);
 	});
